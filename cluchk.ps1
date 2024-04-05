@@ -6333,7 +6333,7 @@ TLogCleanup
 $allArrayout=@()
 $allArray=@()
 $ServiceTagList=@()
-Stop-Transcript -ErrorAction SilentlyContinue
+try {Stop-Transcript -ErrorAction SilentlyContinue} catch {}
 
 
 break
