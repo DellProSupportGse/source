@@ -26,6 +26,8 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2024/04/05:v1.54    1. Bug Fix:TP - Fixed Computer Nodes section missing due to previous fix.
+
     2024/04/03:v1.53 -  1. Bug Fix:TP - If IOV is enabled ignore the BandwidthReservationMode and BandwidthPercentage settings
                         2. New Feature:TP - On LRs request, check for Mixed Mode clusters and show a problem in the Cluster Name object
                         3. Bug Fix: Using GetComputerInfo.xml instead of SystemInfo.txt because it seems to gather more reliabily
@@ -72,7 +74,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.53"
+$CluChkVer="1.54"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2
@@ -761,7 +763,7 @@ Add-Type -Path (Get-ChildItem -Path "C:\ProgramData\Dell\htmlagilitypack" -Recur
 If ($ProcessSDDC -ieq 'y') {
 
           #$SysInfoFiles=(Get-ChildItem -Path $SDDCPath -Filter "SystemInfo.TXT" -Recurse -Depth 1).FullName
-          $GetComputerInfo=Foreach ($key in ($SDDCFiles.keys -like "*GetComputerInfo")) {$SDDCFiles."$key"}
+          $GetComputerInfo=gci $SDDCPath -Filter "GetComputerInfo.xml" -Recurse -Depth 1 | Import-Clixml
         #$SystemInfoData=@()
         $SysInfo=@()
         <#ForEach($dFile in $SysInfoFiles){ # Changed 06072023
@@ -6053,10 +6055,10 @@ IF($ProcessTSR -ieq "y"){
     #$url = 'https://gsetools.blob.core.windows.net/drift/DriFTDEV.ps1.remove?sp=r&st=2021-10-26T15:43:17Z&se=2024-10-26T23:43:17Z&spr=https&sv=2020-08-04&sr=b&sig=AxF4Lck7BUtTMeiLm76Q2D1Z%2B4LttpilMGJ3LSXcIyY%3D'
     #Prod
     $url = 'https://gsetools.blob.core.windows.net/drift/DriFT.ps1.remove?sp=r&st=2021-06-16T21:35:19Z&se=2026-06-17T05:35:19Z&spr=https&sv=2020-02-10&sr=b&sig=C8AQb78KDcXMy0KhkXvcYKgUqCzX3zqGLZVk8wQVLpQ%3D'
-    $output = "$CurrentLoc\DriFT.ps1"
+    $output = "C:\Users\Tommy_Paulk\Documents\GitHub\internaltools\DriFTdev.ps1"
     $start_time = Get-Date
-    Remove-Item $output -Force -ErrorAction SilentlyContinue
-    Try{Invoke-WebRequest -Uri $url -OutFile $output -UseDefaultCredentials
+    #Remove-Item $output -Force -ErrorAction SilentlyContinue
+    Try{#Invoke-WebRequest -Uri $url -OutFile $output -UseDefaultCredentials
     #Copy-Item "C:\shared\Scripts\Driftv1.75.ps1" -Destination $output
     Write-Output "Time taken: $((Get-Date).Subtract($start_time).Seconds) second(s)"}
     Catch{Write-Host "ERROR: Source location NOT accessible. Please try again later"-foregroundcolor Red
@@ -6064,7 +6066,8 @@ IF($ProcessTSR -ieq "y"){
     Finally{
         $TSRsToProcesswithDrift = $TSRLOC -join ","
         $params="-Cluchk $CluChkGuid -Input $TSRsToProcesswithDrift "
-        & $output $params 
+        & $output
+        Invoke-RunDriFT $params 
     }
 #}
 }
