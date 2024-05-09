@@ -26,6 +26,9 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2024/05/09:v1.56 -  1. Bug Fix:JG - Added -UseBasicParsing to all Invoke-WebRequests for Server OS compatability
+                        2. Bug Fix:TP - If CSV name and Volume name does not match make file system type blank instead of NTFS
+    
     2024/04/09:v1.55 -  1. New Feature:TP - Drift moved to GitHub
 
     2024/04/05:v1.54 -  1. Bug Fix:TP - Fixed Computer Nodes section missing due to previous fix.
@@ -64,7 +67,7 @@ Specifies to show debug information
     See previous version for update notes
   
 #>
-
+`
 Function Invoke-RunCluChk{
     
 param (
@@ -76,10 +79,10 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.55"
+$CluChkVer="1.56"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
-Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2
+try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
 
 #region Variable Cleanup
 #The following line causes alot of errors and does not appear to accomplish what is required.
@@ -211,7 +214,7 @@ Start-Job -Name "AgilityPack" -ScriptBlock {
 # Download htmlagilitypack
 If (!(Get-ChildItem -Path "C:\ProgramData\Dell\htmlagilitypack" -ErrorAction SilentlyContinue -Recurse -Filter 'Net45' | Get-ChildItem | Where-Object{$_.Name -imatch 'HtmlAgilityPack.dll'}).count) {
    try {
-   Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/HtmlAgilityPack\1.11.46" -OutFile "$env:TEMP\htmlagilitypack.nupkg.zip" -TimeoutSec 30
+   invoke-webrequest -Uri "https://www.nuget.org/api/v2/package/HtmlAgilityPack\1.11.46" -OutFile "$env:TEMP\htmlagilitypack.nupkg.zip" -TimeoutSec 30
    } 
    catch {
    Throw ('Unable to download HTMLAgilityPack')
@@ -413,7 +416,7 @@ $item = Invoke-RestMethod -Method PUT -Uri $tableUri -Headers $headers -Body $bo
 $CReportID=""
 $CReportID=(new-guid).guid
 # Get the internet connection IP address by querying a public API
-#$internetIp = (Invoke-WebRequest -uri "http://ifconfig.me/ip" -UseBasicParsing).Content 
+#$internetIp = (invoke-webrequest -uri "http://ifconfig.me/ip" -UseBasicParsing).Content 
 
 # Define the API endpoint URL
 $geourl = "http://ip-api.com/json" #$geourl = "http://ip-api.com/json/$internetIp"
@@ -731,7 +734,7 @@ Errors    = ($html -split '\<\/tr\>' | Where-Object{($_ -imatch 'ffffff') -or($_
 <#
 # Download htmlagilitypack
 try {
-Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/HtmlAgilityPack/1.11.46" -OutFile "$env:TEMP\htmlagilitypack.nupkg.zip"
+invoke-webrequest -Uri "https://www.nuget.org/api/v2/package/HtmlAgilityPack/1.11.46" -OutFile "$env:TEMP\htmlagilitypack.nupkg.zip"
 } 
 catch {
 Throw ('Unable to download HTMLAgilityPack')
@@ -838,7 +841,7 @@ $SMRevHistLatest=""
 #$OutFile="$env:TEMP\supmatrix.html"
 $SMURL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/'
 try {
-$SMVersion = Invoke-WebRequest $SMURL
+$SMVersion = invoke-webrequest $SMURL -UseBasicParsing
 }
 catch {
 Throw ('Unable to download support matrix')
@@ -867,7 +870,7 @@ $URL = $SMRevHistLatest.link
 }
 # Download the HTML content of the webpage
 try {
-$SMresponse = Invoke-WebRequest $URL
+$SMresponse = invoke-webrequest $URL -UseBasicParsing
 #$SMresponse = (new-object System.net.webclient).DownloadString($URL)
 }
 catch {
@@ -923,7 +926,7 @@ foreach ($table in $html1.Keys) {
 $SMxml = $SupportMatrixtableData | ConvertTo-Xml -As String -NoTypeInformation
 
 
-<#$pageContent = Invoke-WebRequest -Method GET -Uri $url
+<#$pageContent = invoke-webrequest -UseBasicParsing -Method GET -Uri $url
 $SMTableNames=$pageContent.ParsedHtml.getElementsByTagName('h3') | Foreach {$_.InnerText}
 $SupportMatrixtableData=@{}
 $i=0
@@ -2587,7 +2590,7 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
         $SSDDEventsOut=@()
         $DedupTask = Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{Path=$LogPath;Id="6153"} -MaxEvents 1
 
-
+        $GetVolumes=$SDDCFiles."GetVolume"
         $VirtualDisks=$SDDCFiles."GetVirtualDisk"
         If (($VirtualDisks | Where {$_.IsDeduplicationEnabled -eq $false}).count -eq $VirtualDisks.count) {$DedupDisabled=$True} else {$DedupDisabled=$False}
         $VirtualDisks=$SDDCFiles."GetVirtualDisk" |`
@@ -2625,7 +2628,9 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
           '1'{'Operational'}`
           '2'{'By Policy'}`
           '5'{'Unknown'}`
-        }}},IsSnapshot,@{Label='Access';Expression={@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
+        }}},
+        @{L='FS';E={$sv=$_.ObjectID;$ftype=($GetVolumes | ? {$sv -match ($_.objectid -split('{|}'))[3]}).FileSystemType;echo $ftype;@("CSVFS_NTFS","CSVFS_REFS",,,"FAT","FAT16","FAT32","NTFS4","NTFS5",,,"EXT2","EXT3","ReiserFS","NTFS","REFS")[$ftype -band 15]}},
+        IsSnapshot,@{Label='Access';Expression={@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
         #$VirtualDisks | FT -AutoSize -Wrap
 
          #Azure Table
@@ -2679,7 +2684,7 @@ $htmlout+=$html
         $GetVirtualDisks = $SDDCFiles."GetVirtualDisk"
         #$GetVirtualDisks|FL *
         #$GetVirtualDisks|Sort-Object FriendlyName|Select-Object FriendlyName,ResiliencySettingName,PhysicalDiskRedundancy
-        $GetVolumes=$SDDCFiles."GetVolume"
+        
         #$GetVolumes|FL *
 
         $VDRData=@()
@@ -2884,7 +2889,7 @@ $htmlout+=$html
             @{L='MountPath';E={$_.SharedVolumeInfo.FriendlyVolumeName}},
             @{L='FaultState';E={If($_.SharedVolumeInfo.FaultState -ine "NoFaults"){"RREEDD"+$_.SharedVolumeInfo.FaultState}Else{$_.SharedVolumeInfo.FaultState}}},
             @{L='MaintenanceMode';E={$_.SharedVolumeInfo.MaintenanceMode}},
-            @{L='FileSystem';E={$sv=$_.Name;@("CSVFS_NTFS","CSVFS_REFS",,,"FAT","FAT16","FAT32","NTFS4","NTFS5",,,"EXT2","EXT3","ReiserFS","NTFS","REFS")[($GetVolumes | ? {$sv -match $_.FileSystemLabel}).FileSystemType -band 15]}},
+            #@{L='FileSystem';E={$sv=$_.Name;$ftype=($GetVolumes | ? {$sv -match $_.FileSystemLabel}).FileSystemType;if ($ftype -eq $null) {$ftype=2};@("CSVFS_NTFS","CSVFS_REFS",,,"FAT","FAT16","FAT32","NTFS4","NTFS5",,,"EXT2","EXT3","ReiserFS","NTFS","REFS")[$ftype -band 15]}},
             @{L='RedirectedAccess';E={If($_.SharedVolumeInfo.RedirectedAccess -inotmatch "False"){"YYEELLLLOOWW"+$_.SharedVolumeInfo.RedirectedAccess}Else{$_.SharedVolumeInfo.RedirectedAccess}}},
             @{Label='Note';Expression={IF($_.SharedVolumeInfo.RedirectedAccess -inotmatch "False"){"CSV in Redirected Mode might be caused by a Filter Driver."}}}
 
@@ -3479,7 +3484,7 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
           $Wcl.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials         
       
       # Gets the the list of known file system minifilter drivers
-            $KnownFltrs=Invoke-WebRequest -Uri $URL | Select-Object RawContent
+            $KnownFltrs=invoke-webrequest -Uri $URL -UseBasicParsing | Select-Object RawContent
             $RawKnownFltrs=$KnownFltrs.RawContent.split("`n")
 
       # Get FLTMC files
@@ -4552,7 +4557,7 @@ If ($KBList.KBNumber -notcontains $HotFix.KBNumber) {
 }
 $HostAnyFixFound[$hostObj.PSComputerName] = $true
 } 
-if (-not $HostAnyFixFound[$hostObj.PSComputerName]) {
+try {$null=$HostAnyFixFound[$hostObj.PSComputerName]} catch {
      $HotFix.DownloadLink = [GetKBDLLink]::GetDownloadLink($HotFix.KBNumber,$OSVersion)
      $CurrentOSBuildTmp.MSCatalogLink="<a href='$($HotFix.DownloadLink)'>DownloadLink</a>"
 }
@@ -4728,7 +4733,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                                 }
                             "Mellanox"{
                                 #Rocev2 = 4
-                                IF($sAAPOND -inotmatch '4'){"dRREEDD"+$sAAPOND}Else{$sAAPOND}
+                                IF($sAAPOND -inotmatch '4'){"RREEDD"+$sAAPOND}Else{$sAAPOND}
                                 }
                             default {$sAAPOND}
                         }
@@ -6060,7 +6065,7 @@ IF($ProcessTSR -ieq "y"){
     $output = "$env:TEMP\DriFT.ps1"
     $start_time = Get-Date
     Remove-Item $output -Force -ErrorAction SilentlyContinue
-    Try{Invoke-WebRequest -Uri $url -OutFile $output -UseDefaultCredentials
+    Try{invoke-webrequest -Uri $url -OutFile $output -UseDefaultCredentials
     Write-Output "Time taken: $((Get-Date).Subtract($start_time).Seconds) second(s)"}
     Catch{Write-Host "ERROR: Source location NOT accessible. Please try again later"-foregroundcolor Red
     Pause}
