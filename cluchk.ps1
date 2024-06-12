@@ -26,6 +26,9 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2024/06/12:v1.57 -  1. Bug Fix: TP - Ignore NetATC overrides on 23H2
+                        2. Bug Fix: TP - Do not gather Windows updates for 23H2
+    
     2024/05/09:v1.56 -  1. Bug Fix:JG - Added -UseBasicParsing to all Invoke-WebRequests for Server OS compatability
                         2. Bug Fix:TP - If CSV name and Volume name does not match make file system type blank instead of NTFS
     
@@ -79,7 +82,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.56"
+$CluChkVer="1.57"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -811,6 +814,7 @@ If($SysInfo[0].OSName -imatch 'HCI'){
         '19042' {'20H2'}
         '20348' {'21H2'}
         '20349' {'22H2'}
+        '25398' {'23H2'}
         Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
         }
     }
@@ -2365,7 +2369,7 @@ ForEach($Sys in $SysInfo){
                 "RREEDD"*!(@("17784","17763","14393","19042","20348","20349","25398").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
             }
             IF($sys.OSName -imatch "Stack"){
-                "RREEDD"*!(@("17784","17763","14393","20349").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
+                "RREEDD"*!(@("17784","17763","14393","20349","25398").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
             }
         }}
 }
@@ -4442,9 +4446,10 @@ $KBItemsToShow = 6
                     @{L="DownloadLink";E={""}}
             }
             #>
-            If($OSVersion -imatch '\d\dH\d'){
+            If($OSVersion -imatch '22H2|21H2|20H2'){
                 # Download the HTML content
-                $url = "https://support.microsoft.com/en-us/help/5018894"
+                #$url = "https://support.microsoft.com/en-us/help/5018894"
+                $url = "https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-23h2-018b9b10-a75b-4ad7-b9d1-7755f81e5b0b"
                 $webClient = New-Object System.Net.WebClient
                 $htmlpage = $webClient.DownloadString($url)
 
@@ -4683,36 +4688,37 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $html=""
             $Name=""
         
-        $Name="NetworkATC Overrides"
-        Write-Host "    Gathering $Name..."
-        #$GetNetIntentXml=""
-        #$GetNetIntentGlobalOverridesXml=""
-        #$GetNetIntentXml=Get-ChildItem -Path $SDDCPath -Filter "GetNetIntent.xml" -Recurse -Depth 1 | import-clixml
-        #$GetNetIntentGlobalOverridesXml=Get-ChildItem -Path $SDDCPath -Filter "GetNetIntentGlobalOverrides.xml" -Recurse -Depth 1 | import-clixml
-        #GlobalOverrides
-            $ClusterOverrides=@()
-            $ClusterOverrides=$SDDCFiles."GetNetIntentGlobalOverrides" | Select-Object IntentType,`
+        If ($OSVersionNodes -ne "23H2") {
+           $Name="NetworkATC Overrides"
+           Write-Host "    Gathering $Name..."
+           #$GetNetIntentXml=""
+           #$GetNetIntentGlobalOverridesXml=""
+           #$GetNetIntentXml=Get-ChildItem -Path $SDDCPath -Filter "GetNetIntent.xml" -Recurse -Depth 1 | import-clixml
+           #$GetNetIntentGlobalOverridesXml=Get-ChildItem -Path $SDDCPath -Filter "GetNetIntentGlobalOverrides.xml" -Recurse -Depth 1 | import-clixml
+           #GlobalOverrides
+           $ClusterOverrides=@()
+           $ClusterOverrides=$SDDCFiles."GetNetIntentGlobalOverrides" | Select-Object IntentType,`
                 @{L="OverrideType";E={"ClusterSettings"}},
                 @{L="EnableNetworkNaming";E={$_.ClusterOverride.EnableNetworkNaming}},
                 @{L="EnableVirtualMachineMigrationPerformanceSelection";E={$CEVMMPS=$_.ClusterOverride.EnableVirtualMachineMigrationPerformanceSelection;IF($CEVMMPS -inotmatch 'False' -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$CEVMMPS}Else{$CEVMMPS}}},
                 @{L="VirtualMachineMigrationPerformanceOption";E={$CVMMPO=$_.ClusterOverride.VirtualMachineMigrationPerformanceOption;IF($CVMMPO -inotmatch "SMB" -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$CVMMPO}else{$CVMMPO}}},
                 @{L="MaximumVirtualMachineMigrations";E={$MVMM=$_.ClusterOverride.MaximumVirtualMachineMigrations;IF($MVMM -ne "2" -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$MVMM}Else{$MVMM}}},
                 @{L="MaximumSMBMigrationBandwidthInGbps";E={$_.ClusterOverride.MaximumSMBMigrationBandwidthInGbps}}
-            $ProxyOverrides=@()
-            $ProxyOverrides=$SDDCFiles."GetNetIntentGlobalOverrides" | Select-Object IntentType,`
+           $ProxyOverrides=@()
+           $ProxyOverrides=$SDDCFiles."GetNetIntentGlobalOverrides" | Select-Object IntentType,`
                 @{L="OverrideType";E={"WinHttpAdvProxy"}},
                 @{L="ProxyServer";E={$_.ProxyOverride.ProxyServer}},
                 @{L="ProxyBypass";E={$_.ProxyOverride.ProxyBypass}},
                 @{L="AutoConfigUrl";E={$_.ProxyOverride.AutoConfigUrl}},
                 @{L="AutoDetect";E={$_.ProxyOverride.AutoDetect}}
-        #Managment and Compute Overrides
-            $ManagmentandComputeOverrides=@()
-            $ManagmentandComputeOverrides=$SDDCFiles."GetNetIntent" | Where-Object{$_.IntentType -eq 10} | Select-Object IntentName,NetAdapterNamesAsList,`
+           #Managment and Compute Overrides
+           $ManagmentandComputeOverrides=@()
+           $ManagmentandComputeOverrides=$SDDCFiles."GetNetIntent" | Where-Object{$_.IntentType -eq 10} | Select-Object IntentName,NetAdapterNamesAsList,`
                 @{L="NetworkDirect";E={$AAPOND=$_.AdapterAdvancedParametersOverride.NetworkDirect;IF($AAPOND -ne '0' -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$AAPOND}Else{$AAPOND}}},
                 @{L="JumboPacket";E={$AAPOND=$_.AdapterAdvancedParametersOverride.JumboPacket;$AAPOND}}
-        #Storage Overrides
-            $StorageOverrides=@()
-            $StorageOverrides=$SDDCFiles."GetNetIntent" | Where-Object{$_.IntentType -imatch "Storage"} | Select-Object IntentName,NetAdapterNamesAsList,`
+           #Storage Overrides
+           $StorageOverrides=@()
+           $StorageOverrides=$SDDCFiles."GetNetIntent" | Where-Object{$_.IntentType -imatch "Storage"} | Select-Object IntentName,NetAdapterNamesAsList,`
                 @{L="JumboPacket";E={$sAAPOND=$_.AdapterAdvancedParametersOverride.JumboPacket;IF($sAAPOND -ne '9014' -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$sAAPOND}Else{$sAAPOND}}},
                 @{L="NetworkDirectTechnology";E={
                     #Make sure the support version of NetworkDirectTechnology is found
@@ -4742,24 +4748,25 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 @{L="PriorityValue8021Action_Cluster";E={$sAAPOND=$_.QosPolicyOverride.PriorityValue8021Action_Cluster;IF($sAAPOND -inotmatch '5' -and $sAAPOND -inotmatch '7'){"RREEDD"+$sAAPOND}Else{$sAAPOND}}},
                 @{L="EnableAutomaticIPGeneration";E={$SEAIG=$_.IPOverride.EnableAutomaticIPGeneration;IF($SEAIG -inotmatch 'False' -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$SEAIG}Else{$SEAIG}}}
 
-            # HTML Report
-            $html+='<H2 id="NetworkATCOverrides">NetworkATC Overrides</H2>'
-            $html+=" Please note that a blank entry indicates that the override has not been configured."
-            $html+=$ClusterOverrides | ConvertTo-html -Fragment
-            $html+='<br>'
-            $html+=$ProxyOverrides | ConvertTo-html -Fragment
-            $html+='<br>'
-            $html+=$ManagmentandComputeOverrides | ConvertTo-html -Fragment
-            $html+='<br>'
-            $html+=$StorageOverrides | ConvertTo-html -Fragment
-            $html=$html `
-             -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
-             -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'                
-            $ResultsSummary+=Set-ResultsSummary -name $name -html $html
-            $htmlout+=$html
-            $html=""
-            $Name=""
+           # HTML Report
+           $html+='<H2 id="NetworkATCOverrides">NetworkATC Overrides</H2>'
+           $html+=" Please note that a blank entry indicates that the override has not been configured."
+           $html+=$ClusterOverrides | ConvertTo-html -Fragment
+           $html+='<br>'
+           $html+=$ProxyOverrides | ConvertTo-html -Fragment
+           $html+='<br>'
+           $html+=$ManagmentandComputeOverrides | ConvertTo-html -Fragment
+           $html+='<br>'
+           $html+=$StorageOverrides | ConvertTo-html -Fragment
+           $html=$html `
+            -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
+            -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'                
+           $ResultsSummary+=Set-ResultsSummary -name $name -html $html
+           $htmlout+=$html
+           $html=""
+           $Name=""
 
+        }
     }
 
 
