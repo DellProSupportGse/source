@@ -26,6 +26,16 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2024/08/21:v1.58 -  1. Bug Fix: TP - Fixed FileSystem field for Virtual Disks table
+                        2. Bug Fix: TP - Fixed Virtual Disk status not showing on updated systems.
+                        3. New Feature: TP - Show warning instead of failure when not able to down support matrix.
+                        4. Bug Fix TP - Change Drift run code due to errors on some systems.
+                        5. New Feature: TP - Set URL for 2016 HCI solutions to the archive support matrix page.
+                        6. Bug Fix: SA - Fixed some text
+                        7. New Feature: JG - NetAdapterAdvancedProperty - Exclude Host in Charge check for APEX
+                        8. New Feature: JG - Cluster Nodes - Added UBR
+
+    
     2024/06/12:v1.57 -  1. Bug Fix: TP - Ignore NetATC overrides on 23H2
                         2. Bug Fix: TP - Do not gather Windows updates for 23H2
     
@@ -82,7 +92,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.57"
+$CluChkVer="1.58"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -838,7 +848,7 @@ Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
 
 #region Gather the Support Matrix for Microsoft HCI Solutions
 Write-Host "    Gathering Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI..."
-if ($OSVersion -eq "2016" -or $OSversion -match "2012") {$URL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/2309/'} else {
+if ($OSVersion -eq "2016" -or $OSversion -match "2012") {$URL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/archive/ws2016/'} else {
 #$webClient = [System.Net.WebClient]::new()
 $SMRevHistLatest=""
 #URL for Dell Technologies Solutions for Microsoft Azure Stack Support Matrix
@@ -848,7 +858,7 @@ try {
 $SMVersion = invoke-webrequest $SMURL -UseBasicParsing
 }
 catch {
-Throw ('Unable to download support matrix')
+Write-Warning 'Unable to download support matrix'
 }
 
 #Filter for links "Azure Stack HCI Support Matrix" in the text
@@ -2371,6 +2381,9 @@ ForEach($Sys in $SysInfo){
             IF($sys.OSName -imatch "Stack"){
                 "RREEDD"*!(@("17784","17763","14393","20349","25398").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
             }
+        }},
+        @{L="UBR";E={
+            ($SDDCFiles."$($_.Name)GetCurrentVersion").UBR
         }}
 }
 #Azure Table CluChkClusterNodes
@@ -2599,7 +2612,7 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
         If (($VirtualDisks | Where {$_.IsDeduplicationEnabled -eq $false}).count -eq $VirtualDisks.count) {$DedupDisabled=$True} else {$DedupDisabled=$False}
         $VirtualDisks=$SDDCFiles."GetVirtualDisk" |`
         Sort-Object HealthStatus -Descending | Select-Object FriendlyName,`
-        @{Label='OperationalStatus';Expression={Switch($_.OperationalStatus -replace [regex]::match($_.OperationalStatus,"\\d+")){`
+        @{Label='OperationalStatus';Expression={If ($_.OperationalStatus -match "\d") {Switch($_.OperationalStatus -replace [regex]::match($_.OperationalStatus,"\\d+")){`
           '0'{'Unknown'}`
           '1'{'Other'}`
           '2'{'OK'}`
@@ -2620,21 +2633,22 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
           '17'{'Completed'}`
           '18'{'Power Mode'}`
           '53250'{'Detached'}
-        }}},`
-        @{Label='HealthStatus';Expression={Switch($_.HealthStatus){`
+          }} else {$_.OperationalStatus}
+        }},`
+        @{Label='HealthStatus';Expression={If ($_.HealthStatus -match "\d") {Switch($_.HealthStatus){`
           '0'{'Healthy'}`
           '1'{'Warning'}`
           '2'{'Unhealthy'}`
           '5'{'Unknown'}`
-        }}},`
-        @{Label='DetachedReason';Expression={Switch($_.DetachedReason){`
+        }} else {$_.HealthStatus}}},`
+        @{Label='DetachedReason';Expression={If ($_.DetachedReason -match "\d") {Switch($_.DetachedReason){`
           '0'{'Not Detached'}`
           '1'{'Operational'}`
           '2'{'By Policy'}`
           '5'{'Unknown'}`
-        }}},
-        @{L='FS';E={$sv=$_.ObjectID;$ftype=($GetVolumes | ? {$sv -match ($_.objectid -split('{|}'))[3]}).FileSystemType;echo $ftype;@("CSVFS_NTFS","CSVFS_REFS",,,"FAT","FAT16","FAT32","NTFS4","NTFS5",,,"EXT2","EXT3","ReiserFS","NTFS","REFS")[$ftype -band 15]}},
-        IsSnapshot,@{Label='Access';Expression={@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
+        }} else {$_.DetachedReason}}},
+        FileSystem,
+        IsSnapshot,@{Label='Access';Expression={If ($_.Access -match "\d") {@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]} else {"RREEDD"*($_.Access -ne "Read/Write")+$_.Access}}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
         #$VirtualDisks | FT -AutoSize -Wrap
 
          #Azure Table
@@ -3853,6 +3867,11 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
                         $LiveMigrationNetworkPriorities+=$GCN| Select-Object Name,@{L='LiveMigrationNetwork';E={
                             Switch($GCN.ID){
                                 {(($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationExcludeNetworks'}|Select-Object Value) -split ';') | Where-Object{$_ -iMatch $GCN.ID}}{
+                                   
+
+
+                                   
+                                   
                                     "Excluded"
                                 }
                                 {(($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}|Select-Object Value) -split ';') | Where-Object{$_ -iMatch $GCN.ID}}{
@@ -5651,7 +5670,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 Sort-Object PSComputerName,Priority | Select-Object PSComputerName,Name,DisplayName,DisplayValue
             }
             $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,DisplayName,`
-            @{Label='DisplayValue';Expression={If((($StorageNics.name | Sort-Object -Unique) -imatch $_.name ) -and ($_.DisplayValue -inotmatch 'Host In Charge')){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}}}
+            @{Label='DisplayValue';Expression={If((($StorageNics.name | Sort-Object -Unique) -imatch $_.name ) -and ($SysInfo[0].SysModel -notmatch "^APEX" -and $_.DisplayValue -inotmatch 'Host In Charge')){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}}}
             #$GetNetAdapterAdvancedProperty | FT -AutoSize
             #Azure Table
                 $AzureTableData=@()
@@ -5827,7 +5846,7 @@ SupportProvider = "RREEDDMissing"
                 $html+='<H2 id="OEMInformationSupportProvider">OEM Information Support Provider</H2>'
                 $html+=""
                 $html+="<h5><b>Should be:</b></h5>"
-                $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation\SupportProvider=DellEMC</h5>"
+                $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation\SupportProvider=Dell</h5>"
                 $html+=$GetRegOEMInformationOut | ConvertTo-html -Fragment
                 $html=$html `
                  -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -5882,8 +5901,8 @@ SupportProvider = "RREEDDMissing"
         $html+='<H2 id="JumboFrames">Jumbo Frames</H2>'
         $html+=""
         $html+="<h5><b>Should be:</b></h5>"
-        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Storage NICs DisplayValue=9014 or 9014 Bytes</h5>"
-        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Switchless Storage NICs DisplayValue=9614 or 9614 Bytes</h5>"
+        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Storage NICs DisplayValue=9014 Bytes</h5>"
+        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Switchless Storage NICs DisplayValue=9014 Bytes</h5>"
         $html+=$GetNetAdapterAdvancedProperty | ConvertTo-html -Fragment
         $html=$html `
          -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -6072,14 +6091,15 @@ IF($ProcessTSR -ieq "y"){
     $output = "$env:TEMP\DriFT.ps1"
     $start_time = Get-Date
     Remove-Item $output -Force -ErrorAction SilentlyContinue
-    Try{invoke-webrequest -Uri $url -OutFile $output -UseDefaultCredentials
+    Try{invoke-webrequest -Uri $url -UseDefaultCredentials | Out-Null #-OutFile $output 
     Write-Output "Time taken: $((Get-Date).Subtract($start_time).Seconds) second(s)"}
     Catch{Write-Host "ERROR: Source location NOT accessible. Please try again later"-foregroundcolor Red
-    Pause}
+    }
     Finally{
         $TSRsToProcesswithDrift = $TSRLOC -join ","
         $params="-Cluchk $CluChkGuid -Input $TSRsToProcesswithDrift "
-        Import-Module $output
+        #Import-Module $output
+        Invoke-Expression('$module="RunDriFT";$repo="PowershellScripts"'+(new-object net.webclient).DownloadString($url))
         Invoke-RunDriFT $params 
     }
 #}
