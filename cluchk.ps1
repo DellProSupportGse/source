@@ -26,6 +26,7 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+
     2024/10/31:v1.59 -  1. New Update: JG - New version 1.59 DEV
                         2. Bug Fix: SA - Fixed sorting/label in Host Management VLAN table
                         3. Bug Fix: SA - Fixed some more sorting issues
@@ -36,6 +37,9 @@ Specifies to show debug information
                         8. Bug Fix: SA - Added AX-45?0 node types to generations
                         9. Bug Fix: SA - Fixed catalog selection on unknown node generation
                         10. Bug Fix: TP - Added "DvFlt","MdvFsFlt","applockerfltr" to show as MS FLTMC drivers.
+                        11. New Feature: SA - Added ISM IP checker
+                        12. Bug Fix: SA - Some RED fixes
+                        13. Bug Fix: SA - Suppress runspace output
     
     2024/08/21:v1.58 -  1. Bug Fix: TP - Fixed FileSystem field for Virtual Disks table
                         2. Bug Fix: TP - Fixed Virtual Disk status not showing on updated systems.
@@ -1317,7 +1321,7 @@ If($ProcessSDDC -ieq "y"){
     $htmlout
     $html=""
     $Name=""
- })
+ }) | out-null
  $Job3 = $PowerShell3.BeginInvoke($Inputs3,$Outputs3)
  #>
 
@@ -3729,7 +3733,7 @@ $html+="<h5><b>&nbsp;&nbsp;&nbsp;&nbsp; NOTE: No cache to bind because we only h
             $htmlout
             $html=""
             $Name=""
-})
+}) | out-null
  $Job = $PowerShell.BeginInvoke($Inputs,$Outputs)
 } 
 
@@ -4963,7 +4967,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $html+=$VMNetworkAdaptersvLANsKey
         $html+=$VMNetworkAdaptersvLANs | ConvertTo-html -Fragment
         $html=$html `
-         -replace '<td>RED','<td style="color: #ffffff; background-color: #ff0000">'`
+         -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
          -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'                
         $ResultsSummary+=Set-ResultsSummary -name $name -html $html
         $htmlout+=$html
@@ -5010,7 +5014,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $html+=$ConfigureHostManagementVLANkey
         $html+=$ConfigureHostManagementVLANOut | Sort-Object PSComputerName, AdapterName  | ConvertTo-html -Fragment
         $html=$html `
-         -replace '<td>RED','<td style="color: #ffffff; background-color: #ff0000">'`
+         -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
          -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'                
         $ResultsSummary+=Set-ResultsSummary -name $name -html $html
         $htmlout+=$html
@@ -5055,7 +5059,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $html+=$AssignHostManagementIPaddressSB
         $html+=$AssignHostManagementIPaddress | ConvertTo-html -Fragment
         $html=$html `
-         -replace '<td>RED','<td style="color: #ffffff; background-color: #ff0000">'`
+         -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
          -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
         $AssignHostManagementIPaddresskey=""
         $AssignHostManagementIPaddresskey+="<h5><b>AddressState Key:</b></h5>"
@@ -5070,6 +5074,64 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $htmlout+=$html
         $html=""
         $Name=""        
+
+    # iDRAC ISM IP address
+        $Name="iDRAC ISM IP address"
+        Write-Host "    Gathering $Name..."  
+		$idracNics = Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapter")) {
+			$SDDCFiles."$key" | Where-Object {($_.InterfaceDescription -imatch 'Remote NDIS Compatible Device')}|`
+			Sort-Object PSComputerName, ifIndex | Select-Object PSComputerName,InterfaceDescription,ifIndex,@{L='AdminStatus';E={IF($_.AdminStatus -ne "Up") {'RREEDD'+$_.AdminStatus} else {$_.AdminStatus}}},@{L='MediaConnectionState';E={IF($_.MediaConnectionState -ne "Connected") {'RREEDD'+$_.MediaConnectionState} else {$_.MediaConnectionState}}},Speed
+		}
+
+		$GetNetIpAddress=Foreach ($key in ($SDDCFiles.keys -like "*GetNetIpAddress")) {$SDDCFiles."$key" | Where-Object{$_.IPv4Address}}
+
+		$iDRACNetAdaptersIPs=@()
+		# Find the Mgmt Cluster Network
+			ForEach($NetIp in $GetNetIpAddress){
+				$iDRACNetAdaptersIPs+=$idracNics | Where-Object{($_.IfIndex -eq $NetIp.IfIndex) -and ($_.PsComputername -eq $NetIp.PSComputerName )}|Select-Object *,@{L='IPv4Address';E={
+					if (($SysInfo[0].SysModel -match "^APEX") -and ($NetIp.IPv4Address -ne "169.254.1.1")) {'RREEDD'+$NetIp.IPv4Address}
+					elseif (($SysInfo[0].SysModel -notmatch "^APEX") -and (($GetNetIpAddress | where-object {$_.IPv4Address -eq $NetIp.IPv4Address} | sort -Unique).count -gt 1)) {'RREEDD'+$NetIp.IPv4Address}
+					else {$NetIp.IPv4Address}
+					}}
+		}
+        #Azure Table
+            $AzureTableData=@()
+            $AzureTableData=$AssignHostManagementIPaddress|Select-Object -Property `
+                @{L='PSComputerName';E={[string]$_.PSComputerName}},
+                @{L='InterfaceDescription';E={[string]$_.InterfaceDescription}},
+                @{L='ifIndex';E={[string]$_.ifIndex}},
+                @{L='AdminStatus';E={[string]$_.AdminStatus}},
+                @{L='MediaConnectionState';E={[string]$_.MediaConnectionState}},
+                @{L='Speed';E={[string]$_.Speed}},
+                @{L='IPv4Address';E={[string]$_.IPv4Address}},
+                @{L='ReportID';E={$CReportID}}
+            $PartitionKey=$Name -replace '\s'
+            $TableName="CluChk$($PartitionKey)"
+            $SasToken='?sv=2019-02-02&si=CluChkUpdate&sig=lyCFsoyd6I220KJly4hIMBpFGJkXSvjwXLi%2BLmQuDac%3D&tn=CluChkiDRACISMIPaddress'
+            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
+		
+		
+        # HTML Report
+        $html+='<H2 id="iDRACISMIPaddress">iDRAC ISM IP address</H2>'
+        $iDRACIPaddress=""
+        $iDRACIPaddress+="<h5><b>Should be:</b></h5>"
+        $iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Adminstatus=Up</h5>"
+		$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-MediaConnectedState=Connected</h5>"
+		IF($SysInfo[0].SysModel -notmatch "^APEX"){
+			$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-IPv4Address=unique per host</h5>"
+		} else {
+			$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-IPv4Address=169.254.1.1</h5>"
+		}
+        $html+=$iDRACIPaddress
+        $html+=$iDRACNetAdaptersIPs | ConvertTo-html -Fragment
+        $html=$html `
+         -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
+         -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
+
+        $ResultsSummary+=Set-ResultsSummary -name $name -html $html
+        $htmlout+=$html
+        $html=""
+        $Name=""       
 
     # Check for VMQ
         $Name="VMQ information"
