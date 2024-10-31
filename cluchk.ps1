@@ -26,6 +26,26 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2024/10/31:v1.59 -  1. New Update: JG - New version 1.59 DEV
+                        2. Bug Fix: SA - Fixed sorting/label in Host Management VLAN table
+                        3. Bug Fix: SA - Fixed some more sorting issues
+                        4. Bug Fix: SA - Fixed SMB signing required for 23h2
+                        5. Bug Fix: SA - Fixed firmware catalog selection 14g/15g vs 16g
+                        6. Bug Fix: SA - Hack for Broadcom driver version
+                        7. Bug Fix: SA - Added warning for no SBE package validation on 23h2 and APEX
+                        8. Bug Fix: SA - Added AX-45?0 node types to generations
+                        9. Bug Fix: SA - Fixed catalog selection on unknown node generation
+                        10. Bug Fix: TP - Added "DvFlt","MdvFsFlt","applockerfltr" to show as MS FLTMC drivers.
+    
+    2024/08/21:v1.58 -  1. Bug Fix: TP - Fixed FileSystem field for Virtual Disks table
+                        2. Bug Fix: TP - Fixed Virtual Disk status not showing on updated systems.
+                        3. New Feature: TP - Show warning instead of failure when not able to down support matrix.
+                        4. Bug Fix TP - Change Drift run code due to errors on some systems.
+                        5. New Feature: TP - Set URL for 2016 HCI solutions to the archive support matrix page.
+                        6. Bug Fix: SA - Fixed some text
+                        7. New Feature: JG - NetAdapterAdvancedProperty - Exclude Host in Charge check for APEX
+                        8. New Feature: JG - Cluster Nodes - Added UBR
+    
     2024/06/12:v1.57 -  1. Bug Fix: TP - Ignore NetATC overrides on 23H2
                         2. Bug Fix: TP - Do not gather Windows updates for 23H2
     
@@ -50,7 +70,6 @@ Specifies to show debug information
                         7. Bug Fix: TP - Net QOS Traffic Class was calling out ETS as an error when it is configured correctly.
                         8. New Feature: TP - Wrote PS Function to pull HTML tables. Removed downloading HTMLAgilityPack and changed sections using it.
 
-
     2024/02/09:v1.51 -  1. New Feature: TP - Call out a warning for a Cluster network with an IP but the Cluster Role set to None
                         2. New Feature: JG - Jumbo Frames: Changes Slot to Port and added Intel Nics for APEX support
                         3. New Feature: JG - Net Adapter Qos: ONLY check if Quality Of Service for APEX support
@@ -58,7 +77,6 @@ Specifies to show debug information
                         5. New Feature: JG - Cluster Name: Added 23H2 for APEX support
                         6. New Feature: JG - Cluster Nodes: Added 25398 to OSBuild for APEX support
                         7. Bug Fix: JG - Net Qos Dcbx Property: Do not show if no dhbxmode found
-
 
     2024/01/25:v1.50 -  1. New Feature: JG - Cluster Nodes - Added check for EoL Operation Systems
                         2. Bug Fix: TP - Fixed disk firmware showing older firmware preferred if two are in the support matrix
@@ -82,7 +100,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.57"
+$CluChkVer="1.59"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -834,11 +852,23 @@ $OSVersionNodes = Switch ($SysInfo[0].OSBuildNumber) {
 '14393' {'2016'}
 Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
 }
-}}
+}
+IF($SysInfo[0].SysModel -match "^APEX"){
+	$GenerationNodes = "16g"
+} elseif (($SysInfo[0].SysModel -like "AX-?60") -or ($SysInfo[0].SysModel -like "AX*45?0")){
+	$GenerationNodes = "16g"
+} elseif ($SysInfo[0].SysModel -like "AX-?50"){
+	$GenerationNodes = "15g"
+} elseif ($SysInfo[0].SysModel -like "AX-?40"){
+	$GenerationNodes = "14g"
+} else {
+	$GenerationNodes ="unknown"
+}
+}
 
 #region Gather the Support Matrix for Microsoft HCI Solutions
 Write-Host "    Gathering Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI..."
-if ($OSVersion -eq "2016" -or $OSversion -match "2012") {$URL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/2309/'} else {
+if ($OSVersion -eq "2016" -or $OSversion -match "2012") {$URL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/archive/ws2016/'} else {
 #$webClient = [System.Net.WebClient]::new()
 $SMRevHistLatest=""
 #URL for Dell Technologies Solutions for Microsoft Azure Stack Support Matrix
@@ -848,14 +878,20 @@ try {
 $SMVersion = invoke-webrequest $SMURL -UseBasicParsing
 }
 catch {
-Throw ('Unable to download support matrix')
+Write-Warning 'Unable to download support matrix'
 }
 
 #Filter for links "Azure Stack HCI Support Matrix" in the text
 $SMLinks = $SMVersion.Links | Where-Object {$_.outerHTML -match "Azure Stack HCI Support Matrix"} | Select-Object -ExpandProperty href
 
 #Select the latest support matrix
-$LatestLink=$SMlinks | Sort-Object {[regex]::Matches($_, "(?<=\/)\d+").Value | ForEach-Object {[int]$_}} -Descending | select -First 1
+if ($GenerationNodes -eq "unknown") {
+	# unknown node type, just use the last catalog
+	$LatestLink=$SMlinks | Sort-Object {[regex]::Matches($_, "(?<=\/)\d+").Value | ForEach-Object {[int]$_}} -Descending | select -First 1
+} else {
+	# use model based catalog
+	$LatestLink=$SMlinks | where-object {$_ -like "*"+$GenerationNodes+"*"} | Sort-Object {[regex]::Matches($_, "(?<=\/)\d+").Value | ForEach-Object {[int]$_}} -Descending | select -First 1
+}
 
 # Remove the trailing forward slash ("/") if it exists 
 $LatestLink=$LatestLink.trim('/')
@@ -2371,6 +2407,9 @@ ForEach($Sys in $SysInfo){
             IF($sys.OSName -imatch "Stack"){
                 "RREEDD"*!(@("17784","17763","14393","20349","25398").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
             }
+        }},
+        @{L="UBR";E={
+            ($SDDCFiles."$($_.Name)GetCurrentVersion").UBR
         }}
 }
 #Azure Table CluChkClusterNodes
@@ -2599,7 +2638,7 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
         If (($VirtualDisks | Where {$_.IsDeduplicationEnabled -eq $false}).count -eq $VirtualDisks.count) {$DedupDisabled=$True} else {$DedupDisabled=$False}
         $VirtualDisks=$SDDCFiles."GetVirtualDisk" |`
         Sort-Object HealthStatus -Descending | Select-Object FriendlyName,`
-        @{Label='OperationalStatus';Expression={Switch($_.OperationalStatus -replace [regex]::match($_.OperationalStatus,"\\d+")){`
+        @{Label='OperationalStatus';Expression={If ($_.OperationalStatus -match "\d") {Switch($_.OperationalStatus -replace [regex]::match($_.OperationalStatus,"\\d+")){`
           '0'{'Unknown'}`
           '1'{'Other'}`
           '2'{'OK'}`
@@ -2620,21 +2659,22 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
           '17'{'Completed'}`
           '18'{'Power Mode'}`
           '53250'{'Detached'}
-        }}},`
-        @{Label='HealthStatus';Expression={Switch($_.HealthStatus){`
+          }} else {$_.OperationalStatus}
+        }},`
+        @{Label='HealthStatus';Expression={If ($_.HealthStatus -match "\d") {Switch($_.HealthStatus){`
           '0'{'Healthy'}`
           '1'{'Warning'}`
           '2'{'Unhealthy'}`
           '5'{'Unknown'}`
-        }}},`
-        @{Label='DetachedReason';Expression={Switch($_.DetachedReason){`
+        }} else {$_.HealthStatus}}},`
+        @{Label='DetachedReason';Expression={If ($_.DetachedReason -match "\d") {Switch($_.DetachedReason){`
           '0'{'Not Detached'}`
           '1'{'Operational'}`
           '2'{'By Policy'}`
           '5'{'Unknown'}`
-        }}},
-        @{L='FS';E={$sv=$_.ObjectID;$ftype=($GetVolumes | ? {$sv -match ($_.objectid -split('{|}'))[3]}).FileSystemType;echo $ftype;@("CSVFS_NTFS","CSVFS_REFS",,,"FAT","FAT16","FAT32","NTFS4","NTFS5",,,"EXT2","EXT3","ReiserFS","NTFS","REFS")[$ftype -band 15]}},
-        IsSnapshot,@{Label='Access';Expression={@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
+        }} else {$_.DetachedReason}}},
+        FileSystem,
+        IsSnapshot,@{Label='Access';Expression={If ($_.Access -match "\d") {@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]} else {"RREEDD"*($_.Access -ne "Read/Write")+$_.Access}}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
         #$VirtualDisks | FT -AutoSize -Wrap
 
          #Azure Table
@@ -3490,6 +3530,7 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
       # Gets the the list of known file system minifilter drivers
             $KnownFltrs=invoke-webrequest -Uri $URL -UseBasicParsing | Select-Object RawContent
             $RawKnownFltrs=$KnownFltrs.RawContent.split("`n")
+            $RawKnownFltrs+=
 
       # Get FLTMC files
             $FLTMCLogs=Get-ChildItem -Path $SDDCPath -Filter "FLTMC.TXT" -Recurse -Depth 1
@@ -3507,10 +3548,10 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
                     $FilterData0=""
                     $FilterData0+=$Driver.PSComputerName+","+$FilterName+","+$Driver.NumInstances+","+$Driver.Altitude+","+$Driver.Frame+","
                     ForEach($Line in $RawKnownFltrs){
-                        If($Line -imatch '^\|\s'+[regex]::escape($FilterName)+'.sys' -or @("UnionFS") -contains $FilterName){
+                        If($Line -imatch '^\|\s'+[regex]::escape($FilterName)+'.sys' -or @("UnionFS","DvFlt","MdvFsFlt","applockerfltr") -contains $FilterName){
                             $S= $Line -split "\s+" , 6
                             $CompanyName=$S[5].Replace("|","").Trim()
-                            If (@("UnionFS") -contains $FilterName) {$CompanyName="Microsoft"}
+                            If (@("UnionFS","DvFlt","MdvFsFlt","applockerfltr") -contains $FilterName) {$CompanyName="Microsoft"}
                             IF($CompanyName -inotmatch "Microsoft"){$CompanyName="RREEDD"+$CompanyName}
                             $FilterData1=""
                             $FilterData1=$S[1]+","+$CompanyName+"`r`n"
@@ -3853,6 +3894,11 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
                         $LiveMigrationNetworkPriorities+=$GCN| Select-Object Name,@{L='LiveMigrationNetwork';E={
                             Switch($GCN.ID){
                                 {(($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationExcludeNetworks'}|Select-Object Value) -split ';') | Where-Object{$_ -iMatch $GCN.ID}}{
+                                   
+
+
+                                   
+                                   
                                     "Excluded"
                                 }
                                 {(($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}|Select-Object Value) -split ';') | Where-Object{$_ -iMatch $GCN.ID}}{
@@ -4074,7 +4120,7 @@ return ($SMFWDRVRData |Where-Object{$_.SupportedOS -like $OSversion} | Where-Obj
             $a.Intel} else {
             if (($_.DeviceName -like "Mellanox ConnectX*") -and $a.Mellanox){
             $a.Mellanox} else {
-            if (($_.DeviceName -like "Broadcom*574*" -or $_.DeviceName -like "Broadcom NetXtreme E*"-or $_.DeviceName -like "Broadcom*OCP*") -and $a.Broadcom){
+            if (($_.DeviceName -like "Broadcom*574*" -or $_.DeviceName -like "Broadcom NetXtreme E*"-or $_.DeviceName -like "Broadcom*OCP*") -and $GenerationNodes -eq "14g" -and $a.Broadcom){
             $a.Broadcom} else {
             if (($_.DeviceName -like "Broadcom NetXtreme Gigabit*") -and $a.B1GB){
             $a.B1GB} else {
@@ -4201,7 +4247,10 @@ $UpdateOutofBoxdriverstbl.rows.add($row)
     $html=$html `
       -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
       -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
-    $html+="&nbsp;*Available Version from Support Matrix Revision: "+($SMRevHistLatest.Revision)
+    $html+="&nbsp;*Available versions from Support Matrix Revision: "+($SMRevHistLatest.Revision)
+    IF($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") {
+        $html+="<h5><b>&nbsp;!!! This script does not check against SBE package versions !!!</b></h5>"
+    }
     $ResultsSummary+=Set-ResultsSummary -name $name -html $html
     $htmlout+=$html
     $html=""
@@ -4937,7 +4986,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $ConfigureHostManagementVLANOut= $ConfigureHostManagementVLAN + $GetVMNetworkAdapterIsolation
         }Else{
             $ConfigureHostManagementVLAN=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapterAdvancedProperty")) {$SDDCFiles."$key" | Where-Object{$_.DisplayName -eq "VLAN ID"}|`
-        Sort-Object PSComputerName,Name | Select-Object PSComputerName,Name,DisplayName,DisplayValue
+        Sort-Object PSComputerName,Name | Select-Object PSComputerName,@{L="AdapterName";E={$_.Name}},DisplayName,DisplayValue
         }
         $ConfigureHostManagementVLANOut = $ConfigureHostManagementVLAN
         }
@@ -5131,7 +5180,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 Where-Object{($_.InterfaceDescription -Match 'QLogic')-or ($_.InterfaceDescription -Match 'E810') }|`
                 Where-Object{(($_.DisplayName -eq "RDMA Mode") `
                 -or($_.DisplayName -eq "NetworkDirect Technology"))}|`
-                Sort-Object PSComputerName,InterfaceDescription | Select-Object PSComputerName,Name,InterfaceDescription,DisplayName,DisplayValue
+                Sort-Object PSComputerName,Name,InterfaceDescription | Select-Object PSComputerName,Name,InterfaceDescription,DisplayName,DisplayValue
             }
             ForEach($NAAP in $GetNetAdapterAdvancedProperty){
                 $FoundGetNetAdapterAdvancedProperty+=$NAAP|Where-Object{$_.Name -cne $EnabledNICS.Name}
@@ -5180,7 +5229,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $GetNetAdapterAdvancedProperty=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapterAdvancedProperty")) {$SDDCFiles."$key" | `
                 Where-Object{$_.InterfaceDescription -Match 'Mellanox'}|`
                 Where-Object{($_.DisplayName -eq "NetworkDirect Technology")}|`
-                Sort-Object PSComputerName,InterfaceDescription | Select-Object PSComputerName,Name,InterfaceDescription,DisplayName,DisplayValue
+                Sort-Object PSComputerName,Name,InterfaceDescription | Select-Object PSComputerName,Name,InterfaceDescription,DisplayName,DisplayValue
             }
             $FoundGetNetAdapterAdvancedProperty=@()
             ForEach($NAAP in $GetNetAdapterAdvancedProperty){
@@ -5648,10 +5697,10 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $Name="Net Qos Dcbx Property"
             Write-Host "    Gathering $Name..." 
             $GetNetAdapterAdvancedProperty=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapterAdvancedProperty")) {$SDDCFiles."$key" | Where-Object{($_.DisplayName -match 'DcbxMode')}|` # ?{($_.DisplayName -match 'RDMA Mode') -or ($_.DisplayName -match 'NetworkDirect Technology')}|`
-                Sort-Object PSComputerName,Priority | Select-Object PSComputerName,Name,DisplayName,DisplayValue
+                Sort-Object PSComputerName,Name | Select-Object PSComputerName,Name,DisplayName,DisplayValue
             }
             $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,DisplayName,`
-            @{Label='DisplayValue';Expression={If((($StorageNics.name | Sort-Object -Unique) -imatch $_.name ) -and ($_.DisplayValue -inotmatch 'Host In Charge')){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}}}
+            @{Label='DisplayValue';Expression={If((($StorageNics.name | Sort-Object -Unique) -imatch $_.name ) -and ($SysInfo[0].SysModel -notmatch "^APEX" -and $_.DisplayValue -inotmatch 'Host In Charge')){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}}}
             #$GetNetAdapterAdvancedProperty | FT -AutoSize
             #Azure Table
                 $AzureTableData=@()
@@ -5682,15 +5731,15 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $Name=""
         }
   }
+    $SystemInfoContent=@((Get-Content -Path ((Get-ChildItem -Path $SDDCPath -Filter "SystemInfo.TXT" -Recurse -Depth 1).FullName[0]))[0..5])
 
     #Disable SMB Signing
         $Name="Disable SMB Signing"
         Write-Host "    Gathering $Name..." 
-        $SystemInfoContent=@((Get-Content -Path ((Get-ChildItem -Path $SDDCPath -Filter "SystemInfo.TXT" -Recurse -Depth 1).FullName[0]))[0..5])
         $GetSmbClientConfiguration=Foreach ($key in ($SDDCFiles.keys -like "*GetSmbClientConfiguration")) {$SDDCFiles."$key"}
         $DisableSMBSigningGetSmbClientConfiguration = $GetSmbClientConfiguration | Sort-Object PSComputerName | Select-Object PSComputerName,`
         @{L='ClientEnableSecuritySignature';E={$CEnableSecuritySignature=$_.EnableSecuritySignature;IF($CEnableSecuritySignature -eq 0){"RREEDD$CEnableSecuritySignature"}Else{$CEnableSecuritySignature}}},`
-        @{L='ClientRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $RequireSecuritySignature -eq 1) -or ($SysInfo[0].SysModel -match "^APEX" -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}},`
+        @{L='ClientRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "23H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}},`
         @{L='ServerEnableSecuritySignature';E={}},`
         @{L='ServerEncryptData';E={}},`
         @{L='ServerRequireSecuritySignature';E={}}
@@ -5701,7 +5750,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         @{L='ClientRequireSecuritySignature';E={}},`
         @{L='ServerEnableSecuritySignature';E={$SEnableSecuritySignature=$_.EnableSecuritySignature;IF($SEnableSecuritySignature -eq $True){"RREEDD$SEnableSecuritySignature"}Else{$SEnableSecuritySignature}}},`
         @{L='ServerEncryptData';E={$EncryptData=$_.EncryptData;IF($EncryptData -eq $True){"RREEDD$EncryptData"}Else{$EncryptData}}},`
-        @{L='ServerRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $RequireSecuritySignature -eq 1) -or ($SysInfo[0].SysModel -match "^APEX" -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}}
+        @{L='ServerRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "23H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}}
         $DisableSMBSigning=$DisableSMBSigningGetSmbClientConfiguration+$DisableSMBSigningGetSmbServerConfiguration
         #$DisableSMBSigning | FT -AutoSize
         #Azure Table
@@ -5720,14 +5769,14 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $html+='<H2 id="DisableSMBSigning">Disable SMB Signing</H2>'
         $html+=""
         $html+="<h5><b>Should be:</b></h5>"
-        IF($SysInfo[0].SysModel -notmatch "^APEX"){
+        IF(($SysInfo[0].SysModel -notmatch "^APEX") -and ($OSVersionNodes -ne "23H2")){
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ClientEnableSecuritySignature=True(1)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ClientRequireSecuritySignature=False(0)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ServerEnableSecuritySignature=False(0)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ServerEncryptData=False(0)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ServerRequireSecuritySignature=False(0)</h5>"
         }
-        IF($SysInfo[0].SysModel -match "^APEX"){
+        IF(($SysInfo[0].SysModel -match "^APEX") -or ($OSVersionNodes -eq "23H2")){
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ClientEnableSecuritySignature=True(1)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ClientRequireSecuritySignature=True(1)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ServerEnableSecuritySignature=False(0)</h5>"
@@ -5827,7 +5876,7 @@ SupportProvider = "RREEDDMissing"
                 $html+='<H2 id="OEMInformationSupportProvider">OEM Information Support Provider</H2>'
                 $html+=""
                 $html+="<h5><b>Should be:</b></h5>"
-                $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation\SupportProvider=DellEMC</h5>"
+                $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation\SupportProvider=Dell</h5>"
                 $html+=$GetRegOEMInformationOut | ConvertTo-html -Fragment
                 $html=$html `
                  -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -5882,8 +5931,8 @@ SupportProvider = "RREEDDMissing"
         $html+='<H2 id="JumboFrames">Jumbo Frames</H2>'
         $html+=""
         $html+="<h5><b>Should be:</b></h5>"
-        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Storage NICs DisplayValue=9014 or 9014 Bytes</h5>"
-        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Switchless Storage NICs DisplayValue=9614 or 9614 Bytes</h5>"
+        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Storage NICs DisplayValue=9014 Bytes</h5>"
+        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Switchless Storage NICs DisplayValue=9014 Bytes</h5>"
         $html+=$GetNetAdapterAdvancedProperty | ConvertTo-html -Fragment
         $html=$html `
          -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -6072,14 +6121,15 @@ IF($ProcessTSR -ieq "y"){
     $output = "$env:TEMP\DriFT.ps1"
     $start_time = Get-Date
     Remove-Item $output -Force -ErrorAction SilentlyContinue
-    Try{invoke-webrequest -Uri $url -OutFile $output -UseDefaultCredentials
+    Try{invoke-webrequest -Uri $url -UseDefaultCredentials | Out-Null #-OutFile $output 
     Write-Output "Time taken: $((Get-Date).Subtract($start_time).Seconds) second(s)"}
     Catch{Write-Host "ERROR: Source location NOT accessible. Please try again later"-foregroundcolor Red
-    Pause}
+    }
     Finally{
         $TSRsToProcesswithDrift = $TSRLOC -join ","
         $params="-Cluchk $CluChkGuid -Input $TSRsToProcesswithDrift "
-        Import-Module $output
+        #Import-Module $output
+        Invoke-Expression('$module="RunDriFT";$repo="PowershellScripts"'+(new-object net.webclient).DownloadString($url))
         Invoke-RunDriFT $params 
     }
 #}
