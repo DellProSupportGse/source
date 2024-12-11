@@ -27,6 +27,12 @@ Specifies to show debug information
 
 .UPDATES
 
+    2024/12/11:v1.60 -  1. New Update: TP - New version 1.60 DEV
+                        2. Bug Fix: TP - Do not show Management network as Red for LM if it's a regular PowerEdge server.
+                        3. New Feature: TP - Cluster only networks show RED if excluded from live migration for Apex/HCI
+                        4. Bug Fix: SA - Added Dell Ent NVMe CM7 disk model
+                        5. Bug Fix: SA - Trim firmware results from support matrix
+
     2024/10/31:v1.59 -  1. New Update: JG - New version 1.59 DEV
                         2. Bug Fix: SA - Fixed sorting/label in Host Management VLAN table
                         3. Bug Fix: SA - Fixed some more sorting issues
@@ -104,7 +110,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.59"
+$CluChkVer="1.60"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -2964,6 +2970,7 @@ $htmlout+=$html
             "Dell Ent NVMe v2 AGN RI U.2"       {"MZWLR6T4HALA-00AD3"}
             "Dell Ent NVMe PM1733a RI"          {"MZWLR15THBLAAD3"}
             "Dell Ent NVMe CM6"                 {"KCM6XVUL1T60"}
+	    "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
             "Dell Ent NVMe PM1735a"             {"MZWLR6T4HBLAAD3"}
             "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
             "Dell Express Flash CD5"            {"KCD5XLUG3T84"}
@@ -3054,7 +3061,7 @@ $AllNVMe=$True
             $SMFWDiskfirm=$null
             try {$SMFWDiskfirm=(($SMFWDiskData | Where-Object {$_.Model -like $diskmdl} | select Firmware | sort -Descending | Select-Object -First 1).Firmware)} catch {}
             IF ($SMFWDiskfirm.count -gt 0) {
-                            $diskmdlsfirm.add($diskmdl,$SMFWDiskfirm)
+                            $diskmdlsfirm.add($diskmdl,$SMFWDiskfirm.trim())
 } Else {
 $diskmdlsfirm.add($diskmdl,("YYEELLLLOOWWNot found in matrix"*($SysInfo[0].SysModel -notmatch "^APEX")))
 }
@@ -3915,9 +3922,17 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
   IF($IsMgmtInMigrationNetworkOrder.LiveMigrationNetwork -eq "Included" -and -not($MgmtClusterNetworkId.ID -ieq (($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}|Select-Object -ExpandProperty Value) -split ';')[-1])){
  $LiveMigrationNetworkPrioritiesOut+=$LiveMigrationNetworkPriorities | Select-Object Name,@{L='LiveMigrationNetwork';E={
  IF($_.Name -imatch $MgmtClusterNetworkId.name){
- "RREEDD"+$_.LiveMigrationNetwork } else{$_.LiveMigrationNetwork}
+ "RREEDD"*($SysInfo[0].SysModel -notmatch "^PowerEdge")+$_.LiveMigrationNetwork } else{$_.LiveMigrationNetwork}
  }}
  }Else{$LiveMigrationNetworkPrioritiesOut=$LiveMigrationNetworkPriorities}
+
+  $LiveMigrationNetworkPrioritiesOut=$LiveMigrationNetworkPrioritiesOut | Select-Object Name,@{L='LiveMigrationNetwork';E={
+  IF($_.Name -inotmatch $MgmtClusterNetworkId.name -and $_.LiveMigrationNetwork -eq "Excluded"){$curraddr=$_.address;If (($GetClusterNetwork | ? Address -match $curraddr).role.value -eq 'Cluster'){
+  "RREEDD"*($SysInfo[0].SysModel -notmatch "^PowerEdge")+$_.LiveMigrationNetwork } else{$_.LiveMigrationNetwork}}
+ }},Address
+
+
+
             #$LiveMigrationNetworkPrioritiesOut
         #Azure Table
             $AzureTableData=@()
@@ -3931,6 +3946,7 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
     $html+='<H2 id="LiveMigrationNetworkPriorities">Live Migration Network Priorities</H2>'
     $html+="<h5><b>Should be:</b></h5>"
     $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Managment Network LiveMigrationNetwork = Excluded or Last</h5>"
+    $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Cluster only networks are usually LiveMigrationNetwork = Included</h5>"
 If($LiveMigrationNetworkPrioritiesOut.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No LiveMigration Network Priorities Entries found</span></h5>'}
     $html+=$LiveMigrationNetworkPrioritiesOut | ConvertTo-html -Fragment
     $html=$html `
