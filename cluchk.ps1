@@ -26,10 +26,11 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
-    2025/01/22:v1.61 -  1. New Update: TP - New version 1.61 DEV
+    2025/01/23:v1.61 -  1. New Update: TP - New version 1.61 DEV
                         2. Bug Fix: SA - Corrected APEX ISM IP, should be 169.254.0.1
                         3. New Update: JG - Added new FLTMCXml file processing
-		        4. Bug Fix: JL - Updated Jumbo Frames section
+			4. Bug Fix: JL - Updated Jumbo Frames section
+      			5. Bug Fix: JL - Added fix and sorting to FLTMCXml processing
 
     2024/12/11:v1.60 -  1. New Update: TP - New version 1.60 DEV
                         2. Bug Fix: TP - Do not show Management network as Red for LM if it's a regular PowerEdge server.
@@ -3521,11 +3522,12 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
     $URL="https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md"
     
     # Added to process FLTMCXml files
+    $FLTMCXmlLogs=@()
     $FLTMCXmlLogsFiles=Get-ChildItem -Path $SDDCPath -Filter "FLTMC.XML" -Recurse -Depth 1
     IF($FLTMCXmlLogsFiles){
         ForEach($FLTMCXmlLogsFile in $FLTMCXmlLogsFiles){
             $NodeName=((Split-Path -Path $FLTMCXmlLogsFile.FullName).Split("\")[-1]).split("_")[-1]
-            $FLTMCXmlLogs= Import-Clixml -Path $FLTMCXmlLogsFile.FullName | Select-Object *,@{L="PSComputerName";E={$NodeName}}
+            $FLTMCXmlLogs+= Import-Clixml -Path $FLTMCXmlLogsFile.FullName | Select-Object *,@{L="PSComputerName";E={$NodeName}}
         }
     }
     IF(!($FLTMCXmlLogs)){    
@@ -3600,6 +3602,7 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
             $item
         }
 
+        $FilterDataOut = $FilterDataOut | Sort-Object FilterName,PSComputerName -Unique
 
         #HTML Report
         If($FilterDataOut.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No FLTMC found</span></h5>'}
