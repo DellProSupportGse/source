@@ -26,12 +26,17 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/01/22:v1.61 -  1. New Update: TP - New version 1.61 DEV
+                        2. Bug Fix: SA - Corrected APEX ISM IP, should be 169.254.0.1
+                        3. New Update: JG - Added new FLTMCXml file processing
+		        4. Bug Fix: JL - Updated Jumbo Frames section
 
     2024/12/11:v1.60 -  1. New Update: TP - New version 1.60 DEV
                         2. Bug Fix: TP - Do not show Management network as Red for LM if it's a regular PowerEdge server.
                         3. New Feature: TP - Cluster only networks show RED if excluded from live migration for Apex/HCI
                         4. Bug Fix: SA - Added Dell Ent NVMe CM7 disk model
                         5. Bug Fix: SA - Trim firmware results from support matrix
+                        
 
     2024/10/31:v1.59 -  1. New Update: JG - New version 1.59 DEV
                         2. Bug Fix: SA - Fixed sorting/label in Host Management VLAN table
@@ -110,7 +115,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.60"
+$CluChkVer="1.61"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -3514,39 +3519,48 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
     $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;Suspect anything NOT Microsoft</h5>"
     $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md' target='_blank'>Ref: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md</a></h5>"
     $URL="https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md"
-    $LocalFltmc=@()
-    Function Get-FLTMC($InputFile){
-        $parts=@()
-        $output=@()
-        If($InputFile -match "Run it locally"){$output = FLTMC}
-        Else{$output = Get-Content $InputFile}
-        If($output -match "Filter Name"){
-           $Found=($output|Select-String "Filter Name" -Context 0,1).LineNumber
-           $output=$output[($Found+1)..($output.length)]
-        }
-        $output | ForEach-Object {$parts = $_ -split "\s+", 6
-            New-Object -Type PSObject -Property @{
-                        PSComputerName =($NodeName)
-                        FilterName = ($parts[0])
-                        NumInstances = $parts[1]
-                        Altitude = $parts[2]
-                        Frame = $parts[3]}
+    
+    # Added to process FLTMCXml files
+    $FLTMCXmlLogsFiles=Get-ChildItem -Path $SDDCPath -Filter "FLTMC.XML" -Recurse -Depth 1
+    IF($FLTMCXmlLogsFiles){
+        ForEach($FLTMCXmlLogsFile in $FLTMCXmlLogsFiles){
+            $NodeName=((Split-Path -Path $FLTMCXmlLogsFile.FullName).Split("\")[-1]).split("_")[-1]
+            $FLTMCXmlLogs= Import-Clixml -Path $FLTMCXmlLogsFile.FullName | Select-Object *,@{L="PSComputerName";E={$NodeName}}
         }
     }
-      # use the credentials of the current user to authenticate on the proxy server
-          $Wcl = new-object System.Net.WebClient
-          $Wcl.Headers.Add("user-agent", "PowerShell Script")
-          $Wcl.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials         
-      
-      # Gets the the list of known file system minifilter drivers
-            $KnownFltrs=invoke-webrequest -Uri $URL -UseBasicParsing | Select-Object RawContent
-            $RawKnownFltrs=$KnownFltrs.RawContent.split("`n")
-            $RawKnownFltrs+=
+    IF(!($FLTMCXmlLogs)){    
+        $LocalFltmc=@()
+        Function Get-FLTMC($InputFile){
+            $parts=@()
+            $output=@()
+            If($InputFile -match "Run it locally"){$output = FLTMC}
+            Else{$output = Get-Content $InputFile}
+            If($output -match "Filter Name"){
+            $Found=($output|Select-String "Filter Name" -Context 0,1).LineNumber
+            $output=$output[($Found+1)..($output.length)]
+            }
+            $output | ForEach-Object {$parts = $_ -split "\s+", 6
+                New-Object -Type PSObject -Property @{
+                            PSComputerName =($NodeName)
+                            FilterName = ($parts[0])
+                            NumInstances = $parts[1]
+                            Altitude = $parts[2]
+                            Frame = $parts[3]}
+            }
+        }
+        # use the credentials of the current user to authenticate on the proxy server
+            $Wcl = new-object System.Net.WebClient
+            $Wcl.Headers.Add("user-agent", "PowerShell Script")
+            $Wcl.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials         
+        
+        # Gets the the list of known file system minifilter drivers
+                $KnownFltrs=invoke-webrequest -Uri $URL -UseBasicParsing | Select-Object RawContent
+                $RawKnownFltrs=$KnownFltrs.RawContent.split("`n")
+                $RawKnownFltrs+=
 
-      # Get FLTMC files
-            $FLTMCLogs=Get-ChildItem -Path $SDDCPath -Filter "FLTMC.TXT" -Recurse -Depth 1
-
-      # Grab the contents of each FLTMC
+        # Get FLTMC files
+                $FLTMCLogs=Get-ChildItem -Path $SDDCPath -Filter "FLTMC.TXT" -Recurse -Depth 1
+        # Grab the contents of each FLTMC
             $FilterData=@()
             $FilterData="PSComputerName,FilterName,NumInstances,Altitude,Frame,WindowsDriver,CompanyName`r`n"
             ForEach($FLTMCLog in $FLTMCLogs){
@@ -3573,21 +3587,19 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
                     }}}
          $FilterDataOut=@()
          $FilterDataOut=$FilterData|ConvertFrom-Csv|Sort-Object FilterName,PSComputerName -Unique | Select-Object PSComputerName,FilterName,NumInstances,Altitude,Frame,CompanyName
+        }
 
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$FilterDataOut|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='FilterName';E={[string]$_.FilterName}},
-                @{L='NumInstances';E={[string]$_.NumInstances}},
-                @{L='Altitude';E={[string]$_.Altitude}},
-                @{L='Frame';E={$_.Frame}},
-                @{L='CompanyName';E={$_.CompanyName}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?sv=2019-02-02&si=CluChkUpdate&sig=S6wXPSwEuRlTMWWYKS0mvolOLNNSuy777JRtGVnutI0%3D&tn=CluChkFLTMCLogs'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
+
+        $FilterDataOut = foreach ($item in $FLTMCXmlLogs) {
+            
+            if ($item.company -eq "Unknown") {
+                $item.company = "YYEELLLLOOWWN" + $item.company
+            } elseif ($item.company -inotmatch "Microsoft") {
+                $item.company = "RREEDD" + $item.company
+            }
+            $item
+        }
+
 
         #HTML Report
         If($FilterDataOut.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No FLTMC found</span></h5>'}
@@ -5105,7 +5117,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 		# Find the Mgmt Cluster Network
 			ForEach($NetIp in $GetNetIpAddress){
 				$iDRACNetAdaptersIPs+=$idracNics | Where-Object{($_.IfIndex -eq $NetIp.IfIndex) -and ($_.PsComputername -eq $NetIp.PSComputerName )}|Select-Object *,@{L='IPv4Address';E={
-					if (($SysInfo[0].SysModel -match "^APEX") -and ($NetIp.IPv4Address -ne "169.254.1.1")) {'RREEDD'+$NetIp.IPv4Address}
+					if (($SysInfo[0].SysModel -match "^APEX") -and ($NetIp.IPv4Address -ne "169.254.0.1")) {'RREEDD'+$NetIp.IPv4Address}
 					elseif (($SysInfo[0].SysModel -notmatch "^APEX") -and (($GetNetIpAddress | where-object {$_.IPv4Address -eq $NetIp.IPv4Address} | sort -Unique).count -gt 1)) {'RREEDD'+$NetIp.IPv4Address}
 					else {$NetIp.IPv4Address}
 					}}
@@ -5136,7 +5148,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 		IF($SysInfo[0].SysModel -notmatch "^APEX"){
 			$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-IPv4Address=unique per host</h5>"
 		} else {
-			$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-IPv4Address=169.254.1.1</h5>"
+			$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-IPv4Address=169.254.0.1</h5>"
 		}
         $html+=$iDRACIPaddress
         $html+=$iDRACNetAdaptersIPs | ConvertTo-html -Fragment
@@ -5981,15 +5993,17 @@ SupportProvider = "RREEDDMissing"
         Sort-Object PSComputerName,Name | Select-Object PSComputerName,Name,DisplayName,DisplayValue 
         }
         $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|`
-            Where-Object{(($_.Name -iNotmatch "Management") -and ($_.Name -iNotMatch "mgmt"))}|`
             Select-Object PSComputerName,Name,DisplayName,`
                 @{Label='DisplayValue';Expression={
-                    IF($StorageNicsUnique -imatch $_.name){
-                        If($_.DisplayValue -inotmatch '9014' -and $SysInfo[0].SysModel -notmatch "^APEX"){
-                            "RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}
-                        }Else{$_.DisplayValue}
+                    If($StorageNicsUnique -imatch $_.name){
+                        If($_.DisplayValue -inotmatch '9000' -and $_.DisplayValue -inotmatch '9014' -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$_.DisplayValue}
+				        Else{$_.DisplayValue}
                     }
-                 }
+                    # None Storage NICs should be 1514
+                    ElseIF($_.DisplayValue -inotmatch 'Disabled' -and $_.DisplayValue -inotmatch '1514' -and $SysInfo[0].SysModel -notmatch "^APEX"){"YYEELLLLOOWW"+$_.DisplayValue}
+                    Else{$_.DisplayValue}
+                }
+            }
 
         #$GetNetAdapterAdvancedProperty|FT -AutoSize
         #Azure Table
