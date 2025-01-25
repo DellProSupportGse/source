@@ -6,13 +6,16 @@
    This tool compares RAW Teseract export with
    the Dell catalog to easily show drivers and
    firmware DriFt from currently available
-   versions on downloads.dell.com.
+   versions on downloads.dell.com
 .CREATEDBY
     Jim Gandy
 .UPDATES
-    2024/04/03:v1.73 -  1. New Feature: JG - Moved to GitHub
-                        2. New Feature: JG - Added Function Invoke-RunDriFT 
-    
+    2025/01/24:v1.76 -  1. Bug Fix: TP - Fixed MS latest updates by copying and converted it from CluChk
+
+    2024/04/03:v1.73 -  1. New Feature: TP - Added 15g S2d BIOS settings
+			            2. New Feature: JG - Moved to GitHub
+                        3. New Feature: JG - Added Function Invoke-RunDriFT 
+
     2022/06/27:v1.72 -  1. Bug Fix: JG - Resolved missing VMWare drivers when we have 7.0.X as .X does not matter.
                         2. Bug Fix: JG - Added a check if SEL does not exsist then display message SEL not found.
 
@@ -79,7 +82,7 @@ IF(!($args)){
     Remove-Variable * -ErrorAction SilentlyContinue
 }
 [system.gc]::Collect()
-$DriFTVer="DriFT_v1.73"
+$DriFTVer="DriFT_v1.76"
 $DirFTV=$DriFTVer.Split("v")
 $DFTV=$DirFTV[1]
 
@@ -91,7 +94,7 @@ Function EndScript{
     break
 }
 $WhatsNew=@"
-    1. Bug Fix: JG - Fixed issue displaying updated driver information on Azure Stack HCI-less Windows Servers.
+    1. Bug Fix: TP - Fixed MS latest updates by copying and converting it from CluChk
 "@
 
 If(!($args)){Clear-Host}
@@ -147,6 +150,22 @@ Function Get-FileName($initialDirectory)
     $OpenFileDialog.ShowDialog((New-Object System.Windows.Forms.Form -Property @{TopMost = $true })) | Out-Null
     $OpenFileDialog.filenames
 }
+<#If (-not $args) {
+        Write-Host "DriFT running in Auto CluChk mode..."
+        Write-Host "    $args"
+        $FileNameGuid=New-Guid
+        #$FileNameGuid=$args -replace '-cluchk ',""
+        Write-Host "File Name Guid:" $FileNameGuid
+        Write-Host "Processing TRS File(s)"
+        #$TSRInputFiles=@()
+        #$TSRInputFiles=(($args -split '-input')[1].trim() -split ',').trim()
+        $TSRInputFiles=Get-FileName($env:USERPROFILE)
+        $TSRLoc=$TSRInputFiles
+        $TSRLoc
+        $args=""
+        $CluChkMode="YES"
+
+}#>
 IF(!($CluChkMode)){
     If(!($args)){
         $Title=@()
@@ -358,6 +377,9 @@ IF(-not($TSRInputFiles)){
         }
     }
 }
+
+
+
 #Extraction temp location
 $ExtracLoc="$env:TEMP\DriFT"
 if (Test-Path $ExtracLoc -PathType Container){Remove-Item $ExtracLoc -Recurse -Force | Out-Null}
@@ -374,7 +396,8 @@ function Expand-ZIPFile{
     #Removed ,1564 to allow for DSet password prompt
     #$shell.Namespace($destination).copyhere($item,1564)
     $shell.Namespace($destination).copyhere($item)
-    "$($item.path) extracted"
+    Write-Host "$($item.path) extracted"
+    "$($item.path)"
     }
 }
 $TFile=@()
@@ -833,11 +856,6 @@ Foreach($E in $DriFTFolders.PSPath){
                     $OSMjrVer=10 
                     $OSMinVer=17763
                     $Build='17784'}
-                    IF ($OSCHECK -match "2022"){
-                    $OperatingSystemYear = "2022"
-                    $OSMjrVer=10 
-                    $OSMinVer=0
-                    $Build='20348'}
                     IF ($OSCHECK -imatch "20H2"){
                     $OperatingSystemYear = "20H2"
                     $OSMjrVer=10 
@@ -853,10 +871,22 @@ Foreach($E in $DriFTFolders.PSPath){
                     $OSMjrVer=10 
                     $OSMinVer=0
                     $Build='20349'}
+                    IF ($OSCHECK -imatch "23H2"){
+                    $OperatingSystemYear = "23H2"
+                    $OSMjrVer=10 
+                    $OSMinVer=0
+                    $Build='25398'}
+                    IF ($OSCHECK -match "2022"){
+                    #$OSCHECK="2022-21H2-22H2"
+                    $OperatingSystemYear = "2022"
+                    $OSMjrVer=10 
+                    $OSMinVer=0
+                    $Build='20348'}
                     IF ($OSCHECK -match "Windows 10"){
                     $OSMjrVer=10 
                     $OSMinVer=0}
                     $DriverSupport = $True
+                    $OSVersion=$Build
                 }
                 {$OSCheck -imatch "VMware"}{
                     # Get installed VMware Version from sysinfo_CIM_BIOSAttribute.xml
@@ -1926,60 +1956,213 @@ IF($InstalledOS -imatch "Windows"){
             Write-host "Found Microsoft $OSCheck Installed."
             Write-host "Checking for Latest Microsoft Windows Server Update...."
             # Get the latest OS Build KBs
+            
+#region Recommended updates and hotfixes for Windows Server 
+        $dstart=Get-Date
+#Returns the download link of KB from Microsoft catalog
+Add-Type @"
+using System.Net;
+using System.IO;
+using System.Text.RegularExpressions;
+//using System; //for console writeline
 
-            # This is the path to the feed of Microsoft KBs
-                If($OSCheck -match '2008r2'){[string] [string] $StartKB = 'https://kbupdate.info/rss.php?windows-server-2008-r2'}
-                If($OSCheck -match '2012'){[string] [string] $StartKB = 'https://kbupdate.info/rss.php?windows-server-2012'}
-                If($OSCheck -match '2012r2'){[string] [string] $StartKB = 'https://kbupdate.info/rss.php?windows-server-2012-r2'}
-                If($OSCheck -match '2016'){[string] $StartKB = 'https://kbupdate.info/rss.php?windows-server-2016'}
-                If($OSCheck -match '2019'){[string] $StartKB = 'https://kbupdate.info/rss.php?windows-server-2019'}
-                If($OSCheck -match '2022'){[string] $StartKB = 'https://kbupdate.info/rss.php?windows-server-2022'}
-                If($OSCheck -match '20H'){[string] $StartKB = 'https://raw.githubusercontent.com/MicrosoftDocs/azure-stack-docs/main/azure-stack/hci/release-information.md'}
+public static class GetKBDLLink
+{
+    public static string GetDownloadLink(string KBNumber, string Product)
+    {
+        string kbGUID = "";
+        string kbDLUriSource = "";
 
-            # Retreave the feed as XML
-                IF($LastStartKB -ne $StartKB){
-                $Feed= Invoke-WebRequest -Uri $StartKB -UseBasicParsing
+        // Search for URI to retrieve the latest KB information
+        // Extracting the KBGUID from the KBPage
+        var webRequest = WebRequest.Create("https://www.catalog.update.microsoft.com/Search.aspx?q=" + KBNumber);
+        webRequest.Method = "GET";
+        var webResponse = webRequest.GetResponse();
+        var responseStream = webResponse.GetResponseStream();
+        var streamReader = new StreamReader(responseStream);
+        string responseContent = streamReader.ReadToEnd();
+        //Console.WriteLine("Content is "+responseContent);
+        var kbMatches=Regex.Matches(responseContent, @"id=(?:""|')(.*?)(?=_link)([^\/]*)");
+        //Console.WriteLine(kbMatches.Count);
+        foreach (Match ItemMatch in kbMatches)
+        {
+        //Console.WriteLine(Product);
+        //Console.WriteLine(ItemMatch.Groups[2].Value);
+            if (ItemMatch.Groups[2].Value.Contains(Product))
+            {
+                 kbGUID = ItemMatch.Groups[1].Value;
+            }
+        }
+        //Console.WriteLine(kbGUID);
+
+        // Use the KBGUID to find the actual download link for the KB
+        string post1 = "https://www.catalog.update.microsoft.com/DownloadDialog.aspx?updateIDs=[{%22size%22%3A0%2C%22languages%22%3A%22%22%2C%22uidInfo%22%3A%22";
+        string post2 = "%22%2C%22updateID%22%3A%22";
+        string post3 = "%22}]&updateIDsBlockedForImport=&wsusApiPresent=&contentImport=&sku=&serverName=&ssl=&portNumber=&version=";
+        string postText = post1 + kbGUID + post2 + kbGUID + post3;
+        //Console.WriteLine(postText);
+        webRequest = WebRequest.Create(postText);
+        webRequest.Method = "GET";
+        webResponse = webRequest.GetResponse();
+        responseStream = webResponse.GetResponseStream();
+        streamReader = new StreamReader(responseStream);
+        responseContent = streamReader.ReadToEnd();
+        kbDLUriSource = Regex.Match(responseContent, @"(?<=downloadInformation\[0\].files\[0\].url = '|"")(.*?)(?='|"";)").Groups[1].Value;
+
+        return kbDLUriSource;
+    }
+}
+"@ 
+
+
+
+#$KBNumber = "123456"
+#$Product = "Windows 10"
+#$downloadLink = [GetKBDLLink]::GetDownloadLink($KBNumber, $Product)
+#Write-Host "Download link: $downloadLink"
+
+
+        $KBLatest=''
+$KBList=''
+$KBItemsToShow = 6
+
+        #Lastest hotfix for Windows Server from the respective KB pages
+            $OSType=$OSCheck
+            If($OSCheck -imatch '2008r2'-or $OSCheck -imatch '2008 r2'){\
+                $OSCheck ='2008 r2'
+                # Download the HTML content
+                $url = "https://support.microsoft.com/en-us/help/4009469"
+                $webClient = New-Object System.Net.WebClient
+                $htmlpage = $webClient.DownloadString($url)
+
+                # Find all elements with the "supLeftNavLink" class
+                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")[^>]*>(.*?)(KB\d{7})(.*?)<\/a>')
+
+                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
+                    @{L='KBNumber';E={$_.Groups[3].Value}},`
+                    @{L='Date';E={($_.Groups[2].Value -split "&#x2014;")[0]}},`
+                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[4].Value}},
+                    @{L="OS Build";E={"6.1.7601"}},
+                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
+                    @{L="DownloadLink";E={""}}
+            }
+
+            If($OSCheck -imatch '2012r2'-or $OSCheck -imatch '2012 r2'){
+                $OSCheck ='2012 r2'
+                # Download the HTML content
+                $url = "https://support.microsoft.com/en-us/help/4009470"
+                $webClient = New-Object System.Net.WebClient
+                $htmlpage = $webClient.DownloadString($url)
+
+                # Find all elements with the "supLeftNavLink" class
+                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")[^>]*>(.*?)(KB\d{7})(.*?)<\/a>')
+
+                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
+                    @{L='KBNumber';E={$_.Groups[3].Value}},`
+                    @{L='Date';E={($_.Groups[2].Value -split "&#x2014;")[0]}},`
+                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[4].Value}},
+                    @{L="OS Build";E={"6.3.9600"}},
+                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
+                    @{L="DownloadLink";E={""}}
+            }
+    
+            If($OSCheck -imatch '2016'){
+                # Download the HTML content
+                $url = "https://support.microsoft.com/en-us/help/4000825"
+                $webClient = New-Object System.Net.WebClient
+                $htmlpage = $webClient.DownloadString($url)
+
+                # Find all elements with the "supLeftNavLink" class
+                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)14393.*?)\)(?:(?!Preview).)*<\/a>')
+
+                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
+                    @{L='KBNumber';E={$_.Groups[3].Value}},`
+                    @{L='Date';E={($_.Groups[2].Value -replace "&#x2014;"," ")}},`
+                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
+                    @{L="OS Build";E={$_.Groups[4].Value.Trim()}},
+                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
+                    @{L="DownloadLink";E={""}}
+            }
+
+            If($OSCheck -imatch '2019'){
+                # Download the HTML content
+                $url = "https://support.microsoft.com/en-us/help/4464619/windows-10-update-history"
+                $webClient = New-Object System.Net.WebClient
+                $htmlpage = $webClient.DownloadString($url)
+
+                # Find all elements with the "supLeftNavLink" class
+                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)17763.*?)\)(?:(?!Preview).)*<\/a>')
+
+                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
+                    @{L='KBNumber';E={$_.Groups[3].Value}},`
+                    @{L='Date';E={($_.Groups[2].Value -replace "&#x2014;"," ")}},`
+                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
+                    @{L="OS Build";E={$_.Groups[4].Value.Trim()}},
+                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
+                    @{L="DownloadLink";E={""}}
+            }
+
+            If($OSCheck -imatch '22H2|21H2|20H2'){
+                # Download the HTML content
+                #$url = "https://support.microsoft.com/en-us/help/5018894"
+                $url = "https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-23h2-018b9b10-a75b-4ad7-b9d1-7755f81e5b0b"
+                $webClient = New-Object System.Net.WebClient
+                $htmlpage = $webClient.DownloadString($url)
+
+                # Find all elements with the "supLeftNavLink" class
+                $divs=[regex]::Matches($htmlpage,'(?s)supLeftNavCategory((?:.*?)(<\/div>)){2}')
+                Foreach ($match in $divs) {
+                    If ($match.Groups[1].Value -match $OSCheck) {
+                        $links=[regex]::Matches($match.Groups[1].Value,'supLeftNavLink.*?(href=\".*?\")[^>]*>((?:(?!preview).)*?)(KB\d{7})(.*?)<\/a>')
+                    }
                 }
-                $KBRSSFeed=[xml]$Feed.Content
-                #$KBRSSFeed.SelectNodes('//item').Title
-                $KBList=@()
-                $KBRSSFeed.SelectNodes('//item')  | % {
-                    $KBList += New-Object psobject -Property @{
-                                KBNumber = $("KB"+($_.guid -split '/')[-1])
-                                Title = $_.Title.Trim() -replace 'â',' - '
-                                link = $_.link.Trim()
-                                pubDate = [datetime]$_.pubDate.Trim()
-                                LastUpdated = [datetime]$(IF($_.Title -imatch 'â'){($_.Title -split 'â')[0]})
-                                }
-                            } |sort LastUpdated -Descending
-                $KBLatestInfo=$KBList  | Where-Object{$_.Title -inotmatch 'Preview'} | sort LastUpdated | Select -Last 1
-                #$KBList | FT LastUpdated,KBNumber,Title
-                #$KBList| sort LastUpdated | Select -Last 1
-                IF(-not($KBLatestInfo)){
-                    $KBList  | sort LastUpdated | Select -Last 1
-                }
-                $KBLatest=$KBLatestInfo.KBNumber
-                Write-Host "            FOUND: $KBLatest"
-                $LastStartKB=$StartKB
-            # Seach for URI to retrieve the latest KB information
-                $uri = "http://www.catalog.update.microsoft.com/Search.aspx?q=$KBLatest"
-                $kbPage = Invoke-WebRequest -Uri $uri -UseBasicParsing -ErrorAction SilentlyContinue -UseDefaultCredentials
-            # Extracting the KBGUID from the KBPage
-                $KBGUID=$kbPage.links|Where-Object{$_.ID -match "_link"} | Where-Object{$_.outerHTML -match '_link' -and $_.outerHTML -match 'Windows Server'}|ForEach-Object{$_.id.replace('_link','')} 
-            # Use the KBGUID to find the actual download link for the KB 
-                $Post1='https://www.catalog.update.microsoft.com/DownloadDialog.aspx?updateIDs=[{%22size%22%3A0%2C%22languages%22%3A%22%22%2C%22uidInfo%22%3A%22'
-                $post2='%22%2C%22updateID%22%3A%22'
-                $post3='%22}]&updateIDsBlockedForImport=&wsusApiPresent=&contentImport=&sku=&serverName=&ssl=&portNumber=&version='
-                $PostText=$post1+$kbGUID+$post2+$kbGUID+$post3
-                $KBDLUriContent=(Invoke-WebRequest -Uri $PostText).content
-                $KBDLUriSource=[regex]::matches( $KBDLUriContent,'downloadInformation\[0\].files\[0\].url\s\=.+').value -replace 'downloadInformation\[0\].files\[0\].url\s\=\s' -replace '\;' -replace"'"
+
+                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
+                    @{L='KBNumber';E={$_.Groups[3].Value}},`
+                    @{L='Date';E={($_.Groups[2].Value -split "\s")[0..2] -Join " "}},`
+                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
+                    @{L="OS Build";E={"20349"}},
+                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
+                    @{L="DownloadLink";E={""}}
+
+            }
+            If($OSCheck -imatch '2022'){
+                # Download the HTML content
+                $url = "https://support.microsoft.com/en-us/help/5005454"
+                $webClient = New-Object System.Net.WebClient
+                $htmlpage = $webClient.DownloadString($url)
+
+                # Find all elements with the "supLeftNavLink" class
+                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)20348.*?)\)(?:(?!Preview).)*<\/a>')
+
+                #Set OS Type to find 22H2 updates
+                $OSType="22H2"
+
+                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
+                    @{L='KBNumber';E={$_.Groups[3].Value}},`
+                    @{L='Date';E={($_.Groups[2].Value -replace "&#x2014;"," ")}},`
+                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
+                    @{L="OS Build";E={"2022"}},
+                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
+                    @{L="DownloadLink";E={""}}
+            }
+
+
+#$KBList = $KBList | ? DownloadLink -like "https*"
+$KBLatest = $KBList[0]
+$KBDLUriSource = [GetKBDLLink]::GetDownloadLink($KBLatest.KBNumber,$OSType)
+
+        $dstop=Get-Date
+        #Write-Host "Total time taken is $(($dstop-$dstart).totalmilliseconds)"
+#endregion Recommended updates and hotfixes for Windows Server
+            
                 $WSLCU = New-Object -TypeName PSObject
                 #Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name Build -Value $Build
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name KBNumber -Value $KBLatest
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name LastUpdated -Value $KBLatestinfo.LastUpdated.ToString("yyyy-MM-dd")
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name Title -Value $KBLatestinfo.Title
+                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name KBNumber -Value $KBLatest.KBNumber
+                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name LastUpdated -Value  ([DateTime]$KBLatest.Date).ToString("yyyy-MM-dd")
+                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name Title -Value $KBLatest.Description
                 Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name URL -Value $KBDLUriSource
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name Details -Value $KBLatestinfo.link
+                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name Details -Value $KBLatest.InfoLink
                 
 
                 
@@ -2030,13 +2213,14 @@ IF($InstalledOS -imatch "Windows"){
                 $BIOSandiDRACCfgTable+="Memory Settings,Node Interleaving,Disabled,BIOS.Setup.1-1,NodeInterleave,R640 R740XD,DCIM_BIOSEnumeration"
 
                 $BIOSandiDRACCfgTable+="Processor Settings,Logical Processor,Enabled,BIOS.Setup.1-1,LogicalProc,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,Virtualization Technology,Enabled,BIOS.Setup.1-1,ProcVirtualization,R640 R740XD,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="Processor Settings,Virtualization Technology,Enabled,BIOS.Setup.1-1,ProcVirtualization,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="Processor Settings,DCU Streamer Prefetcher,Enabled,BIOS.Setup.1-1,DcuStreamerPrefetcher,R640 R740XD,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="Processor Settings,DCU IP Prefetcher,Enabled,BIOS.Setup.1-1,DcuIpPrefetcher,R640 R740XD,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="Processor Settings,UPI Prefetcher,Enabled,BIOS.Setup.1-1,UpiPrefetch,R640 R740XD,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="Processor Settings,Sub NUMA Cluster,Disabled,BIOS.Setup.1-1,SubNumaCluster,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,X2 APIC Mode,Enabled,BIOS.Setup.1-1,ProcX2Apic,R640 R740XD,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="Processor Settings,X2 APIC Mode,Enabled,BIOS.Setup.1-1,ProcX2Apic,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="Processor Settings,Dell Controlled Turbo,Enabled,BIOS.Setup.1-1,ControlledTurbo,R640 R740XD,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="Processor Settings,Kernel DMA Protection,Enabled,BIOS.Setup.1-1,KernelDmaProtection,R650 R750 R7525,DCIM_BIOSEnumeration"
                 
                 $BIOSandiDRACCfgTable+="SATA Settings,Embedded SATA,AHCIMode,BIOS.Setup.1-1,EmbSata,R640 R740XD,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="SATA Settings,Security Freeze Lock,Enabled,BIOS.Setup.1-1,SecurityFreezeLock,R640 R740XD,DCIM_BIOSEnumeration"
@@ -2047,10 +2231,11 @@ IF($InstalledOS -imatch "Windows"){
                 $BIOSandiDRACCfgTable+="Boot Settings,Boot Mode,UEFI,BIOS.Setup.1-1,BootMode,R640 R740XD,DCIM_BIOSEnumeration"   
                 $BIOSandiDRACCfgTable+="Boot Settings,Boot Sequence Retry,Enabled,BIOS.Setup.1-1,BootSeqRetry,R640 R740XD,DCIM_BIOSEnumeration"
 
-                $BIOSandiDRACCfgTable+="Integrated Devices,SR-IOV Global Enable,Enabled,BIOS.Setup.1-1,SriovGlobalEnable,R640 R740XD,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="Integrated Devices,SR-IOV Global Enable,Enabled,BIOS.Setup.1-1,SriovGlobalEnable,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
 
-                $BIOSandiDRACCfgTable+="System Profile Settings,System Profile,Custom,BIOS.Setup.1-1,SysProfile,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Profile Settings,System Profile,Performance,BIOS.Setup.1-1,SysProfile,R740XD2 YES,DCIM_BIOSEnumeration"
+                #$BIOSandiDRACCfgTable+="System Profile Settings,System Profile,Custom,BIOS.Setup.1-1,SysProfile,R640 R740XD,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="System Profile Settings,System Profile,Performance PerfOptimized,BIOS.Setup.1-1,SysProfile,R640 R740XD2 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
+                #$BIOSandiDRACCfgTable+="System Profile Settings,System Profile,PerfOptimized,BIOS.Setup.1-1,SysProfile,R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="System Profile Settings,CPU Power Management,MaxPerf,BIOS.Setup.1-1,ProcPwrPerf,R740XD R640,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="System Profile Settings,Memory Frequency,MaxPerf,BIOS.Setup.1-1,MemFrequency,R740XD R640,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="System Profile Settings,Turbo Boost,Enabled,BIOS.Setup.1-1,ProcTurboMode,R740XD2 R740XD R640 YES,DCIM_BIOSEnumeration"
@@ -2058,19 +2243,24 @@ IF($InstalledOS -imatch "Windows"){
                 $BIOSandiDRACCfgTable+="System Profile Settings,C1E,Disabled,BIOS.Setup.1-1,ProcC1E,R740XD R640,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="System Profile Settings,Memory Patrol Scrub,Standard,BIOS.Setup.1-1,MemPatrolScrub,R740XD R640,DCIM_BIOSEnumeration"
 
-                $BIOSandiDRACCfgTable+="System Security,TPM Security,On,BIOS.Setup.1-1,TpmSecurity,R740XD R640,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="System Security,TPM Security,On,BIOS.Setup.1-1,TpmSecurity,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="System Security,Intel TXT,Off,BIOS.Setup.1-1,IntelTxt,R740XD R640,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,AC Power Recovery,On,BIOS.Setup.1-1,AcPwrRcvry,R740XD R640,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,AC Power Recovery Delay,Random,BIOS.Setup.1-1,AcPwrRcvryDelay,R740XD R640,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,Secure Boot,Enabled,BIOS.Setup.1-1,SecureBoot,R740XD R640,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="System Security,Intel TXT,On,BIOS.Setup.1-1,IntelTxt,R650 R750 R7525,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="System Security,AC Power Recovery,On,BIOS.Setup.1-1,AcPwrRcvry,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="System Security,AC Power Recovery Delay,Random,BIOS.Setup.1-1,AcPwrRcvryDelay,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="System Security,Secure Boot,Enabled,BIOS.Setup.1-1,SecureBoot,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
                 $BIOSandiDRACCfgTable+="System Security,Secure Boot Policy,Standard,BIOS.Setup.1-1,SecureBootPolicy,R740XD R640,DCIM_BIOSEnumeration"
 
-                $BIOSandiDRACCfgTable+="Power Configuration,Redundancy Policy,Redundant,System.Embedded.1:ServerPwr.1,PSRedPolicy,R740XD R640,DCIM_SystemEnumeration"
-                $BIOSandiDRACCfgTable+="Power Configuration,Enable Hot Spare,Enabled,System.Embedded.1:ServerPwr.1,PSRapidOn,R740XD R640,DCIM_SystemEnumeration"
-                $BIOSandiDRACCfgTable+="Power Configuration,Primary Power Supply Unit,PSU1,System.Embedded.1:ServerPwr.1,RapidOnPrimaryPSU,R740XD R640,DCIM_SystemEnumeration"
+                $BIOSandiDRACCfgTable+="TPM Advanced Settings,    TPM PPI Bypass Provision,Enabled,BIOS.Setup.1-1,TpmPpiBypassProvision,R750 R650 R7525,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="TPM Advanced Settings,    TPM PPI Bypass Clear,Enabled,BIOS.Setup.1-1,TpmPpiBypassClear,R750 R650 R7525,DCIM_BIOSEnumeration"
+                $BIOSandiDRACCfgTable+="TPM Advanced Settings,    TPM2 Algorithm Selection,SHA256,BIOS.Setup.1-1,Tpm2Algorithm,R750 R650 R7525,DCIM_BIOSEnumeration"
 
-                $BIOSandiDRACCfgTable+="Network Settings,Enable NIC,Enabled,iDRAC.Embedded.1:CurrentNIC.1,Enabled,R740XD R640,DCIM_iDRACCardEnumeration"
-                $BIOSandiDRACCfgTable+="Network Settings,NIC Selection,Dedicated,iDRAC.Embedded.1:CurrentNIC.1,Selection,R740XD R640,DCIM_iDRACCardEnumeration"
+                $BIOSandiDRACCfgTable+="Power Configuration,Redundancy Policy,A/B Grid Redundant,System.Embedded.1:ServerPwr.1,PSRedPolicy,R640 R740XD R750 R650 R6515 R7525,DCIM_SystemEnumeration"
+                $BIOSandiDRACCfgTable+="Power Configuration,Enable Hot Spare,Enabled,System.Embedded.1:ServerPwr.1,PSRapidOn,R640 R740XD R750 R650 R6515 R7525,DCIM_SystemEnumeration"
+                $BIOSandiDRACCfgTable+="Power Configuration,Primary Power Supply Unit,PSU1,System.Embedded.1:ServerPwr.1,RapidOnPrimaryPSU,R640 R740XD R750 R650 R6515 R7525,DCIM_SystemEnumeration"
+
+                $BIOSandiDRACCfgTable+="Network Settings,Enable NIC,Enabled,iDRAC.Embedded.1:CurrentNIC.1,Enabled,R640 R740XD R750 R650 R6515 R7525,DCIM_iDRACCardEnumeration"
+                $BIOSandiDRACCfgTable+="Network Settings,NIC Selection,Dedicated,iDRAC.Embedded.1:CurrentNIC.1,Selection,R640 R740XD R750 R650 R6515 R7525,DCIM_iDRACCardEnumeration"
 
                 ForEach($Line In $BIOSandiDRACCfgTable){
                     $Item=@()
@@ -2087,7 +2277,7 @@ IF($InstalledOS -imatch "Windows"){
                                                 ,@{Label="Type";Expression={"BIOS Config"}}`
                                                 ,@{Label="Setting Category";Expression={$Item[0]}}`
                                                 ,@{Label="Setting Name";Expression={$Item[1]}}`
-                                                ,@{Label="CurrentValue";Expression={IF($_.'VALUE.ARRAY'.VALUE -notmatch $Item[2]){"***"+$_.'VALUE.ARRAY'.VALUE}Else{$_.'VALUE.ARRAY'.VALUE}}}`
+                                                ,@{Label="CurrentValue";Expression={IF($Item[2] -notmatch $_.'VALUE.ARRAY'.VALUE){"***"+$_.'VALUE.ARRAY'.VALUE}Else{$_.'VALUE.ARRAY'.VALUE}}}`
                                                 ,@{Label="DesiredValue";Expression={$Item[2]}}|`
                                                 sort-object Type,Category,Name
                             $BIOSandiDRACCfg+=$BIOSandiDRACCfgLookup
