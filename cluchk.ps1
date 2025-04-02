@@ -26,11 +26,15 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/04/02:v1.62 -  1. New Update: TP - New version 1.62 DEV
+                        2. Bug Fix: TP - Adding timeoutsec to all Invoke-WebRequests to 30 seconds.
+                        3. Bug Fix: TP - Do not show error for E810 adapters using RoCEv2
+    
     2025/01/23:v1.61 -  1. New Update: TP - New version 1.61 DEV
                         2. Bug Fix: SA - Corrected APEX ISM IP, should be 169.254.0.1
                         3. New Update: JG - Added new FLTMCXml file processing
-			4. Bug Fix: JL - Updated Jumbo Frames section
-      			5. Bug Fix: JL - Added fix and sorting to FLTMCXml processing
+                        4. Bug Fix: JL - Updated Jumbo Frames section
+                        5. Bug Fix: JL - Added fix and sorting to FLTMCXml processing
 
     2024/12/11:v1.60 -  1. New Update: TP - New version 1.60 DEV
                         2. Bug Fix: TP - Do not show Management network as Red for LM if it's a regular PowerEdge server.
@@ -116,7 +120,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.61"
+$CluChkVer="1.62"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -891,7 +895,7 @@ $SMRevHistLatest=""
 #$OutFile="$env:TEMP\supmatrix.html"
 $SMURL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/'
 try {
-$SMVersion = invoke-webrequest $SMURL -UseBasicParsing
+$SMVersion = invoke-webrequest $SMURL -UseBasicParsing -TimeoutSec 30
 }
 catch {
 Write-Warning 'Unable to download support matrix'
@@ -926,7 +930,7 @@ $URL = $SMRevHistLatest.link
 }
 # Download the HTML content of the webpage
 try {
-$SMresponse = invoke-webrequest $URL -UseBasicParsing
+$SMresponse = invoke-webrequest $URL -UseBasicParsing -TimeoutSec 30
 #$SMresponse = (new-object System.net.webclient).DownloadString($URL)
 }
 catch {
@@ -982,7 +986,7 @@ foreach ($table in $html1.Keys) {
 $SMxml = $SupportMatrixtableData | ConvertTo-Xml -As String -NoTypeInformation
 
 
-<#$pageContent = invoke-webrequest -UseBasicParsing -Method GET -Uri $url
+<#$pageContent = invoke-webrequest -UseBasicParsing -Method GET -Uri $url  -TimeoutSec 30
 $SMTableNames=$pageContent.ParsedHtml.getElementsByTagName('h3') | Foreach {$_.InnerText}
 $SupportMatrixtableData=@{}
 $i=0
@@ -3556,7 +3560,7 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
             $Wcl.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials         
         
         # Gets the the list of known file system minifilter drivers
-                $KnownFltrs=invoke-webrequest -Uri $URL -UseBasicParsing | Select-Object RawContent
+                $KnownFltrs=invoke-webrequest -Uri $URL -UseBasicParsing -TimeoutSec 30 | Select-Object RawContent
                 $RawKnownFltrs=$KnownFltrs.RawContent.split("`n")
                 $RawKnownFltrs+=
 
@@ -5270,7 +5274,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $Name="RDMA mode"
             Write-Host "    Gathering $Name..."  
             $GetNetAdapterAdvancedProperty=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapterAdvancedProperty")) {$SDDCFiles."$key" | `
-                Where-Object{($_.InterfaceDescription -Match 'QLogic')-or ($_.InterfaceDescription -Match 'E810') }|`
+                Where-Object{($_.InterfaceDescription -Match 'QLogic') -or ($_.InterfaceDescription -Match 'E810') }|`
                 Where-Object{(($_.DisplayName -eq "RDMA Mode") `
                 -or($_.DisplayName -eq "NetworkDirect Technology"))}|`
                 Sort-Object PSComputerName,Name,InterfaceDescription | Select-Object PSComputerName,Name,InterfaceDescription,DisplayName,DisplayValue
@@ -5282,7 +5286,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $GetNetAdapterAdvancedProperty=$FoundGetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,InterfaceDescription,DisplayName,`
             @{Label='DisplayValue';Expression={
                 IF($StorageNicsUnique -imatch $_.Name){
-                    If($_.DisplayValue -inotmatch 'iWARP'){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}
+                    If($_.DisplayValue -inotmatch 'iWARP' -and $_.InterfaceDescription -notlike "*E810*" ){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}
                 }Else{$_.DisplayValue}
             }}
             #Azure Table
@@ -6216,7 +6220,7 @@ IF($ProcessTSR -ieq "y"){
     $output = "$env:TEMP\DriFT.ps1"
     $start_time = Get-Date
     Remove-Item $output -Force -ErrorAction SilentlyContinue
-    Try{invoke-webrequest -Uri $url -UseDefaultCredentials | Out-Null #-OutFile $output 
+    Try{invoke-webrequest -Uri $url -UseDefaultCredentials -TimeoutSec 30 | Out-Null #-OutFile $output 
     Write-Output "Time taken: $((Get-Date).Subtract($start_time).Seconds) second(s)"}
     Catch{Write-Host "ERROR: Source location NOT accessible. Please try again later"-foregroundcolor Red
     }
