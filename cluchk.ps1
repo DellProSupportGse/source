@@ -26,6 +26,10 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/05/xx:v1.63 -  1. New Update: TP - New version 1.63 DEV
+                        2. New Feature: TP - If SysInfo cannot be gathered, still show the node in the Cluster Nodes table.
+                        3. New Feature: TP - Call out simple virtual disks.
+    
     2025/04/02:v1.62 -  1. New Update: TP - New version 1.62 DEV
                         2. Bug Fix: TP - Adding timeoutsec to all Invoke-WebRequests to 30 seconds.
                         3. Bug Fix: TP - Do not show error for E810 adapters using RoCEv2
@@ -120,7 +124,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.62"
+$CluChkVer="1.63DEV"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -2431,6 +2435,7 @@ ForEach($Sys in $SysInfo){
         @{L="UBR";E={
             ($SDDCFiles."$($_.Name)GetCurrentVersion").UBR
         }}
+        $ClusterNodesOut+=$ClusterNodes | Where-Object {!($Sysinfo.HostName -match $_.name)}
 }
 #Azure Table CluChkClusterNodes
     $AzureTableData=@()
@@ -2779,7 +2784,6 @@ $htmlout+=$html
             $VDFriendlyName = $VD.FriendlyName
             $VDFootprint  = $VD.FootprintOnPool
             $VDEfficiency = [math]::Round($VD.Size/$VD.FootprintOnPool*100,2)
-            
 
             #Non Teired VirtualDisk will have ResiliencySettingName and PhysicalDiskRedundancy properties
             IF($VD.ResiliencySettingName -and $VD.PhysicalDiskRedundancy){
@@ -2808,6 +2812,7 @@ $htmlout+=$html
                     IF($VD.ResiliencySettingName -eq 'Mirror'){$VDMirrorSize = $VD.size}
                 #ParitySize
                     IF($VD.ResiliencySettingName -eq 'Parity'){$VDParitySize = $VD.size}
+ 
             }
 
             #Teired VirtualDisk will have ResiliencySettingName and PhysicalDiskRedundancy properties completely blank
@@ -2887,7 +2892,10 @@ $htmlout+=$html
             IF($VDMirrorSize -gt 0){$VDMirrorSize=Convert-BytesToSize $VDMirrorSize}Else{$VDMirrorSize=""}
             IF($VDParitySize -gt 0){$VDParitySize=Convert-BytesToSize $VDParitySize}Else{$VDParitySize=""}
             IF($VDResiliency -imatch "map"){$VDResiliency="Mirror-accelerated parity"}
-
+            
+            #Simple
+            IF($VD.ResiliencySettingName -eq "Simple"){$VDResiliency="RREEDDSimple"}
+            
             $VDRData = [PSCustomObject]@{
                 "VirtualDiskName"        = $VDFriendlyName
                 "TotalSize"              = $Size
@@ -2898,8 +2906,8 @@ $htmlout+=$html
                 "MirrorSize"             = $VDMirrorSize
                 "ParitySize"             = $VDParitySize
                 "StorageFootprint"       = Convert-BytesToSize $VDFootprint
-                "Efficiency"             = "$VDEfficiency%"
-                "Note"                   = IF($VDResiliency -imatch "yyeellllooww"){"Resiliency is 2-way with more than two nodes. Default is 3-way"}}
+                "Efficiency"             = "RREEDD"*($VDEfficiency -eq "100")+"$VDEfficiency%"
+                "Note"                   = IF($VDResiliency -imatch "yyeellllooww"){"Resiliency is 2-way with more than two nodes. Default is 3-way"}elseif($VDResiliency -imatch "RREEDD"){"Simple volumes are not supported in HCI/S2D"}}
             $VDROutput += $VDRData
         }
 
