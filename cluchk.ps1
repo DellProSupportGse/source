@@ -26,7 +26,7 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
-    2025/05/xx:v1.63 -  1. New Update: TP - New version 1.63 DEV
+    2025/04/16:v1.63 -  1. New Update: TP - New version 1.63 DEV
                         2. New Feature: TP - If SysInfo cannot be gathered, still show the node in the Cluster Nodes table.
                         3. New Feature: TP - Call out simple virtual disks.
     
@@ -124,7 +124,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.63DEV"
+$CluChkVer="1.63"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
