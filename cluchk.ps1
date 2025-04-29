@@ -26,7 +26,10 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
-    2025/04/16:v1.63 -  1. New Update: TP - New version 1.63 DEV
+    2025/04/29:v1.64 -  1. New Update: TP - New version 1.64 DEV
+                        2. Bug Fix: TP - Support Matrix changed link title from Azure Stack HCI to Azure Local. Updated the code.
+
+    2025/05/xx:v1.63 -  1. New Update: TP - New version 1.63 DEV
                         2. New Feature: TP - If SysInfo cannot be gathered, still show the node in the Cluster Nodes table.
                         3. New Feature: TP - Call out simple virtual disks.
     
@@ -124,7 +127,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.63"
+$CluChkVer="1.64"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -906,7 +909,7 @@ Write-Warning 'Unable to download support matrix'
 }
 
 #Filter for links "Azure Stack HCI Support Matrix" in the text
-$SMLinks = $SMVersion.Links | Where-Object {$_.outerHTML -match "Azure Stack HCI Support Matrix"} | Select-Object -ExpandProperty href
+$SMLinks = $SMVersion.Links | Where-Object {$_.outerHTML -match "Azure Local Support Matrix"} | Select-Object -ExpandProperty href
 
 #Select the latest support matrix
 if ($GenerationNodes -eq "unknown") {
