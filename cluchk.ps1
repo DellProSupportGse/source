@@ -26,6 +26,18 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/05/14:v1.65 -  1. New Update: TP - New version 1.65 DEV
+                        2. Bug Fix: SA - Suppress remove old logfile error
+                        3. Bug Fix: SA - Only warn if pagefile is larger than expected
+                        4. Bug Fix: SA - Include FIPS disks in firmware check
+                        5. Bug Fix: SA - Fix Recommended Updates and Hotfixes sorting, first per node (Asc), then per KB (Desc)
+                        6. Bug Fix: SA - More minor sort fixes
+                        7. Bug Fix: SA - Added Windows Server 2025 version
+                        8. New Feature: SA - Add Azure Local version in Cluster node table
+                        9. New Feature: SA - Check if Azure version is same on all nodes
+                        10. New Feature: TP - Added check and error for mismatched time zones on nodes
+                        11. Bug Fix: JG - Repaired the Show Tech Report as is was not working and slow
+			
     2025/04/29:v1.64 -  1. New Update: TP - New version 1.64 DEV
                         2. Bug Fix: TP - Support Matrix changed link title from Azure Stack HCI to Azure Local. Updated the code.
 
@@ -127,7 +139,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.64"
+$CluChkVer="1.65"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -246,7 +258,7 @@ function Convert-HtmlTableToPsObject {
 }
 #region Cleanup CluChk Transcripts older than 10 days
 function TLogCleanup {
-    Get-ChildItem $TlogLoc | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-10)} | Foreach {Remove-Item $_.Fullname}
+    Get-ChildItem $TlogLoc | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-10)} | Foreach {Remove-Item $_.Fullname -force -ErrorAction SilentlyContinue}
   # Cleanup chipset extract
     Remove-Variable IntelChipset* -Scope Local  -ErrorAction SilentlyContinue
     IF($IntelChipsetDownloadLocation){Remove-Item $IntelChipsetDownloadLocation}
@@ -838,22 +850,29 @@ If ($ProcessSDDC -ieq 'y') {
                                 OSVersion     = $osInfo.OsVersion
                                 OSBuildNumber = $osInfo.OsBuildNumber
                                 OSName        = $osInfo.OSName.Replace('Microsoft','').Trim() # remove Microsoft
+				AzureLocalVersion = ''
                                 SysModel      = $osInfo.CsModel
                             }
 
         }
 
-
-
-        #Write-Host "Time here is $(((Get-Date)-$dstop).totalmilliseconds)"
-        #$SysInfo | fl
-
-
 # determine os version, used later on
 $OSVersionNodes = 'Unknown'
 # Azure Stack HCI OS versions
 If($SysInfo[0].OSName -imatch 'HCI'){
-    #NOT APEX
+    # update Azure Local version in $SysInfo table, per node
+    $StampFiles=gci $SDDCPath -Filter "GetStampInformation.xml" -Recurse -Depth 1
+    ForEach ($StampFile in $StampFiles) {
+      $NodeName = ($StampFile.DirectoryName | split-path -Leaf).Replace('Node_','')
+      $GetStampInformation= $StampFile | Import-Clixml
+      ForEach($Sys in $SysInfo){ 
+        if ($Sys.HostName -eq $nodeName) {
+          $Sys.AzureLocalVersion = $GetStampInformation[0].StampVersion
+        }
+      }
+    }
+
+    #NOT APEX nodes
     IF($SysInfo[0].SysModel -notmatch "^APEX"){
         $OSVersionNodes = Switch ($SysInfo[0].OSBuildNumber) {
         '19042' {'20H2'}
@@ -863,7 +882,7 @@ If($SysInfo[0].OSName -imatch 'HCI'){
         Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
         }
     }
-    #APEX
+    #APEX nodes
     IF($SysInfo[0].SysModel -match "^APEX"){
         $OSVersionNodes = Switch ($SysInfo[0].OSBuildNumber) {
         '20349' {'22H2'}
@@ -874,6 +893,7 @@ If($SysInfo[0].OSName -imatch 'HCI'){
 } else {
 # regular Windows Server versions
 $OSVersionNodes = Switch ($SysInfo[0].OSBuildNumber) {
+'26100' {'2025'}
 '20348' {'2022'}
 '17763' {'2019'}
 '14393' {'2016'}
@@ -1020,52 +1040,6 @@ If($ProcessSTS -ieq 'y'){
 # Write-Host "*******************************************************************************"
 # Show Tech-Support Report
     # Filter Support Matrix for Microsoft HCI Solutions for Switch firmware information from
-    $SMSwitchFWTable= $SupportMatrixtableData['Network Switches']
-    $resultObject=@()
-    Foreach($SMSwitchFW in  $SMSwitchFWTable){
-        $resultObject+= [PSCustomObject] @{
-                        COMPONENT                   = $SMSwitchFW.'Component'
-                        CATEGORY                    = $SMSwitchFW.'Category'
-                        "MINIMUM SUPPORTED VERSION" = ($SMSwitchFW.'Minimum Supported Version' -split '-')[0]
-        }
-    }
-    $SMSwitchFWData = $resultObject
-
-<#    .Values | Where-Object { $_.'Network Switches' -imatch $platformName}
-    | Where-Object {$_.innerText -imatch 'S4148F'}
-    $SMSwitchFWData=@()
-    ForEach($Row in $SMSwitchFWTable.rows){
-        #$toggle="off"
-        $resultObject=@()
-        $Cells = @($Row.Cells)
-        IF($Cells.innerText[0] -imatch 'Dell EMC Networking'){
-            $resultObject=@()
-            If(($Cells.innerText[3]  -split '\/').count -gt 1){
-                    $resultObject+= [PSCustomObject] @{
-                        COMPONENT                   = (($Cells.innerText[0] -replace '^\s+','') -split '\/')[0]
-                        TYPE                        = $Cells.innerText[1] -replace '^\s+',''
-                        CATEGORY                    = $Cells.innerText[2] -replace '^\s+',''
-                        "MINIMUM SUPPORTED VERSION" = ((($Cells.innerText[3]  -split '\s\-\s')[0] -replace '\s+','') -split '\/')[0]
-                    }
-                    $resultObject+= [PSCustomObject] @{
-                        COMPONENT                   = ($Cells.innerText[0] -replace '^\s+','' -replace 'OS9\/') 
-                        TYPE                        = $Cells.innerText[1] -replace '^\s+',''
-                        CATEGORY                    = $Cells.innerText[2] -replace '^\s+',''
-                        "MINIMUM SUPPORTED VERSION" = ((($Cells.innerText[3]  -split '\s\-\s')[0] -replace '\s+','') -split '\/')[1]
-                    }
-            }Else{
-                $resultObject+= [PSCustomObject] @{
-                    COMPONENT                   = $Cells.innerText[0] -replace '^\s+',''
-                    TYPE                        = $Cells.innerText[1] -replace '^\s+',''
-                    CATEGORY                    = $Cells.innerText[2] -replace '^\s+',''
-                    "MINIMUM SUPPORTED VERSION" = ($Cells.innerText[3]  -split '\s\-\s')[0] -replace '\s+',''
-                }
-            }
-            $SMSwitchFWData += $resultObject
-        }
-    }
-    #>
-    #$SMSwitchFWData | FT
 $html+='<H1 id="ShowTechSupport ">Show Tech-Support </H1>'
     $Name="Tech-Support"
     Write-Host "    Gathering $Name..."  
@@ -1073,65 +1047,134 @@ $html+='<H1 id="ShowTechSupport ">Show Tech-Support </H1>'
 
     # Output Var
 #$ShowTechSupportOut=@()
+$parsedshowlldpneighbors=@()
 $RunningConfigOut=@()
 $ShowVersionOut=@()
-$ShowVersion=@()
 $Interfaces=@()
     ForEach($STS in $STSFiles){
         Write-Host "    Gathering Show Tech information from $STS"
-        $ShowTechSupport=@()
-        $ShowTechSupport = Get-Content -Path $STS -Delimiter '\s\-----------------------------------\s'
-
-        # Gather HostName from the running config
-            $STSShowRunningConfig=@()
-            IF($ShowTechSupport -imatch '---- show running-configuration ----'){
-                # show running-configuration OS 10
-                $STSShowRunningConfig=((($ShowTechSupport -split '---- show running-configuration ----')[1] -split '\s----------')[0] -split '[\r\n]')
-                # show running-configuration OS 9
-            }Else{$STSShowRunningConfig=((($ShowTechSupport -split '---- show running-config ----')[1] -split '\s----------')[0] -split '[\r\n]')}
-            $SwitchHostName=((($STSShowRunningConfig -imatch 'hostname ') -split 'hostname ')[1] -split '[\r\n]')[0]
-            Write-Host "    SwitchHostName: $SwitchHostName"
-
-        # show version
-            Write-Host "    Gathering Show Version...."
-            $STSShowVersion=@()
-            $STSShowVersion=((($ShowTechSupport -split '---- show version ----')[1] -split '\s----------')[0] -split '[\r\n]')
-            IF($STSShowVersion -imatch 'Dell EMC Networking OS10 Enterprise'){
-               $ShowVersion+= [PSCustomObject] @{
-                    HostName=$SwitchHostName
-                    OSVersion = $(IF(((($STSShowVersion -imatch 'OS Version:') -replace '\s' -split 'OSVersion:')[1]) -match '^\d{1,}\.\d{1,}\.\d{1,}\.\d{1,}'){
-                                    $ExtractedString = [System.Version](Out-String -InputObject $Matches.Values)}
-                                  Else{$ExtractedString=((($STSShowVersion -imatch 'OS Version:') -replace '\s' -split 'OSVersion:')[1])}
-                                  $ExtractedString
-                                 )
-                    #OSVersion = ((($STSShowVersion -imatch 'OS Version:') -replace '\s' -split 'OSVersion:')[1])
-                    BuildVersion = (($STSShowVersion -imatch 'Build Version:') -replace '\s' -split 'BuildVersion:')[1]
-                    BuildTime = (($STSShowVersion -imatch 'Build Time:') -replace '\s' -split 'BuildTime:')[1]
-                    SystemType = (($STSShowVersion -imatch 'System Type:') -replace '\s' -split 'SystemType:')[1]
-                    UpTime = (($STSShowVersion -imatch 'Up Time:') -split 'Up Time:')[1]
-            }}
-            IF($STSShowVersion -imatch 'Dell EMC Application Software Version:  9'){
-                   $ShowVersion+= [PSCustomObject] @{
-                    HostName=$SwitchHostName
-                    #OSVersion = (($STSShowVersion -imatch 'System Version:') -split ':'  -replace '\s')[1]
-                    OSVersion = ((($STSShowVersion -imatch 'Software Version:') -split ':'  -replace '\s')[1]) -replace '\(','.' -replace '\)'
-                    BuildVersion = (($STSShowVersion -imatch 'Software Version:') -split ':'  -replace '\s')[1]
-                    BuildTime = (($STSShowVersion -imatch 'Build Time:') -split ': ')[1]
-                    SystemType = (($STSShowVersion -imatch 'System Type:') -replace '\s' -split 'SystemType:')[1]
-                    UpTime = (($STSShowVersion -imatch 'Dell EMC Networking OS uptime is') -split 'Dell EMC Networking OS uptime is')[1].trim()
-            }}
-            #$ShowVersion|ft
+        $logText = Get-Content $STS -Raw
+        $fileName = Split-Path $STS -Leaf
+        
+        # Match the header pattern
+        #$pattern = "^-{35}\s+show .+?$"
+        $pattern = '\s*-+\s+show .+'
+        
+        # Find all header matches
+        $matches = [regex]::Matches($logText, $pattern, [System.Text.RegularExpressions.RegexOptions]::Multiline)
+        
+        # Build the sections
+        $sections = @()
+        for ($i = 0; $i -lt $matches.Count; $i++) {
+            $headerLine = $matches[$i].Value.Trim()
+            $sectionName = ($headerLine -replace '^-{35}\s+', '').Trim()
+        
+            $startIndex = $matches[$i].Index + $matches[$i].Length
+            $endIndex = if ($i -lt $matches.Count - 1) {
+                $matches[$i + 1].Index
+            } else {
+                $logText.Length
+            }
+        
+            # Extract content between this section header and the next
+            $sectionContent = $logText.Substring($startIndex, $endIndex - $startIndex).Trim()
+        
+            $sections += [PSCustomObject]@{
+                File = $fileName
+                Section = ($SectionName -replace '^-{35}\s+', '') -replace '\s*[-]+$', ''
+                Content = $sectionContent
+            }
+        }
+        
+        # Output how many were found
+        Write-host "Found $($sections.Count) sections."
+        
+        function Parse-TextVar {
+            param (
+                [Parameter(Mandatory=$true)]
+                [string]$Input1,
+        
+                [Parameter(Mandatory=$false)]
+                [string]$DelimiterPattern = "^!"
+            )
+        
+            # Split the input text into lines
+            $lines = $Input1 -split "`r?`n"
+            
+            # Initialize variables
+            $sections = @()
+            $currentSection = @()
+            $index = 0
+        
+            # Loop through lines
+            foreach ($line in $lines) {
+                if ($line -match $DelimiterPattern) {
+                    if ($currentSection.Count -gt 0) {
+                        # Create a section object and clear the current section
+                        $sections += [PSCustomObject]@{
+                            Index   = $index++
+                            Content = ($currentSection -join "`n").Trim()
+                        }
+                        $currentSection.Clear()
+                    }
+                }
+                
+                # Only add non-empty lines
+                if ($line.Trim().Length -gt 0) {
+                    $currentSection += $line
+                }
+            }
+        
+            # Add the final section if it exists
+            if ($currentSection.Count -gt 0) {
+                $sections += [PSCustomObject]@{
+                    Index   = $index
+                    Content = ($currentSection -join "`n").Trim()
+                }
+            }
+        
+            # Explicitly return the array of objects
+            return ,$sections
+        }
+        
+        #$ShowVersion = $sections | ?{ $_.section -imatch "show Version" } | select -ExpandProperty Content
+        
+        # Find show running-configuration section
+            $showrunningconfiguration = $sections | ?{ $_.section -imatch "show running-configuration" } | select -ExpandProperty Content
+            $parsedshowrunningconfiguration = Parse-TextVar $showrunningconfiguration
+        
+        # Running Configuration: Find the hostname
+            $hostname = (($parsedshowrunningconfiguration | Where-Object { $_.Content -match "hostname" } | select -ExpandProperty content) -split "`r?`n" | ?{$_ -imatch "hostname" }) -replace "^hostname\s+", ""
+        
+        # Running Configuration: Find Switch OS version
+            $SwitchOSVersion = [PSCustomObject]@{
+                                    Hostname = $hostname
+                                    Version = (($parsedshowrunningconfiguration |  Where-Object { $_.Content -match 'Version' }).Content -replace "! " -split 'Version ')[1]
+                                  }
+            $ShowVersionOut += $SwitchOSVersion
 
         # show interface
             Write-Host "    Gathering Show Interface...."
             $STSShowInterfaces=@()
-            $STSShowInterfaces=((($ShowTechSupport -split '---- show interface ----+[\r\n]')[1] -split '\s\-+\s')[0] -split '[\r\n]{3,}')
-            ForEach($Interface in $STSShowInterfaces){
-                IF($Interface.Length -gt 0){
-                    IF($Interface -imatch '\sis\s'){
-                        $InputStatistics = ((($Interface -split 'Input statistics\:[\r\n]')[1] -split 'Output statistics\:[\r\n]')[0] -replace '^[\r\n]' -replace '[\r\n]\s{5}',',' -split ',').trim()
-                        $OutputStatistics = ((($Interface -split 'Output statistics\:[\r\n]')[0] -split 'Input statistics\:[\r\n]')[1] -replace '^[\r\n]' -replace '[\r\n]\s{5}',',' -split ',').trim()
-                        $Interfaces+= [PSCustomObject] @{
+            # Find show interface section
+            $showinterface = $sections | ?{ $_.section -imatch "show interface"} | select -ExpandProperty Content
+            $parsedshowinterfaceEthernet = Parse-TextVar $showinterface[0] -DelimiterPattern "(?i)^.*line protocol is.*$"
+
+            # Running-Configuration: 
+
+        ForEach($item in $parsedshowinterfaceEthernet){
+            $STSShowInterfaces += [PSCustomObject]@{
+                                  Hostname = $hostname
+                                  Content  = $item.Content 
+                                  }
+        }
+        $SwitchHostName=$hostname
+        ForEach($STSShowInterface in $STSShowInterfaces){
+            $Interface = $STSShowInterface.Content
+            IF($Interface.Length -gt 0){
+                    $InputStatistics = ((($Interface -split 'Input statistics\:[\r\n]')[1] -split 'Output statistics\:[\r\n]')[0] -replace '^[\r\n]' -replace '[\r\n]\s{5}',',' -split ',').trim()
+                    $OutputStatistics = ((($Interface -split 'Output statistics\:[\r\n]')[0] -split 'Input statistics\:[\r\n]')[1] -replace '^[\r\n]' -replace '[\r\n]\s{5}',',' -split ',').trim()
+                    $Interfaces+= [PSCustomObject] @{
                         HostName=$SwitchHostName
                         Interface = (($Interface -split '\sis\s')[0] -replace '[\r\n]{1,}').Trim()
                         InterfaceStatus = (($Interface -split '\,\sline\sprotocol\sis\s')[1] -split '[\r\n]')[0].trim()
@@ -1182,54 +1225,96 @@ $Interfaces=@()
                             OutCRC = "YYEELLLLOOWW"+($OutputStatistics -split '[\r\n]' | Where-Object{$_ -imatch 'CRC'}) -replace ' CRC'
                             OutOverrun = "YYEELLLLOOWW"+($OutputStatistics -split '[\r\n]' | Where-Object{$_ -imatch 'overrun'}) -replace ' overrun'
                             OutDiscarded = "YYEELLLLOOWW"+($OutputStatistics -split '[\r\n]' | Where-Object{$_ -imatch 'discarded'}) -replace ' discarded'                    
-                            
-                        }
+                        
                     }
-                }
             }
+        }
           #$Interfaces | ft
 
-          # show running-configuration
-            Write-Host "    Gathering Show Running-Configuration...."
-            $ConfigOut=@()
-            $STSShowRunningConfiguration=@()
-            $STSShowRunningConfiguration=((($ShowTechSupport -split '\s.\-+\sshow\srunning\-config.+[\r\n]{1,}')[1] -split '\s\-+\s')[0] -split '\!.*')
-            #$STSShowRunningConfiguration.count
-            ForEach($Config in $STSShowRunningConfiguration){
-                IF($Config.Length -gt 7){
-                    IF(-not($Config.startswith('\s'))){
-                        $ConfigOut+=[PSCustomObject]@{
-                                HostName=$SwitchHostName 
-                                ConfigItem = ($Config -split '[\r\n]')[1]
-                                ConfigAttrib = $Config.ToString()
-            }}}}
-            $RunningConfigOut+=$ConfigOut
-            #$ConfigOut| Select -Property HostName,ConfigItem,ConfigAttrib
-      }
+        # Running-Configuration: 
+            $AllTheparsedshowrunningconfiguration=@()
+            ForEach($item in $parsedshowrunningconfiguration){
+            $AllTheparsedshowrunningconfiguration += [PSCustomObject]@{
+                                                Hostname     = $hostname
+                                                ConfigItem   = ($item.Content -split "`r?`n")[1]
+                                                ConfigAttrib = $item.Content 
+                                                }
+            }
+            $RunningConfigOut += $AllTheparsedshowrunningconfiguration
+        # show lldp neighbors
+            $showlldpneighbors = $sections | ?{ $_.section -imatch "show lldp neighbors" } | select -ExpandProperty Content
+            
+            # split on carrige return line feed
+            $data = $showlldpneighbors[0] -split "`r`n"
 
-        $ShowVersionOut=@()
-        ForEach($s in $ShowVersion){
-            ForEach($t in $SMSwitchFWData){
-                If($t.COMPONENT -imatch $s.SystemType){
-                #$ShowVersionOut+= $s | Select-Object HostName,@{L='CurrentVersion';E={IF($_.OSVersion -match '^\d{1,}\.\d{1,}\.\d{1,}\.\d{1,}'){$ExtractedString = [System.Version](Out-String -InputObject $Matches.Values)};IF([System.Version]$ExtractedString -lt [System.Version]$t."MINIMUM SUPPORTED VERSION"){"RREEDD"+$ExtractedString}Else{$ExtractedString}}},@{L='AvailableVersion';E={$t."MINIMUM SUPPORTED VERSION"}},BuildVersion,BuildTime,SystemType,UpTime
-                $ShowVersionOut+= $s | Select-Object HostName,@{L='CurrentOSVersion';E={IF([System.Version]$_.OSVersion -lt [System.Version]$t."MINIMUM SUPPORTED VERSION"){"RREEDD"+$_.OSVersion}Else{$_.OSVersion}}},@{L='AvailableOSVersion';E={$t."MINIMUM SUPPORTED VERSION"}},BuildVersion,BuildTime,SystemType,UpTime
-       }}}
-        $ShowVersionOut=$ShowVersionOut|Sort-Object UpTime -Unique 
+            # Remove header and separator lines
+            $data = $data | Where-Object { $_ -notmatch "^(-|\s*Loc\s+PortID)" }
+            $data = $data | ForEach-Object { $_.TrimEnd() }
+
+            # Define column widths (based on visual spacing)
+
+            $parsedshowlldpneighbors += foreach ($line in $data) {
+                $pline = $line -split '(?:\s{2,}|\.{3})' | ForEach-Object { $_.Trim() }
+                $LocPortID     = $pline[0]
+                $RemHostName   = $pline[1]
+                $RemPortID     = $pline[2]
+                $RemChassisID  = $pline[3]
+            
+
+                [PSCustomObject]@{
+                    'SwitchName'        = $hostname
+                    'LocalPortID'     = $LocPortID
+                    'RemoteHostName'  = $RemHostName
+                    'RemotePortID'    = $RemPortID
+                    'RemoteChassisID' = $RemChassisID
+                }
+            }
+    }
+        #$ShowVersionOut=$ShowVersionOut|Sort-Object UpTime -Unique
         $Name="Show Version"
         $html+='<H2 id="ShowTechsShowVersion">Show Version</H2>'
-        IF($ShowVersionOut.AvailableVersion){
-            $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://www.dell.com/support/kbdoc/en-us/000126014/support-matrix-for-dell-emc-solutions-for-microsoft-azure-stack-hci' target='_blank'>Ref: Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI</a></h5>"    
-        }
         $html+=$ShowVersionOut | ConvertTo-html -Fragment
         $html=$html `
             -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
             -replace '<td>YYEELLLLOOWW0</td>','<td>0</td>' `
             -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
+        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://www.dell.com/support/kbdoc/en-us/000126014/support-matrix-for-dell-emc-solutions-for-microsoft-azure-stack-hci' target='_blank'>Ref: Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI</a></h5>"            
         $ResultsSummary+=Set-ResultsSummary -name $name -html $html
         $htmlout+=$html
         $html=""
         $Name=""
-        
+
+    # Convert show lldp Neighbors for better visual
+        $Name="Show lldp Neighbors"
+        $html+='<H2 id="ShowlldpNeighbors">Show lldp Neighbors</H2>'
+        $SWLLDPNtbl=""
+        $SWLLDPNtbl = New-Object System.Data.DataTable "ShowlldpNeighbors"
+            $SWLLDPNtbl.Columns.add((New-Object System.Data.DataColumn("RemotePortID")))
+            ForEach ($a in ($parsedshowlldpneighbors.SwitchName | Sort-Object -Unique)){
+                $SWLLDPNtbl.Columns.Add((New-Object System.Data.DataColumn([string]$a)))}
+            $a=$null
+            ForEach($b in ($parsedshowlldpneighbors | Sort-Object RemotePortID )){
+                IF($b.LocalPortID.length -gt 2 -and $b.LocalPortID -notmatch 'System.__ComObject'){
+                    if ($b.RemotePortID -ne $a) {
+                        $a=$b.RemotePortID
+                        if ($Null -ne $a) {$SWLLDPNtbl.rows.add($row)}
+                        $row=$SWLLDPNtbl.NewRow()
+                        $row["RemotePortID"]=$b.RemotePortID
+                    }
+                    $row["$($b.SwitchName)"] = [string]($b.LocalPortID.PSObject.BaseObject -replace '[\r\n]{2,}','&lt;br&gt;')
+                }
+            }
+        $ShowlldpNeighborsOut = $SWLLDPNtbl | Sort-Object RemotePortID | Where-Object{$_ -notmatch 'System.__ComObject'} | Sort-Object ConfigItem | Select-object -Property * -Exclude RowError, RowState, Table, ItemArray, HasErrors
+        $html+=$ShowlldpNeighborsOut | ConvertTo-html -Fragment
+        $html=$html `
+            -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
+            -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
+        $ResultsSummary+=Set-ResultsSummary -name $name -html $html
+        $htmlout+=$html
+        $Send2Html=""
+        $html=""
+        $Name="" 
+
         $Name="Show Interface"
         $html+='<H2 id="ShowTechsShowInterface">Show Interface</H2>'
         $html+=$Interfaces| Sort-Object Interface| ConvertTo-html -Fragment
@@ -1259,12 +1344,13 @@ $Interfaces=@()
                     $row=$SRCtbl.NewRow()
                     $row["ConfigItem"]=$b.ConfigItem
                 }
-                $row["$($b.HostName)"] = [string]($b.ConfigAttrib.PSObject.BaseObject -replace '[\r\n]{2,}','&lt;br&gt;')
+                $row["$($b.HostName)"] = [string]($b.ConfigAttrib.PSObject.BaseObject -replace '[\r\n]','&lt;br&gt;')
             }
         }
         $Send2Html=$SRCtbl | Where-Object{$_ -notmatch 'System.__ComObject'} | Sort-Object ConfigItem | Select-object -Property * -Exclude RowError, RowState, Table, ItemArray, HasErrors
         $html+=$Send2Html | ConvertTo-html -Fragment
         $html=$html `
+            -replace '&gt;','>' -replace '&lt;','<' -replace '&quot;','"'`
             -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
             -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
         $ResultsSummary+=Set-ResultsSummary -name $name -html $html
@@ -1272,6 +1358,7 @@ $Interfaces=@()
         $Send2Html=""
         $html=""
         $Name=""
+
 }
 #endregion End of Process STS
 $RunDate=Get-Date
@@ -2079,6 +2166,7 @@ If($RunClusSum -ne "No"){
  $Runspace.SessionStateProxy.SetVariable('ClusterNodes',$ClusterNodes)
  $Runspace.SessionStateProxy.SetVariable('SysInfo',$SysInfo)
  $Runspace.SessionStateProxy.SetVariable('OSVersionNodes',$OSVersionNodes)
+ $Runspace.SessionStateProxy.SetVariable('AzureLocalVersion',$AzureLocalVersion)
  $Runspace.SessionStateProxy.SetVariable('SupportMatrixtableData',$SupportMatrixtableData)
  $Runspace.SessionStateProxy.SetVariable('SDDCFiles',$SDDCFiles)
  $Runspace.SessionStateProxy.SetVariable('SDDCPath',$SDDCPath)
@@ -2423,20 +2511,54 @@ If($VMInfo.count -eq 0){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;No Virtual Machines 
 
         $ClusterNodesOut=@()
 # Reference: https://docs.microsoft.com/en-us/windows-server/get-started/windows-server-release-info
+$filePath = gci $SDDCPath -Filter "systeminfo.txt" -Recurse
+
+$allproperties=@()
+# Initialize an empty hashtable
+Foreach ($file in $filepath.fullname) {
+    $properties = @{}
+
+    # Read each line and extract key-value pairs
+    Get-Content $file | ForEach-Object {
+        if ($_ -match "^(.*?):\s*(.*)$") {
+           $key = $matches[1].Trim()
+           $value = $matches[2].Trim()
+           $properties[$key] = $value
+        }
+    }
+    $allproperties+=$properties | sort name
+}
+$primarytz=($allproperties.'Time Zone' | Group-Object | sort count)[-1].name
+$HighestVersion = ($SysInfo | sort AzureLocalVersion -desc | select -first 1).AzureLocalVersion
 ForEach($Sys in $SysInfo){
     $ClusterNodesOut+=$ClusterNodes | Where-Object{$_.Name -imatch $Sys.HostName}|Sort-Object Name | Select-Object Name,Model,SerialNumber,State,StatusInformation,Id,`
         @{L="OSName";E={$Sys.OSName}},`
         @{L="OSVersion";E={$Sys.OSVersion}},`
         @{L="OSBuild";E={
             IF($sys.OSName -imatch "Server"){
-                "RREEDD"*!(@("17784","17763","14393","19042","20348","20349","25398").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
+                "RREEDD"*!(@("17784","17763","14393","19042","20348","20349","25398","26100").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
             }
             IF($sys.OSName -imatch "Stack"){
-                "RREEDD"*!(@("17784","17763","14393","20349","25398").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
+                "RREEDD"*!(@("17784","17763","14393","20349","25398","26100").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
             }
         }},
+        @{L="AzureLocal";E={
+          IF($Sys.OSName -imatch "Server"){
+            "N/A"
+          }
+          IF($Sys.OSName -imatch "Stack"){
+            If ($Sys.AzureLocalVersion -ne $HighestVersion) {
+	      "RREEDD"+$Sys.AzureLocalVersion
+            } else {
+              $Sys.AzureLocalVersion
+            }
+          }
+        }},	
         @{L="UBR";E={
             ($SDDCFiles."$($_.Name)GetCurrentVersion").UBR
+        }},
+        @{L="Time Zone";E={
+            $allproperties | ? {$_.'Host Name' -ieq $Sys.Hostname} | %{if ($_.'Time Zone' -ne $primarytz) {"RREEDD$($_['Time Zone'])"} else {"$($_['Time Zone'])"} }
         }}
         $ClusterNodesOut+=$ClusterNodes | Where-Object {!($Sysinfo.HostName -match $_.name)}
 }
@@ -2451,7 +2573,7 @@ ForEach($Sys in $SysInfo){
 #HTML Report
     $html+='<H2 id="ClusterNodes">Cluster Nodes</H2>'
     $html+="<h5><b>Should be:</b></h5>"
-    $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;OSBuildVersion = 20349(HCI OS 22H2),20348(Server 2022 LTSB or HCI OS 21H2), 19042(HCI OS 20H2) , 17763(Server 2019), 14393(Server 2016) </h5>"
+    $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;OSBuildVersion = 25398(HCI OS 23H2), 20349(HCI OS 22H2), 20348(Server 2022 LTSB or HCI OS 21H2), 19042(HCI OS 20H2), 2610(Server 2025), 20348(Server 2022), 17763(Server 2019), 14393(Server 2016) </h5>"
     If($ClusterNodesOut.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No Cluster Nodes found</span></h5>'}
     $html+=$ClusterNodesOut | ConvertTo-html -Fragment 
     IF(($sys.OSName -imatch "Stack") -and ($ClusterNodesOut.OSBuild -imatch "RREEDD")){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;NOTE: 20H2,21H2 are EoL MUST upgrade to 22H2 for Support. Return to Rework</h5>"}
@@ -3034,7 +3156,7 @@ $htmlout+=$html
         try {
             $SMDrive=$null
             $SMDrive=$SupportMatrixtableData.values| % {if ($_.Model -eq $diskmdl) {$_ | ConvertTo-Json | ConvertFrom-Json}}
-            $SMDrive=$SMDrive | Where Model -eq $diskmdl | ? Series -notmatch "FIPS" | Sort 'Firmware Min*' -Descending | Select -First 1
+            $SMDrive=$SMDrive | Where Model -eq $diskmdl | Sort 'Firmware Min*' -Descending | Select -First 1
                     #Create a customer object
                         $resultObject += [PSCustomObject] @{
                                         Type             = $SMDrive.Type
@@ -3043,10 +3165,10 @@ $htmlout+=$html
                                         Endurance        = $SMDrive.Endurance
                                         Vendor           = $SMDrive.Vendor
                                         Series           = $SMDrive.Series
-    Model            = $SMDrive.Model
+                                        Model            = $SMDrive.Model
                                         DevicePartNumber = $SMDrive.'Device Part Number (P/N)'
                                         SoftwareBundle   = $SMDrive.'Firmware Software Bundle'
-    Firmware         = $SMDrive.'Firmware Minimum Supported Version'
+                                        Firmware         = $SMDrive.'Firmware Minimum Supported Version'
                                         Capacity         = $SMDrive.Capacity
                                         Use              = $SMDrive.Use
     }
@@ -3080,13 +3202,19 @@ $AllNVMe=$True
         $diskmdlsfirm=@{}
         Foreach($diskmdl in $diskmdls) {
             $SMFWDiskfirm=$null
-            try {$SMFWDiskfirm=(($SMFWDiskData | Where-Object {$_.Model -like $diskmdl} | select Firmware | sort -Descending | Select-Object -First 1).Firmware)} catch {}
+	    # first try without FIPS
+            try {$SMFWDiskfirm=(($SMFWDiskData | Where-Object {$_.Model -like $diskmdl -and $_.Series -notmatch "FIPS"} | select Firmware | sort -Descending | Select-Object -First 1).Firmware)} catch {}
             IF ($SMFWDiskfirm.count -gt 0) {
-                            $diskmdlsfirm.add($diskmdl,$SMFWDiskfirm.trim())
-} Else {
-$diskmdlsfirm.add($diskmdl,("YYEELLLLOOWWNot found in matrix"*($SysInfo[0].SysModel -notmatch "^APEX")))
-}
-
+              $diskmdlsfirm.add($diskmdl,$SMFWDiskfirm.trim())
+            } Else {
+              # next try with FIPS included in search
+	      try {$SMFWDiskfirm=(($SMFWDiskData | Where-Object {$_.Model -like $diskmdl} | select Firmware | sort -Descending | Select-Object -First 1).Firmware)} catch {}
+              IF ($SMFWDiskfirm.count -gt 0) {
+                $diskmdlsfirm.add($diskmdl,$SMFWDiskfirm.trim())
+              } Else {       
+                $diskmdlsfirm.add($diskmdl,("YYEELLLLOOWWNot found in matrix"*($SysInfo[0].SysModel -notmatch "^APEX")))
+              }
+            }
         }
         $ConnectHost2PhysicalDisk=@()
             ForEach($Disk in $PhysicalDisks){
@@ -4683,10 +4811,10 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
         $html+='<H2 id="RecommendedUpdatesandHotfixes">Recommended Updates and Hotfixes</H2>'
         $html+="<h5><b>Should be:</b></h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Lastest $($KBLatest.KBNumber)</h5><br>"
-$html+="<h5>&nbsp;&nbsp;Current KB list from Microsoft: (showing last $KBItemsToShow)</h5>"
+        $html+="<h5>&nbsp;&nbsp;Current KB list from Microsoft: (showing last $KBItemsToShow)</h5>"
         $html+=($CurrentOSBuild | ConvertTo-html -Fragment) -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'"
-$html+="<h5><br>&nbsp;&nbsp;Currently installed:</h5>"
-        $html+=$CurrentUpdatesandHotfixes | ConvertTo-html -Fragment
+        $html+="<h5><br>&nbsp;&nbsp;Currently installed:</h5>"
+        $html+=$CurrentUpdatesandHotfixes | sort-object -Property @{Expression={$_.PSComputerName}; Ascending=$true}, @{Expression={$_.HotFixID} ;Descending=$true} | ConvertTo-html -Fragment
         $html=$html -replace '<td>GGRREEEENN','<td style="background-color: #40ff00">'`
                     -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
                     -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
@@ -4953,7 +5081,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $VMSwitchandAdapterconfigurationkey+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-NetAdapterInterfaceDescriptions=two NICs</h5>"
         $VMSwitchandAdapterconfigurationkey+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://www.dell.com/support/kbdoc/en-us/000200052/dell-azure-stack-hci-non-converged-network-configuration' target='_blank'>Ref: https://www.dell.com/support/kbdoc/en-us/000200052/dell-azure-stack-hci-non-converged-network-configuration</a></h5>"
         $html+=$VMSwitchandAdapterconfigurationkey
-        $html+=$VMSwitchandAdapterconfiguration | ConvertTo-html -Fragment
+        $html+=$VMSwitchandAdapterconfiguration | sort-object PSComputerName | ConvertTo-html -Fragment
         $html=$html `
          -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
          -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'                
@@ -5488,7 +5616,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $GetVMHostSB+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-VirtualMachineMigrationPerformanceOption=SMB</h5>"
         $html+=$GetVMHostSB
         #####$GetVMHost
-        $html+=$GetVMHost | ConvertTo-html -Fragment
+        $html+=$GetVMHost | sort-object PSComputerName | ConvertTo-html -Fragment
         $html=$html `
          -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
          -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
@@ -6162,7 +6290,15 @@ $html=""
             $PageFileInfoOut=""
             $PageFileInfoOut=$GetComputerInfo | Select-Object `
                 @{L="ComputerName";E={$_.CsName}},`
-                @{L="PageFileSize(MB)";E={$PFS=$_.OsFreeSpaceInPagingFiles/1KB;IF($PFS -ne (51200 + $ClusterName.BlockCacheSize) -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$PFS}Else{$PFS}}},`
+                @{L="PageFileSize(MB)";E={$PFS=$_.OsFreeSpaceInPagingFiles/1KB;
+                  IF($PFS -ne (51200 + $ClusterName.BlockCacheSize) -and $SysInfo[0].SysModel -notmatch "^APEX"){
+                    IF($PFS -gt (51200 + $ClusterName.BlockCacheSize)){
+                      "YYEELLLLOOWW"+$PFS
+                    } else {
+                      "RREEDD"+$PFS
+                    }
+                  }Else{$PFS}
+		}},`
                 @{L="BlockCacheSize";E={$ClusterName.BlockCacheSize}}
          }
       # HTML Report
