@@ -26,6 +26,11 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/05/16:v1.66 -  1. New Update: TP - New version 1.66 DEV
+                        2. New Feature: TP - New tables for updates on Azure local 23H2 and Apex
+                        3. New Feature: TP - Added new table Solution and SBE Updates
+                        4. New Feature: TP - Check for CAU Role Automatic Updates
+    
     2025/05/14:v1.65 -  1. New Update: TP - New version 1.65 DEV
                         2. Bug Fix: SA - Suppress remove old logfile error
                         3. Bug Fix: SA - Only warn if pagefile is larger than expected
@@ -139,7 +144,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.65"
+$CluChkVer="1.66"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -909,7 +914,7 @@ IF($SysInfo[0].SysModel -match "^APEX"){
 } elseif ($SysInfo[0].SysModel -like "AX-?40"){
 	$GenerationNodes = "14g"
 } else {
-	$GenerationNodes ="unknown"
+	$GenerationNodes ="APEX"
 }
 }
 
@@ -932,7 +937,7 @@ Write-Warning 'Unable to download support matrix'
 $SMLinks = $SMVersion.Links | Where-Object {$_.outerHTML -match "Azure Local Support Matrix"} | Select-Object -ExpandProperty href
 
 #Select the latest support matrix
-if ($GenerationNodes -eq "unknown") {
+if ($GenerationNodes -eq "APEX") {
 	# unknown node type, just use the last catalog
 	$LatestLink=$SMlinks | Sort-Object {[regex]::Matches($_, "(?<=\/)\d+").Value | ForEach-Object {[int]$_}} -Descending | select -First 1
 } else {
@@ -2228,7 +2233,8 @@ $Name=""
                 '0'{'Disabled'}
                 '1'{'Enabled'}}}
         }},@{Label="Quorum";Expression={@("Static","Dynamic","Unknown")[$_.DynamicQuorum]}},
-        @{Label="Mixed Mode";Expression={if (($SDDCFiles."GetClusterNodeSupportedVersion").ClusterFunctionalLevel.count -gt 1) {'RREEDDTrue'} else {'False'}}}
+        @{Label="Mixed Mode";Expression={if (($SDDCFiles."GetClusterNodeSupportedVersion").ClusterFunctionalLevel.count -gt 1) {'RREEDDTrue'} else {'False'}}},
+        @{L="CAU Auto Update";E={$CauRole=$SDDCFiles."GetCauClusterRole";if ($CauRole) {if ($CauRole[1].value.value -eq "Online" -and $CauRole[-1].value -gt -1 -and $CauRole[-2].value.value -gt '' -and $CauRole[2].value -lt (Get-Date).AddDays(30)) {"RREEDDEnabled"}else{"Disabled"}}}}
         #$ClusterName | FT -AutoSize -Wrap
 
         #Azure Table
@@ -4448,6 +4454,30 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
         $Name="Recommended Updates and Hotfixes"
         Write-Host "    Gathering $Name..."  
         $OSVersion=$OSVersionNodes
+        If ($SysInfo[0].AzureLocalVersion -gt "") {
+           Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -ErrorAction Stop -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
+           $SUVersions=(([xml](Get-Content $env:temp\outfile.xml)).ASZSolutionBundleUpdates.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} 
+           Invoke-WebRequest -Uri "https://aka.ms/AzureStackSBEUpdate/DellEMC" -UseBasicParsing -OutFile $env:temp\outfile.xml
+           $SBEVersions=(([xml](Get-Content $env:temp\outfile.xml)).SBEUpdatesManifest.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} | ? Family -match $GenerationNodes
+           $CurrentUpdatesandHotfixes=Foreach ($key in ($SDDCFiles.keys -like "*GetStampInformation")) { $SDDCFiles."$key" |`
+              Select-Object @{Label="PSComputerName";Expression={$key.replace("GetStampInformation","")}},@{Label='SBE Version';Expression={$sbever=$_.OemVersion;"YYEELLLLOOWW"*([Version]$SBEVersions[-1].Version -ne [version]$sbever)+$sbever}},
+             @{Label='MS Solution';Expression={$suver=$_.StampVersion;"YYEELLLLOOWW"*([Version]$SUVersions[-1].Version -ne [version]$suver)+$suver}},@{Label='Deployed Version';Expression={$_.InitialDeployedVersion}},
+             @{Label='Next SBE';Expression={if ([Version]$SBEVersions[-1].Version -ne [version]$_.OemVersion) {($SBEVersions | ? RequiredSBE -match $_.OemVersion | ? RequiredSolution -match (([version]$_.StampVersion).major.tostring()+"."+([version]$_.StampVersion).minor))[-1].Version}}},
+             @{Label='Next MS SU';Expression={if ([Version]$SUVersions[-1].Version -ne [version]$_.StampVersion) {($SUVersions | ? RequiredSolution -match (([version]$_.StampVersion).major.tostring()+"."+([version]$_.StampVersion).minor))[-1].Version}}}
+
+
+           }
+           
+           
+           
+           $html+='<H2 id="RecommendedUpdatesandHotfixes">Recommended Updates and Hotfixes</H2>'
+           $html+="<h5><b>Should be:</b></h5>"
+           $html+="<h5>&nbsp;&nbsp;Latest Solution Update from MS: $($SUVersions[-1].Version)</h5>"
+           $html+="<h5>&nbsp;&nbsp;Latest SBE Update from Dell: $($SBEVersions[-1].Version)</h5>"
+           $html+="<h5><br>&nbsp;&nbsp;Currently installed:</h5>"
+           $html+=$CurrentUpdatesandHotfixes | sort-object -Property @{Expression={$_.PSComputerName}; Ascending=$true} | ConvertTo-html -Fragment
+        } else {
+        
 #Returns the download link of KB from Microsoft catalog
 Add-Type @"
 using System.Net;
@@ -4807,7 +4837,7 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
             }
         }
 #$CurrentOSBuild
-
+    
         $html+='<H2 id="RecommendedUpdatesandHotfixes">Recommended Updates and Hotfixes</H2>'
         $html+="<h5><b>Should be:</b></h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Lastest $($KBLatest.KBNumber)</h5><br>"
@@ -4815,6 +4845,8 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
         $html+=($CurrentOSBuild | ConvertTo-html -Fragment) -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'"
         $html+="<h5><br>&nbsp;&nbsp;Currently installed:</h5>"
         $html+=$CurrentUpdatesandHotfixes | sort-object -Property @{Expression={$_.PSComputerName}; Ascending=$true}, @{Expression={$_.HotFixID} ;Descending=$true} | ConvertTo-html -Fragment
+    }    
+        
         $html=$html -replace '<td>GGRREEEENN','<td style="background-color: #40ff00">'`
                     -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
                     -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
@@ -4826,6 +4858,36 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
         $dstop=Get-Date
         #Write-Host "Total time taken is $(($dstop-$dstart).totalmilliseconds)"
 #endregion Recommended updates and hotfixes for Windows Server
+
+#Solution and SBE Updates
+        If ($SysInfo[0].AzureLocalVersion -gt "") {
+           $Name="Solution and SBE Updates"
+           #Write-Host "    Gathering $Name..."
+           $SolutionUpdates=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -match 'GetSolutionUpdate' }| Select-Object -First 1)" |`
+           Sort-Object ResourceId | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},MinVersionRequired,MinSBEVersionRequied,ComponentVersions
+        
+            #Azure Table
+               $AzureTableData=@()
+               $AzureTableData=$ClusterHeartbeatConfigurationXml | Select *,
+                   @{L='ReportID';E={$CReportID}}
+               $PartitionKey=$Name -replace '\s'
+               $TableName="CluChk$($PartitionKey)"
+               $SasToken='?sv=2019-02-02&si=CluChkUpdate&sig=f69DyaUGlwcc%2BUujAbpnJ%2B4VPk3PigwCgjIIa0DQCQY%3D&tn=CluChkClusterHeartbeatConfiguration'
+               $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
+
+           #HTML Report
+           $html+='<H2 id="SolutionandSBEUpdates">Solution and SBE Updates</H2>'
+           $html+=$SolutionUpdates | ConvertTo-html -Fragment
+           $html=$html `
+           -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
+           -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
+           $html+="<h5>&nbsp;&nbsp;<a href='https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2' target='_blank'>Ref: https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2</a></h5>"
+           $ResultsSummary+=Set-ResultsSummary -name $name -html $html
+           $htmlout+=$html
+           $html=""
+           $Name=""
+        }
+#end region Solution and SBE Updates
 
 # Firewall Profile
         $Name="Firewall Profile"
