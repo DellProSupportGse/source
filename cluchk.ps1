@@ -26,6 +26,17 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/06/23:v1.67 -  1. New Update: TP - New version 1.67 DEV
+                        2. New Update: JG - Rewrote the Support Matrix scrapter to use API instead of HTML parsing
+                        3. New Update: JG - Rewrote Convert-HtmlTableToPsObject to account for possible Null values
+                        4. New Update: JG - Physical Disks - Updated for all the changes to SM Scrapter & Convert-HtmlTableToPsObject
+                        5. New Update: JG - Physical Disks - Added Kioxia drives to the table
+                        6. New Update: JG - $GenerationNodes added AX740XD support
+                        7. New Update: TP - $GenerationNodes added R?40?? Storage Spaces Direct support
+                        8. New Feature: TP - Change all throw commands to Write-Warning so script will not stop
+                        9. New Feature: TP - Only Invoke HTML file if CluChk is run on a system with a browser
+
+
     2025/05/16:v1.66 -  1. New Update: TP - New version 1.66 DEV
                         2. New Feature: TP - New tables for updates on Azure local 23H2 and Apex
                         3. New Feature: TP - Added new table Solution and SBE Updates
@@ -144,7 +155,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.66"
+$CluChkVer="1.67"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -158,112 +169,114 @@ $DateTime=Get-Date -Format yyyyMMdd_HHmmss;Start-Transcript -NoClobber -Path "$T
 [system.gc]::Collect()
 #endregion
 
-# Function to convert HTML table to PowerShell object
+# Function to convert HTML table to PowerShell objects
 function Convert-HtmlTableToPsObject {
     param (
         [string]$HtmlContent
     )
 
-    # Define regular expressions to match table names, tables, rows, and cells
     $tableRegex = '(?s)<h3 id="([^"]+)">(.*?)</h3>.*?<table[^>]*>(.*?)</table>'
     $tableNoNameRegex = '(?s)<table[^>]*>(.*?)</table>'
-    $rowRegex = '<t[^>]*>(.*?)</?tr>'
+    $rowRegex = '<tr[^>]*>(.*?)</tr>'
     $thCellRegex = '<th[^>]*>(.*?)</th>'
     $tdCellRegex = '(.*?)</td>'
     $rowSpanRegex = 'rowspan="(\d+)"'
 
-    # Find tables in HTML content
-    $NoName=$false
+    $NoName = $false
     $tableMatches = [regex]::Matches($HtmlContent, $tableRegex)
-    If ($tableMatches.count -eq 0) {
+    if ($tableMatches.Count -eq 0) {
         $tableMatches = [regex]::Matches($HtmlContent, $tableNoNameRegex)
-        $NoName=$true
+        $NoName = $true
     }
 
     $result = @{}
-    $tableNo=0
+    $tableNo = 0
+
     foreach ($tableMatch in $tableMatches) {
-        If ($NoName) {
-            $tableName=$tableNo
+        if ($NoName) {
+            $tableName = $tableNo
             $tableNo++
             $tableHtml = $tableMatch.Groups[1].Value
         } else {
             $tableName = $tableMatch.Groups[2].Value
             $tableHtml = $tableMatch.Groups[3].Value
         }
-        #Write-Host "Table Name is $tableName"
-        # Get column headers from <th> cells
+
         $headers = @()
         [regex]::Matches($tableHtml, $thCellRegex) | ForEach-Object {
-            $headers += $_.Groups[1].Value
-        }
-        #Write-Host "Headers count is $($headers.count)"
-
-        # Find maximum rowspan value in the table (which is the number of rows)
-        $maxRowSpan = [regex]::Matches($tableHtml, $rowRegex).Count
-        #Write-Host "Number of rows are $maxRowSpan"
-        # Initialize the array to store rows
-        $rows = @()
-        for ($i = 0; $i -le $maxRowSpan; $i++) {
-            $rows += @{}
+            $header = $_.Groups[1].Value.Trim()
+            if (-not $header) { $header = "Column$($headers.Count + 1)" }
+            $headers += $header
         }
 
-        # Find table rows
         $rowMatches = [regex]::Matches($tableHtml, $rowRegex)
+        $rows = @()
         $rowIndex = 0
+
         foreach ($rowMatch in ($rowMatches | Select-Object -Skip 1)) {
-            #$rowData = [PSCustomObject]@{}
-            #$rowData = $rowData | Select-Object -Property $headers
-            $rowData = @{}
-            $rowHtml= $null
             $rowHtml = $rowMatch.Groups[1].Value
             $cellMatches = [regex]::Matches($rowHtml, $tdCellRegex)
-            If ($cellMatches.count -eq 0) {Write-Host "Rowhtml is $rowHtml"}
+            $rowData = @{}
             $colIndex = 0
+
             foreach ($cellMatch in $cellMatches) {
-                $curHeader=$headers[$colIndex]
-                $cell = $cellMatch.Groups[1].Value -replace "<td[^>]*>",""
-                $rowSpanMatch = [regex]::Match(($rowHtml -split '</td>')[$colIndex], $rowSpanRegex)
-                $rowSpan = 1
-                if ($rowSpanMatch.Success) {
-                    $rowSpan = [int]$rowSpanMatch.Groups[1].Value
-                }
-                if ($rowSpan -gt 1) {
-                    $rowData.$curHeader = $cell
-                    for ($j = 1; $j -lt $rowSpan-1; $j++) {
-                        if ($rows[$rowIndex + $j] -eq $Null) {
-                            $rows[$rowIndex + $j] = [PSCustomObject]@{}
-                            $rows[$rowIndex + $j] = $rows[$rowIndex + $j] | Select-Object -Property $headers
-                        }
-                        $rows[$rowIndex + $j].$curHeader = $cell
-                    }
+                if ($colIndex -ge $headers.Count) { continue }
+                $curHeader = $headers[$colIndex]
+
+                $cell = $cellMatch.Groups[1].Value
+                if ($cell) {
+                    $cell = $cell -replace "<td[^>]*>", ""
+                    $cell = $cell.Trim()
                 } else {
-                    $existingData = $null
-                    try {$existingData = $rows[$rowIndex].$curHeader} catch {$existingData = $null}
-                    if ($existingData -ne $null) {
-                        $rowData.$curHeader = $existingData
-                    } else {
-                        try {$rowData.$curHeader = $cell} catch {}
+                    $cell = $null
+                }
+
+                $rowSpan = 1
+                $splitCells = $rowHtml -split '</td>'
+                if ($colIndex -lt $splitCells.Count) {
+                    $rowSpanMatch = [regex]::Match($splitCells[$colIndex], $rowSpanRegex)
+                    if ($rowSpanMatch.Success) {
+                        $rowSpan = [int]$rowSpanMatch.Groups[1].Value
                     }
                 }
+
+                $rowData[$curHeader] = $cell
+
+                if ($rowSpan -gt 1) {
+                    for ($j = 1; $j -lt $rowSpan; $j++) {
+                        $targetIndex = $rowIndex + $j
+                        while ($rows.Count -le $targetIndex) {
+                            $rows += @{}
+                        }
+                        $rows[$targetIndex][$curHeader] = $cell
+                    }
+                }
+
                 $colIndex++
             }
-            # Update row data in the array
-            #if ($colIndex -lt $headers.count-1) {throw 'ready to test copy'}
-            $rows[$rowIndex] = $rows[$rowindex]+$rowdata
+
+            while ($rows.Count -le $rowIndex) {
+                $rows += @{}
+            }
+
+            foreach ($k in $rowData.Keys) {
+                $rows[$rowIndex][$k] = $rowData[$k]
+            }
+
             $rowIndex++
         }
 
-        # Add the rows for this table to the hashtable
-        $result[$tableName] = $rows
+        $psRows = $rows | ForEach-Object { [PSCustomObject]$_ }
+        $result[$tableName] = $psRows
     }
 
-    # Output the hashtable
     return $result
 }
+
+
 #region Cleanup CluChk Transcripts older than 10 days
 function TLogCleanup {
-    Get-ChildItem $TlogLoc | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-10)} | Foreach {Remove-Item $_.Fullname -force -ErrorAction SilentlyContinue}
+    Get-ChildItem $TlogLoc -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-10)} | Foreach {Remove-Item $_.Fullname -force -ErrorAction SilentlyContinue}
   # Cleanup chipset extract
     Remove-Variable IntelChipset* -Scope Local  -ErrorAction SilentlyContinue
     IF($IntelChipsetDownloadLocation){Remove-Item $IntelChipsetDownloadLocation}
@@ -282,7 +295,7 @@ If (!(Get-ChildItem -Path "C:\ProgramData\Dell\htmlagilitypack" -ErrorAction Sil
    invoke-webrequest -Uri "https://www.nuget.org/api/v2/package/HtmlAgilityPack\1.11.46" -OutFile "$env:TEMP\htmlagilitypack.nupkg.zip" -TimeoutSec 30
    } 
    catch {
-   Throw ('Unable to download HTMLAgilityPack')
+   Write-Warning ('Unable to download HTMLAgilityPack')
    }
    finally {
        # Find the htmlagilitypack.dll
@@ -802,7 +815,7 @@ try {
 invoke-webrequest -Uri "https://www.nuget.org/api/v2/package/HtmlAgilityPack/1.11.46" -OutFile "$env:TEMP\htmlagilitypack.nupkg.zip"
 } 
 catch {
-Throw ('Unable to download HTMLAgilityPack')
+Write-Warning ('Unable to download HTMLAgilityPack')
 }
 
 # Find the htmlagilitypack.dll
@@ -911,7 +924,7 @@ IF($SysInfo[0].SysModel -match "^APEX"){
 	$GenerationNodes = "16g"
 } elseif ($SysInfo[0].SysModel -like "AX-?50"){
 	$GenerationNodes = "15g"
-} elseif ($SysInfo[0].SysModel -like "AX-?40"){
+} elseif (($SysInfo[0].SysModel -like "AX-?40") -or ($SysInfo[0].SysModel -like "AX-?40??") -or ($SysInfo[0].SysModel -like "R?40*Storage Spaces Direct*")){
 	$GenerationNodes = "14g"
 } else {
 	$GenerationNodes ="APEX"
@@ -920,115 +933,111 @@ IF($SysInfo[0].SysModel -match "^APEX"){
 
 #region Gather the Support Matrix for Microsoft HCI Solutions
 Write-Host "    Gathering Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI..."
-if ($OSVersion -eq "2016" -or $OSversion -match "2012") {$URL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/archive/ws2016/'} else {
-#$webClient = [System.Net.WebClient]::new()
-$SMRevHistLatest=""
-#URL for Dell Technologies Solutions for Microsoft Azure Stack Support Matrix
-#$OutFile="$env:TEMP\supmatrix.html"
-$SMURL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/'
-try {
-$SMVersion = invoke-webrequest $SMURL -UseBasicParsing -TimeoutSec 30
-}
-catch {
-Write-Warning 'Unable to download support matrix'
-}
+$repo = "dell/azurestack-docs"
+$basePath = "content/en/docs/hci/SupportMatrix"
+$headers = @{ "User-Agent" = "PowerShell" }
 
-#Filter for links "Azure Stack HCI Support Matrix" in the text
-$SMLinks = $SMVersion.Links | Where-Object {$_.outerHTML -match "Azure Local Support Matrix"} | Select-Object -ExpandProperty href
+# Step 1: Get SupportMatrix versions
+$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing
+$latestFolder = $topResponse | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d{4}$' } |
+    Sort-Object name -Descending | Select-Object -First 1
+$latestVersion = $latestFolder.name
+$latestVersionPath = "$basePath/$latestVersion"
 
-#Select the latest support matrix
-if ($GenerationNodes -eq "APEX") {
-	# unknown node type, just use the last catalog
-	$LatestLink=$SMlinks | Sort-Object {[regex]::Matches($_, "(?<=\/)\d+").Value | ForEach-Object {[int]$_}} -Descending | select -First 1
-} else {
-	# use model based catalog
-	$LatestLink=$SMlinks | where-object {$_ -like "*"+$GenerationNodes+"*"} | Sort-Object {[regex]::Matches($_, "(?<=\/)\d+").Value | ForEach-Object {[int]$_}} -Descending | select -First 1
-}
+# Step 2: Get platform folders under latest version
+$platformFolders = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$latestVersionPath" -Headers $headers |
+    Where-Object { $_.type -eq 'dir' }
 
-# Remove the trailing forward slash ("/") if it exists 
-$LatestLink=$LatestLink.trim('/')
+# Step 3: Choose platform folder (update this as needed)
+$matchedPlatform = $platformFolders | Where-Object { $_.name -imatch $GenerationNodes }
+$mdUrl = $null
 
-#Create a customer object with the revision and link
-$resultObject = [PSCustomObject] @{
-REVISION    = ($LatestLink -split '/')[-1]
-LINK = $LatestLink
+if ($matchedPlatform) {
+    $mdPath = "$latestVersionPath/$($matchedPlatform.name)"
+    $mdIndex = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$mdPath" -Headers $headers |
+        Where-Object { $_.name -eq "_index.md" }
+    $mdUrl = $mdIndex.download_url
 }
 
-$SMRevHistLatest=$resultObject | Select-Object -Last 1
-
-# Set the URL of the Lastest Support Matrix
-#$URL = 'https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/2302/'
-$URL = $SMRevHistLatest.link
-}
-# Download the HTML content of the webpage
-try {
-$SMresponse = invoke-webrequest $URL -UseBasicParsing -TimeoutSec 30
-#$SMresponse = (new-object System.net.webclient).DownloadString($URL)
-}
-catch {
-Throw ('Unable to download suppot matrix (2)')
+if (-not $mdUrl) {
+    Write-Warning "No matching _index.md found for platform $GenerationNodes"
 }
 
-# Parse the HTML content using HtmlAgilityPack
-#$html1 = New-Object HtmlAgilityPack.HtmlDocument
-#$html1.LoadHtml($SMresponse.Content)
-$html1 = Convert-HtmlTableToPsObject -HtmlContent $SMresponse.Content
+# Check for archive Support Matrix
+if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}Else{
+$mdUrl}
 
-# Retrieve all tables from the HTML content
-#$tables = $html1.DocumentNode.SelectNodes("//table")
 
-# Loop through each table and retrieve the data
-$SupportMatrixtableData = @{}
-foreach ($table in $html1.Keys) {
-    # Retrieve the name of the table from the preceding h3 element
-    $tableName = $table
 
-    # Create an object array to store the table data
-    $tableArray = @()
+# Step 4: Extract all HTML tables from _index.md
+$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
+$mdLines = $mdText -split "`n"
 
-    # Retrieve the header row of the table, if it exists
-    $headerData = @()
-    $headerData = ($html1.$table | gm | ? MemberType -eq NoteProperty).Name
-    #if ($headerRow) {
-    #    $headerData = $headerRow.Descendants("th") | Select-Object -ExpandProperty InnerText
-    #}
+# Initialize variables
+$NamedTables = @{}
+$currentTitle = $null
+$tableBuffer = @()
+$inTable = $false
 
-    # Retrieve the data rows of the table
-    $dataRows = ($html1.$table | Select -Skip 1 | gm | ? MemberType -eq NoteProperty).Name
-    <#foreach ($row in $dataRows | select -skip 1) {
-        # Loop through the cells of the row and add them to the table array
-        $rowData = @{}
-        $cellIndex = 0
-        foreach ($cell in $row.Descendants("td")) {
-            if ($headerData) {
-                $rowData.Add($headerData[$cellIndex], $cell.InnerText)
-            } else {
-                $rowData.Add("Column" + $cellIndex, $cell.InnerText)
+foreach ($line in $mdLines) {
+    $trimmed = $line.Trim()
+
+    # Match markdown table section heading
+    if ($trimmed -match '^###\s+(.*)') {
+        # Save previously collected table if any
+        if ($currentTitle -and $tableBuffer.Count -gt 0) {
+            $html = ($tableBuffer -join "`n").Trim()
+            if ($html -like '<table*') {
+                Write-Host "Parsed table: $currentTitle"
+                $NamedTables[$currentTitle] = Convert-HtmlTableToPsObject -HtmlContent $html
             }
-            $cellIndex++
         }
-        $tableArray += $rowData
-    }#>
+        $currentTitle = $Matches[1].Trim()
+        $tableBuffer = @()
+        continue
+    }
 
-    # Add the table array to the table data object with the table name as the key
-    $SupportMatrixtableData.Add($tableName, ($html1.$table | Select-Object -Skip 1))
+    # Begin collecting table HTML block
+    if ($trimmed -eq '{{< rawhtml >}}') {
+        $inTable = $true
+        $tableBuffer = @()
+        continue
+    }
+
+    # End collecting table HTML block
+    if ($trimmed -eq '{{< /rawhtml >}}') {
+        $inTable = $false
+        if ($currentTitle -and $tableBuffer.Count -gt 0) {
+            $html = ($tableBuffer -join "`n").Trim()
+            if ($html -like '<table*') {
+                Write-Host "Parsed table: $currentTitle"
+                $NamedTables[$currentTitle] = Convert-HtmlTableToPsObject -HtmlContent $html
+            }
+        }
+        $tableBuffer = @()
+        continue
+    }
+
+    # Accumulate lines inside table block
+    if ($inTable) {
+        $tableBuffer += $line
+    }
+}
+
+# Handle any final dangling table at end of file
+if ($currentTitle -and $tableBuffer.Count -gt 0) {
+    $html = ($tableBuffer -join "`n").Trim()
+    if ($html -like '<table*') {
+        Write-Host "Parsed final table: $currentTitle"
+        $NamedTables[$currentTitle] = Convert-HtmlTableToPsObject -HtmlContent $html
+    }
 }
 
 # Convert the table data to XML
-$SMxml = $SupportMatrixtableData | ConvertTo-Xml -As String -NoTypeInformation
+$SMxml = $NamedTables | ConvertTo-Xml -As String -NoTypeInformation
+$SupportMatrixtableData = $NamedTables
 
-
-<#$pageContent = invoke-webrequest -UseBasicParsing -Method GET -Uri $url  -TimeoutSec 30
-$SMTableNames=$pageContent.ParsedHtml.getElementsByTagName('h3') | Foreach {$_.InnerText}
-$SupportMatrixtableData=@{}
-$i=0
-foreach ($table in ($pageContent.ParsedHtml.getElementsByTagName('table'))) {
-    $SupportMatrixtableData.Add($SMTableNames[$i],(ConvertFrom-CSV -Delimiter "``" ($table | Foreach{($_.InnerHTML) -replace "</td>","``" -replace "</th>","``" -replace "`r`n",""`
-     -split "<tr>" -replace "(<br>)+","," -replace "<[^>]*>",""}))) #Delimeter is backtick
-    $i++
-}#>
-#foreach ($a in ($SupportMatrixtableData.'Network Adapters')) {foreach ($b in ($a | gm -MemberType Properties).Name) {if (-not $a.$b) {$a.$b=$c.$b;echo 'Caught it'}} $c=$a}
-
+#$SupportMatrixtableData.Values.values
 
 #endregion Support Matrix
 
@@ -3119,10 +3128,14 @@ $htmlout+=$html
             "Dell Ent NVMe v2 AGN RI U.2"       {"MZWLR6T4HALA-00AD3"}
             "Dell Ent NVMe PM1733a RI"          {"MZWLR15THBLAAD3"}
             "Dell Ent NVMe CM6"                 {"KCM6XVUL1T60"}
-	    "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
+	        "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
             "Dell Ent NVMe PM1735a"             {"MZWLR6T4HBLAAD3"}
             "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
             "Dell Express Flash CD5"            {"KCD5XLUG3T84"}
+            "Dell DC NVMe CD8 U.2 960GB"        {"KCD8XRUG960G"}
+            "Dell DC NVMe CD8 U.2 1.92TB"       {"KCD8XRUG1T92"}
+            "Dell DC NVMe CD8 U.2 3.84TB"       {"KCD8XRUG3T84"}
+            "Dell DC NVMe CD8 U.2 7.68TB"       {"KCD8XRUG7T68"}
             default {$_}
         }}},`
         @{Label='SerialNumber';Expression={
@@ -3146,7 +3159,6 @@ $htmlout+=$html
         @{Label='Usage';Expression={`
             @('Unknown','AutoSelect-Object','ManualSelect-Object','HotSpare','Retired','Journal')[$_.Usage]
         }},@{Label='Size';Expression={Convert-BytesToSize $_.Size}},@{Label='AllocatedSize';Expression={Convert-BytesToSize $_.AllocatedSize}},@{Label='Utilization';Expression={"{0:N2}" -f ($_.AllocatedSize/$_.Size)}},FirmwareVersion|Sort-Object SlotNumber,HealthStatus -Descending
-        #$PhysicalDisks | FT * -AutoSize -Wrap
     
     #Check if each disk is no more than 10% different that the max Utilization
     $UtlMax=($PhysicalDisks |?{$_.Usage -imatch "autoselect"} | Measure-Object -Property Utilization -Maximum).Maximum
@@ -3155,13 +3167,12 @@ $htmlout+=$html
 
     $diskmdls=($PhysicalDisks | Select-Object Model -Unique).Model
 #Find all drives from Dell Support matrix
-        #$SMFWDiskTable=@()
-        #$SMFWDiskTable=$SupportMatrixtableData | ?{$_.Values | Where-Object { $_.ContainsKey("Use")}}
         $resultObject=@()
         ForEach ($diskmdl in $diskmdls) {
         try {
             $SMDrive=$null
-            $SMDrive=$SupportMatrixtableData.values| % {if ($_.Model -eq $diskmdl) {$_ | ConvertTo-Json | ConvertFrom-Json}}
+            $SMDrive= $SupportMatrixtableData.Values.Values | ForEach-Object {$_ | Where-Object { $_.Model -eq $diskmdl }}
+
             $SMDrive=$SMDrive | Where Model -eq $diskmdl | Sort 'Firmware Min*' -Descending | Select -First 1
                     #Create a customer object
                         $resultObject += [PSCustomObject] @{
@@ -3183,7 +3194,6 @@ $htmlout+=$html
 
         }
         $SMFWDiskData = $resultObject
-#$SMFWDiskData
 
     # Find host physcially connected
       $GetStorageFaultDomain=@()
@@ -6677,7 +6687,7 @@ IF($selection -ne "4"){
     if (Test-Path "$HtmlReport") {Remove-Item $HtmlReport}
     Out-File -FilePath $HtmlReport -InputObject $htmloutReport -Encoding ASCII
     # open HTML file
-    Invoke-Item($HtmlReport)
+    if (test-path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.html\UserChoice) {Invoke-Item($HtmlReport)}
 }
 #endregion  Create CluChk Html Report
 
@@ -6695,7 +6705,7 @@ IF($SDDCPerf -ieq "YES"){
     $HtmlReport= Join-Path -Path $CluChkReportLoc -ChildPath CluChkPerfReport_v$CluChkVer-$DTString$SDDCFileName.html
     Write-Host ("Report Output location: " + $HtmlReport)
     # open HTML file
-    Invoke-Item($HtmlReport)
+    if (test-path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.html\UserChoice) {Invoke-Item($HtmlReport)}
 }
 #endregion  Create CluChk Html Report
 
