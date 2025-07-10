@@ -26,6 +26,11 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/07/10:v1.68 -  1. New Update: TP - New version 1.68 DEV
+                        2. New Update: TP - If a vm switch has no virtual adapter will mark RED with Note about health checks failing
+                        3. New Update: TP - Reads GetActionPlanInstancesToComplete to find Errors. More to be done.gci 
+                        4. Bug Fix: TP - Fixed Update Out of Box drivers now that we use the new method for the support matrix.
+    
     2025/06/23:v1.67 -  1. New Update: TP - New version 1.67 DEV
                         2. New Update: JG - Rewrote the Support Matrix scrapter to use API instead of HTML parsing
                         3. New Update: JG - Rewrote Convert-HtmlTableToPsObject to account for possible Null values
@@ -155,7 +160,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.67"
+$CluChkVer="1.68"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -966,7 +971,7 @@ if (-not $mdUrl) {
 # Check for archive Support Matrix
 if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}Else{
 $mdUrl}
-
+$SMRevHistLatest=($mdURL -replace "https://raw.githubusercontent.com/dell/azurestack-docs/main/content/en","https://dell.github.io/azurestack-docs" -replace "_index.md","").ToLower()
 
 
 # Step 4: Extract all HTML tables from _index.md
@@ -4145,11 +4150,17 @@ If($LiveMigrationNetworkPrioritiesOut.count -eq 0){$html+='<h5><span style="colo
 $previousVersion = ''
 $previousOS = ''
 $previousPlatform = ''
-    ForEach($SMNicData in $SMFWDRVRTable){
-
+$previousComponent= ''
+$previousPN=''
+    ForEach($SMNicData in $SMFWDRVRTable[0]){
+if (!($SMNicData | gm | ? Name -match 'Component')) {$SMNicData | Add-Member -NotePropertyName Component -NotePropertyValue ''}
+if (!($SMNicData | gm | ? Name -match 'Part Number')) {$SMNicData | Add-Member -NotePropertyName 'Part Number' -NotePropertyValue ''}
 if ($SMNicData.'Driver Minimum Supported Version'.length -eq 0) { $SMNicData.'Driver Minimum Supported Version' = $previousVersion }
 if ($SMNicData.'Supported OS'.length -eq 0) { $SMNicData.'Supported OS' = $previousOS }
 if ($SMNicData.'Supported Platforms'.length -eq 0) { $SMNicData.'Supported Platforms' = $previousPlatform }
+if ($SMNicData.Component.length -eq 0) { $SMNicData.Component = $previousComponent }
+if ($SMNicData.'Part Number'.length -eq 0) { $SMNicData.'Part Number' = $previousPN }
+
 
 <#
         # manual table fixes, the support site sometimes does not have the correct driver version listed
@@ -4179,6 +4190,9 @@ switch ($SMNicData['Driver Software Bundle']) {
 $previousVersion = $SMNicData.'Driver Minimum Supported Version'
 $previousOS = $SMNicData.'Supported OS'
 $previousPlatform = $SMNicData.'Supported Platforms'
+$previousComponent = $SMNicData.Component
+$previousPN = $SMNicData.'Part Number'
+
     }
 
     $SMFWDRVRData+=$resultObject
@@ -4193,7 +4207,7 @@ $previousPlatform = $SMNicData.'Supported Platforms'
 $previousVersion = ''
 $previousOS = ''
 $previousPlatform = ''
-    ForEach($SMStorageCtrlData in $SMFWDRVRTable){
+    ForEach($SMStorageCtrlData in $SMFWDRVRTable[0]){
 
 if ($SMStorageCtrlData.'Driver Minimum Supported Version'.length -eq 0) { $SMStorageCtrlData.'Driver Minimum Supported Version' = $previousVersion }
 if ($SMStorageCtrlData.'Supported OS'.length -eq 0) { $SMStorageCtrlData.'Supported OS' = $previousOS }
@@ -4227,7 +4241,7 @@ $previousPlatform = $SMStorageCtrlData.'Supported Platforms'
 $previousVersion = ''
 $previousOS = ''
 $previousPlatform = ''
-    ForEach($SMBaseData in $SMFWDRVRTable){
+    ForEach($SMBaseData in $SMFWDRVRTable[0]){
 
 if ($SMBaseData.'Driver Minimum Supported Version'.length -eq 0) { Add-Member -Force -InputObject $SMBaseData -MemberType NoteProperty -Name 'Driver Minimum Supported Version' -Value $previousVersion }
 if ($SMBaseData.'Supported OS'.length -eq 0) { Add-Member -Force -InputObject $SMBaseData -MemberType NoteProperty -Name 'Supported OS' -Value $previousOS }
@@ -4435,13 +4449,13 @@ $UpdateOutofBoxdriverstbl.rows.add($row)
         # HTML Report
     $html+='<H2 id="UpdateOutofBoxdrivers">Update Out of Box drivers</H2>'
     $html+="&nbsp;&nbsp;&nbsp;&nbsp;Drivers should be listed once else drivers not same on all nodes"
-    $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;<a href='$($SMRevHistLatest.link)' target='_blank'>Ref: Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI</a></h5>"
+    $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;<a href='$SMRevHistLatest' target='_blank'>Ref: Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI</a></h5>"
     
     $html+=$UpdateOutofBoxdriversOut | sort DeviceName -Unique | ConvertTo-html -Fragment
     $html=$html `
       -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
       -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
-    $html+="&nbsp;*Available versions from Support Matrix Revision: "+($SMRevHistLatest.Revision)
+    $html+="&nbsp;*Available versions from Support Matrix Revision: "+($SMRevHistLatest.split('/')[-2])
     IF($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") {
         $html+="<h5><b>&nbsp;!!! This script does not check against SBE package versions !!!</b></h5>"
     }
@@ -4870,6 +4884,8 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
 #endregion Recommended updates and hotfixes for Windows Server
 
 #Solution and SBE Updates
+        $Name="Solution and SBE Updates"
+        Write-Host "    Gathering $Name..."  
         If ($SysInfo[0].AzureLocalVersion -gt "") {
            $Name="Solution and SBE Updates"
            #Write-Host "    Gathering $Name..."
@@ -4898,6 +4914,41 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
            $Name=""
         }
 #end region Solution and SBE Updates
+
+#Latest Action Plan Failure
+If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse).count) {
+        $Name="Latest Action Plan Failure"
+        Write-Host "    Gathering $Name..."
+        $ap=Get-Content (Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse | select -first 1).fullname
+        $derr=$ap | select-string -SimpleMatch 'ERROR:' -Context 10,1
+
+        $resultObject=@()
+        foreach ($ErrorMessage in $derr) {
+
+            $resultObject += [PSCustomObject] @{
+                PSComputerName                  = "RREEDD" + (($ErrorMessage.Context.PreContext | select-string 'Value') -split ': On ')[-1].trim(':')
+                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm tt")
+                Message                         = $ErrorMessage.Line.Trim()
+                
+            }
+        }
+        $ActionPlanErrors=$resultObject | sort PSComputerName,TimeStamp,Message -Unique
+        If ($ActionPlanErrors) {
+           #HTML Report
+           $html+='<H2 id="LatestActionPlanFailure">Latest Action Plan Failure</H2>'
+           $html+=$ActionPlanErrors | ConvertTo-html -Fragment
+           $html=$html `
+           -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
+           -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
+           #$html+="<h5>&nbsp;&nbsp;<a href='https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2' target='_blank'>Ref: https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2</a></h5>"
+           $ResultsSummary+=Set-ResultsSummary -name $name -html $html
+           $htmlout+=$html
+           $html=""
+           $Name=""
+        }
+}
+
+#end region Latest action Plan Failure
 
 # Firewall Profile
         $Name="Firewall Profile"
@@ -5075,9 +5126,12 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         Write-Host "    Gathering $Name..."
         $NetIfDes=""
         #$Note=@()
+        #$SDDCFiles.AZLCL02GetVMNetworkAdapter.switchname
+        $GetVMNetworkAdapter=Get-ChildItem -Path $SDDCPath -Filter "GetVMNetworkAdapter.XML" -Recurse -Depth 1 | import-clixml
+
         $GetNetAdapterXml=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapter")) {$SDDCFiles."$key"} 
         $VMSwitchandAdapterconfiguration=Foreach ($key in ($SDDCFiles.keys -like "*GetVMSwitch")) {$SDDCFiles."$key" |`
-        Sort-Object EmbeddedTeamingEnabled| Select-Object ComputerName,Name,SoftwareRscEnabled,EmbeddedTeamingEnabled,`
+        Sort-Object EmbeddedTeamingEnabled| Select-Object ComputerName,@{Label='Name';Expression={If ($GetVMNetworkAdapter.switchname -notcontains $_.Name -and $SysInfo[0].AzureLocalVersion -gt "") {"RREEDD"+$_.Name} else {$_.Name}}},SoftwareRscEnabled,EmbeddedTeamingEnabled,`
         @{Label='BandwidthReservationMode';Expression={
             IF(-not($SDDCFiles.ContainsKey("GetNetIntent"))){
                 IF(($_.EmbeddedTeamingEnabled -match 'True') -and ($_.BandwidthReservationMode -inotmatch 'Weight') -and $_.IOVEnabled -ne $true){"RREEDD"+$_.BandwidthReservationMode}Else{$_.BandwidthReservationMode}
@@ -5107,7 +5161,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         }}},BandwidthPercentage,SoftwareRscEnabled,NetAdapterInterfaceDescriptions,`
         @{Label='Note';Expression={IF($_.NetAdapterInterfaceDescriptions -match "Multiplexor"){"Found LBFO Teaming (Multiplexor). We should NOT use LBFO Teaming for Virtual Switch. Convert to SET"}}}
         }
-        # Check for 1 gig NICs in SET switch
+        # Check for 1 gig NICs in SET switch or no vm network adapter attached
             IF(($VMSwitchandAdapterconfiguration.NetAdapterInterfaceDescriptions -match "giga")`
                 -or ($VMSwitchandAdapterconfiguration.NetAdapterInterfaceDescriptions -match "1GB")){
                 $VMSwitchandAdapterconfiguration=$VMSwitchandAdapterconfiguration|`
@@ -5118,8 +5172,14 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                     IF(($_.NetAdapterInterfaceDescriptions -icontains "giga")`
                      -or ($_.NetAdapterInterfaceDescriptions -icontains "1GB")){"YYEELLLLOOWW"+$_.NetAdapterInterfaceDescriptions}
                 Else{$_.NetAdapterInterfaceDescriptions}}},`
-                @{Label='Note';Expression={IF($_.NetAdapterInterfaceDescriptions -match "YYEELLLLOOWW"){"Found 1 gig NICs in Virtual Switch. We should NOT use 1 gig NICs in Virtual Switch."}}}
+                @{Label='Note';Expression={IF($_.NetAdapterInterfaceDescriptions -match "YYEELLLLOOWW"){"Found 1 gig NICs in Virtual Switch. We should NOT use 1 gig NICs in Management Virtual Switch."}
+                IF($_.NetAdapterInterfaceDescriptions -match "RREEDD"){"This switch should have at least one VM or external adapter attached. Updates will fail health check"}}}
             }
+        $VMSwitchandAdapterconfiguration=$VMSwitchandAdapterconfiguration|`
+                Select-Object ComputerName,Name,EmbeddedTeamingEnabled,BandwidthReservationMode,BandwidthPercentage,NetAdapterInterfaceDescriptions,`
+                @{Label='Note';Expression={IF($_.NetAdapterInterfaceDescriptions -match "YYEELLLLOOWW"){"Found 1 gig NICs in Virtual Switch. We should NOT use 1 gig NICs in Management Virtual Switch."}
+                IF($_.Name -match "RREEDD"){"This switch should have at least one VM or external virtual adapter attached. Health check will fail."}}}
+
         #$VMSwitchandAdapterconfiguration|FT -AutoSize
         #Azure Table
             $AzureTableData=@()
