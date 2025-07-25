@@ -26,6 +26,11 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/07/25:v1.69 -  1. New Update: TP - New version 1.69 DEV
+                        2. New Update: TP - Added test-environment check for Last Action Plan Failure
+                        3. New Feature: TP - Mark mismatched UBR build numbers as errors
+                        4. New Update: TP - Pull system information into the html table if using the MS version of the SDDC
+
     2025/07/10:v1.68 -  1. New Update: TP - New version 1.68 DEV
                         2. New Update: TP - If a vm switch has no virtual adapter will mark RED with Note about health checks failing
                         3. New Update: TP - Reads GetActionPlanInstancesToComplete to find Errors. More to be done.gci 
@@ -160,7 +165,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.68"
+$CluChkVer="1.69"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -873,10 +878,24 @@ If ($ProcessSDDC -ieq 'y') {
                                 OSVersion     = $osInfo.OsVersion
                                 OSBuildNumber = $osInfo.OsBuildNumber
                                 OSName        = $osInfo.OSName.Replace('Microsoft','').Trim() # remove Microsoft
-				AzureLocalVersion = ''
+				                AzureLocalVersion = ''
                                 SysModel      = $osInfo.CsModel
                             }
 
+        }
+        if (!($GetComputerInfo)) {
+            $GetComputerInfo=gci $SDDCPath -Filter "Win32_OperatingSystem.xml" -Recurse -Depth 1 | Import-Clixml
+            
+            ForEach ($osInfo in $GetComputerInfo) {
+            $SysInfo += [PSCustomObject] @{
+                                HostName      = $osInfo.CsName
+                                OSVersion     = $osInfo.Version
+                                OSBuildNumber = $osInfo.BuildNumber
+                                OSName        = $osInfo.Caption.Replace('Microsoft','').Trim() # remove Microsoft
+				                AzureLocalVersion = ''
+                                SysModel      = (gc -Path "$SDDCPath\Node_$($osInfo.CsName)\SystemInfo.TXT" | Select-String "System Model: ").Line.split(":")[-1].Trim()
+                                } 
+            }
         }
 
 # determine os version, used later on
@@ -2550,10 +2569,15 @@ Foreach ($file in $filepath.fullname) {
 }
 $primarytz=($allproperties.'Time Zone' | Group-Object | sort count)[-1].name
 $HighestVersion = ($SysInfo | sort AzureLocalVersion -desc | select -first 1).AzureLocalVersion
+$NewestUBR=Foreach ($key in ($SDDCFiles.Keys | ? {$_ -match "GetCurrentVersion"})) {$SDDCFiles.$key.ubr}
+$NewestUBR=($NewestUBR | sort)[-1]
 ForEach($Sys in $SysInfo){
     $ClusterNodesOut+=$ClusterNodes | Where-Object{$_.Name -imatch $Sys.HostName}|Sort-Object Name | Select-Object Name,Model,SerialNumber,State,StatusInformation,Id,`
         @{L="OSName";E={$Sys.OSName}},`
         @{L="OSVersion";E={$Sys.OSVersion}},`
+        @{L="UBR";E={
+            "RREEDD"*(($SDDCFiles."$($_.Name)GetCurrentVersion").UBR -ne $NewestUBR)+($SDDCFiles."$($_.Name)GetCurrentVersion").UBR
+        }},
         @{L="OSBuild";E={
             IF($sys.OSName -imatch "Server"){
                 "RREEDD"*!(@("17784","17763","14393","19042","20348","20349","25398","26100").contains($Sys.OSBuildNumber))+$Sys.OSBuildNumber
@@ -2574,14 +2598,14 @@ ForEach($Sys in $SysInfo){
             }
           }
         }},	
-        @{L="UBR";E={
-            ($SDDCFiles."$($_.Name)GetCurrentVersion").UBR
-        }},
         @{L="Time Zone";E={
             $allproperties | ? {$_.'Host Name' -ieq $Sys.Hostname} | %{if ($_.'Time Zone' -ne $primarytz) {"RREEDD$($_['Time Zone'])"} else {"$($_['Time Zone'])"} }
         }}
         $ClusterNodesOut+=$ClusterNodes | Where-Object {!($Sysinfo.HostName -match $_.name)}
 }
+$NewestUBR=($ClusterNodesOut | sort UBR)[-1].UBR
+#$ClusterNodesOut = $ClusterNodesOut | Select-Object Name,Model,SerialNumber,State,StatusInformation,Id,OSName,OSVersion,OSBuild,AzureLocal,@{L="UBR";E={"RREEDD"*($_.UBR -ne $NewestUBR)+$_.UBR}},'Time Zone'
+
 #Azure Table CluChkClusterNodes
     $AzureTableData=@()
     $AzureTableData=$ClusterNodesOut| Select-Object Name,Model,SerialNumber,Id,OSVersion,OSBuild,@{L='State';E={$_.State.value}},@{L='StatusInformation';E={$_.StatusInformation.value}},@{L='ReportID';E={$CReportID}}
@@ -4929,6 +4953,17 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
                 PSComputerName                  = "RREEDD" + (($ErrorMessage.Context.PreContext | select-string 'Value') -split ': On ')[-1].trim(':')
                 TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm tt")
                 Message                         = $ErrorMessage.Line.Trim()
+                
+            }
+        }
+        $derr=$ap | select-string -SimpleMatch 'Test-EnvironmentReadiness: the following results were not successful:' -Context 0,20
+
+        foreach ($ErrorMessage in $derr) {
+
+            $resultObject += [PSCustomObject] @{
+                PSComputerName                  = "RREEDD" + (($ErrorMessage.Context.PostContext | select-string 'TargetResourceName') -split ':')[-1].trim()
+                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm tt")
+                Message                         = ((($ErrorMessage.Context.PostContext | select-string 'TargetResourceName' -Context 0,5).Context.PostContext ) -replace "Description        : ","").Trim() -join ","
                 
             }
         }
