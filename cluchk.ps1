@@ -26,6 +26,12 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/08/19:v1.70 -  1. New Update: TP - New version 1.70 DEV
+                        2. New Update: TP - Added 24H2 to several areas. We'll have to double check this works as expected.
+                        3. New Update: TP - $GenerationNodes added AMD AX 15g systems
+                        4. New Update: TP - If system model not found in latest support matrix, tries the next one.
+                        5. Bug Fix: TP - If solution is on 11.x, then do not show 12.x MS solution updates until 9/15/2025.
+
     2025/07/25:v1.69 -  1. New Update: TP - New version 1.69 DEV
                         2. New Update: TP - Added test-environment check for Last Action Plan Failure
                         3. New Feature: TP - Mark mismatched UBR build numbers as errors
@@ -165,7 +171,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.69"
+$CluChkVer="1.70"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -921,6 +927,7 @@ If($SysInfo[0].OSName -imatch 'HCI'){
         '20348' {'21H2'}
         '20349' {'22H2'}
         '25398' {'23H2'}
+        '26100' {'24H2'}
         Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
         }
     }
@@ -929,6 +936,7 @@ If($SysInfo[0].OSName -imatch 'HCI'){
         $OSVersionNodes = Switch ($SysInfo[0].OSBuildNumber) {
         '20349' {'22H2'}
         '25398' {'23H2'}
+        '26100' {'24H2'}
         Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
         }
     }
@@ -946,7 +954,7 @@ IF($SysInfo[0].SysModel -match "^APEX"){
 	$GenerationNodes = "16g"
 } elseif (($SysInfo[0].SysModel -like "AX-?60") -or ($SysInfo[0].SysModel -like "AX*45?0")){
 	$GenerationNodes = "16g"
-} elseif ($SysInfo[0].SysModel -like "AX-?50"){
+} elseif (($SysInfo[0].SysModel -like "AX-?50") -or ($SysInfo[0].SysModel -like "AX-?5?5")){
 	$GenerationNodes = "15g"
 } elseif (($SysInfo[0].SysModel -like "AX-?40") -or ($SysInfo[0].SysModel -like "AX-?40??") -or ($SysInfo[0].SysModel -like "R?40*Storage Spaces Direct*")){
 	$GenerationNodes = "14g"
@@ -995,6 +1003,39 @@ $SMRevHistLatest=($mdURL -replace "https://raw.githubusercontent.com/dell/azures
 
 # Step 4: Extract all HTML tables from _index.md
 $mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
+If (!($mdText -match "<td>$($sysinfo[0].SysModel)</td>")) {
+
+# Step 1: Get SupportMatrix versions N-1
+$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing
+$latestFolder = $topResponse | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d{4}$' } |
+    Sort-Object name -Descending | Select-Object -Skip 1 | Select-Object -First 1
+$latestVersion = $latestFolder.name
+$latestVersionPath = "$basePath/$latestVersion"
+
+# Step 2: Get platform folders under latest version
+$platformFolders = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$latestVersionPath" -Headers $headers |
+    Where-Object { $_.type -eq 'dir' }
+
+# Step 3: Choose platform folder (update this as needed)
+$matchedPlatform = $platformFolders | Where-Object { $_.name -imatch $GenerationNodes }
+$mdUrl = $null
+
+if ($matchedPlatform) {
+    $mdPath = "$latestVersionPath/$($matchedPlatform.name)"
+    $mdIndex = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$mdPath" -Headers $headers |
+        Where-Object { $_.name -eq "_index.md" }
+    $mdUrl = $mdIndex.download_url
+}
+
+if (-not $mdUrl) {
+    Write-Warning "No matching _index.md found for platform $GenerationNodes"
+}
+# Step 4: Extract all HTML tables from _index.md
+$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
+
+}
+
+
 $mdLines = $mdText -split "`n"
 
 # Initialize variables
@@ -2252,6 +2293,7 @@ $Name=""
             '10'{'2019'}`
             '11'{'2022'}`
             '12'{'23H2'}`
+            '13'{'24H2'}`
             default{('YYEELLLLOOWW' + $_.ClusterFunctionalLevel) }
         }}},`
         @{Label="CsvBalancer";Expression={
@@ -2617,7 +2659,7 @@ $NewestUBR=($ClusterNodesOut | sort UBR)[-1].UBR
 #HTML Report
     $html+='<H2 id="ClusterNodes">Cluster Nodes</H2>'
     $html+="<h5><b>Should be:</b></h5>"
-    $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;OSBuildVersion = 25398(HCI OS 23H2), 20349(HCI OS 22H2), 20348(Server 2022 LTSB or HCI OS 21H2), 19042(HCI OS 20H2), 2610(Server 2025), 20348(Server 2022), 17763(Server 2019), 14393(Server 2016) </h5>"
+    $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;OSBuildVersion = 26100(HCI OS 24H2), 25398(HCI OS 23H2), 20349(HCI OS 22H2), 20348(Server 2022 LTSB or HCI OS 21H2), 19042(HCI OS 20H2), 2610(Server 2025), 20348(Server 2022), 17763(Server 2019), 14393(Server 2016) </h5>"
     If($ClusterNodesOut.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No Cluster Nodes found</span></h5>'}
     $html+=$ClusterNodesOut | ConvertTo-html -Fragment 
     IF(($sys.OSName -imatch "Stack") -and ($ClusterNodesOut.OSBuild -imatch "RREEDD")){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;NOTE: 20H2,21H2 are EoL MUST upgrade to 22H2 for Support. Return to Rework</h5>"}
@@ -4480,7 +4522,7 @@ $UpdateOutofBoxdriverstbl.rows.add($row)
       -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
       -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
     $html+="&nbsp;*Available versions from Support Matrix Revision: "+($SMRevHistLatest.split('/')[-2])
-    IF($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") {
+    IF($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -match "2\dH2") {
         $html+="<h5><b>&nbsp;!!! This script does not check against SBE package versions !!!</b></h5>"
     }
     $ResultsSummary+=Set-ResultsSummary -name $name -html $html
@@ -4505,6 +4547,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
         If ($SysInfo[0].AzureLocalVersion -gt "") {
            Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -ErrorAction Stop -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
            $SUVersions=(([xml](Get-Content $env:temp\outfile.xml)).ASZSolutionBundleUpdates.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} 
+           if (([version]$SysInfo[0].AzureLocalVersion).major -eq '11' -and (Get-Date) -lt (Get-Date "09/15/2025")) {$SUVersions=$SUVersions | ? {([version]$_.Version).major -ne '12'}}
            Invoke-WebRequest -Uri "https://aka.ms/AzureStackSBEUpdate/DellEMC" -UseBasicParsing -OutFile $env:temp\outfile.xml
            $SBEVersions=(([xml](Get-Content $env:temp\outfile.xml)).SBEUpdatesManifest.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} | ? Family -match $GenerationNodes
            $CurrentUpdatesandHotfixes=Foreach ($key in ($SDDCFiles.keys -like "*GetStampInformation")) { $SDDCFiles."$key" |`
@@ -4751,7 +4794,7 @@ $KBItemsToShow = 6
                     @{L="DownloadLink";E={""}}
             }
             #>
-            If($OSVersion -imatch '22H2|21H2|20H2'){
+            If($OSVersion -imatch '2\dH2'){
                 # Download the HTML content
                 #$url = "https://support.microsoft.com/en-us/help/5018894"
                 $url = "https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-23h2-018b9b10-a75b-4ad7-b9d1-7755f81e5b0b"
@@ -4823,6 +4866,41 @@ $KBItemsToShow = 6
                     @{L='Date';E={($_.Groups[2].Value -replace "&#x2014;"," ")}},`
                     @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
                     @{L="OS Build";E={"2022"}},
+                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
+                    @{L="DownloadLink";E={""}}
+            }
+
+            If($OSVersion -imatch '2025'){
+                $OSVersion = Switch ($SysInfo[0].OSBuildNumber) {
+                    '26100' {'24H2'}
+                }
+                # Download the HTML content
+                $url = "https://support.microsoft.com/en-us/help/5005454"
+                $webClient = New-Object System.Net.WebClient
+                $htmlpage = $webClient.DownloadString($url)
+
+                # Load the HTML into an HtmlDocument object
+                #$htmlDoc = New-Object HtmlAgilityPack.HtmlDocument
+                #$htmlDoc.LoadHtml($htmlpage)
+
+                # Find all elements with the "supLeftNavLink" class
+                #$links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")[^>]*>((?:(?!preview).)*?)(KB\d{7})(.*?)<\/a>')
+                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)26100.*?)\)(?:(?!Preview).)*<\/a>')
+
+               <# $KBList  = $Links | Where-Object{($_.InnerText -imatch "KB") -and ($_.InnerText -imatch '20348') -and ($_.InnerText -notmatch 'Preview')} | sort InnerStartIndex | Select -first $KBItemsToShow `
+                    @{L='KBNumber';E={(((($_.InnerText -split "&#x2014;")[-1]) -split '\(')[0].Trim() -split '\s')[0]}},`
+                    @{L='Date';E={($_.InnerText -split "&#x2014;")[0]}},`
+                    @{L="Description";E={($_.InnerText -replace "&#x2014;"," ")}},
+                    @{L="OS Build";E={(((($_.InnerText -split "OS Build")[-1]) -replace '\)') -replace 'OS' -replace 's' -replace ' Preview' -replace ' Out-of-band' -replace ' Update for Windows 10 Mobile').trim()}},
+                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.OuterHtml -split 'href="')[-1] -split '">')[0]}},
+                    @{L="DownloadLink";E={[GetKBDLLink]::GetDownloadLink((((($_.InnerText -split "&#x2014;KB")[-1]) -split '\(')[0].Trim() -split '\s')[0]),$OSVersion}}
+                                    $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")[^>]*>((?:(?!preview).)*?)(KB\d{7})(.*?)<\/a>')#>
+
+                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
+                    @{L='KBNumber';E={$_.Groups[3].Value}},`
+                    @{L='Date';E={($_.Groups[2].Value -replace "&#x2014;"," ")}},`
+                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
+                    @{L="OS Build";E={"2025"}},
                     @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
                     @{L="DownloadLink";E={""}}
             }
@@ -5073,7 +5151,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $html=""
             $Name=""
         
-        If ($OSVersionNodes -ne "23H2") {
+        If ($OSVersionNodes -ne "23H2" -and $OSVersionNodes -ne "24H2") {
            $Name="NetworkATC Overrides"
            Write-Host "    Gathering $Name..."
            #$GetNetIntentXml=""
@@ -6142,7 +6220,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $GetSmbClientConfiguration=Foreach ($key in ($SDDCFiles.keys -like "*GetSmbClientConfiguration")) {$SDDCFiles."$key"}
         $DisableSMBSigningGetSmbClientConfiguration = $GetSmbClientConfiguration | Sort-Object PSComputerName | Select-Object PSComputerName,`
         @{L='ClientEnableSecuritySignature';E={$CEnableSecuritySignature=$_.EnableSecuritySignature;IF($CEnableSecuritySignature -eq 0){"RREEDD$CEnableSecuritySignature"}Else{$CEnableSecuritySignature}}},`
-        @{L='ClientRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "23H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}},`
+        @{L='ClientRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "23H2" -and $OSVersionNodes -ne "24H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}},`
         @{L='ServerEnableSecuritySignature';E={}},`
         @{L='ServerEncryptData';E={}},`
         @{L='ServerRequireSecuritySignature';E={}}
@@ -6153,7 +6231,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         @{L='ClientRequireSecuritySignature';E={}},`
         @{L='ServerEnableSecuritySignature';E={$SEnableSecuritySignature=$_.EnableSecuritySignature;IF($SEnableSecuritySignature -eq $True){"RREEDD$SEnableSecuritySignature"}Else{$SEnableSecuritySignature}}},`
         @{L='ServerEncryptData';E={$EncryptData=$_.EncryptData;IF($EncryptData -eq $True){"RREEDD$EncryptData"}Else{$EncryptData}}},`
-        @{L='ServerRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "23H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}}
+        @{L='ServerRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "23H2" -and $OSVersionNodes -ne "24H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}}
         $DisableSMBSigning=$DisableSMBSigningGetSmbClientConfiguration+$DisableSMBSigningGetSmbServerConfiguration
         #$DisableSMBSigning | FT -AutoSize
         #Azure Table
@@ -6172,14 +6250,14 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $html+='<H2 id="DisableSMBSigning">Disable SMB Signing</H2>'
         $html+=""
         $html+="<h5><b>Should be:</b></h5>"
-        IF(($SysInfo[0].SysModel -notmatch "^APEX") -and ($OSVersionNodes -ne "23H2")){
+        IF(($SysInfo[0].SysModel -notmatch "^APEX") -and ($OSVersionNodes -ne "23H2" -and $OSVersionNodes -ne "24H2")){
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ClientEnableSecuritySignature=True(1)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ClientRequireSecuritySignature=False(0)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ServerEnableSecuritySignature=False(0)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ServerEncryptData=False(0)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ServerRequireSecuritySignature=False(0)</h5>"
         }
-        IF(($SysInfo[0].SysModel -match "^APEX") -or ($OSVersionNodes -eq "23H2")){
+        IF(($SysInfo[0].SysModel -match "^APEX") -or $OSVersionNodes -eq "23H2" -or $OSVersionNodes -eq "24H2"){
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ClientEnableSecuritySignature=True(1)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ClientRequireSecuritySignature=True(1)</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-ServerEnableSecuritySignature=False(0)</h5>"
