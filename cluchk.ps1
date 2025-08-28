@@ -26,6 +26,16 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/08/28:v1.71 -  1. New Update: TP - New version 1.71 DEV
+                        2. Bug Fix: TP - When finding updates in the support matrix also restrict by server model.
+                        3. Bug Fix: TP - Broadcom 25gb SFP nics were no longer getting the correct driver version.
+                        4. Bug Fix: TP - Recommended updates for Azure systems without MS Solution Updates were incorrect
+                        5. New Update: TP - Mark SBE/SU version older than 6 months as an Error instead of a Warning and show correct next version.
+                        6. New Update: TP - Get Last AP Failure from all ECE zips and show Exception in the Latest Action Plan Failure table
+                        7. Bug Fix: TP - Remove APEX from showing errors on Update Out of Box drivers and show Mellanox driver version correctly.
+                        8. Bug Fix: TP - Ignore VMQ and Jumbo Frames issues if cluster is using a converged network.
+                        9. New Update: TP - Added Type column to NetworkATC table.
+
     2025/08/19:v1.70 -  1. New Update: TP - New version 1.70 DEV
                         2. New Update: TP - Added 24H2 to several areas. We'll have to double check this works as expected.
                         3. New Update: TP - $GenerationNodes added AMD AX 15g systems
@@ -171,7 +181,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.70"
+$CluChkVer="1.71"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -860,6 +870,11 @@ Add-Type -Path (Get-ChildItem -Path "C:\ProgramData\Dell\htmlagilitypack" -Recur
 # $webClient.DownloadFile($URL, $OutFile)}
 #>
 If ($ProcessSDDC -ieq 'y') {
+        $msinfo=@()
+        gci $SDDCPath  -Recurse -Depth 1 -Filter "msinfo.nfo" | %{$msinfo+=[xml](gc $_.fullname)}
+        $SysEnvVars=$msinfo | %{$pscn=$_.msinfo.Category.data.value[4].'#cdata-section';(($_.msinfo.Category.Category.category | ? Name -eq "Environment Variables").data | ?{$_.'User_Name' -match "system"} | Select-Object Variable,Value,@{L="PSComputerName";E={$pscn}})}
+        $SysEnvVars=$SysEnvVars | Select PSComputerName,@{L="Variable";E={$_.Variable.'#cdata-section'}},@{L="Value";E={$_.Value.'#cdata-section'}} | Sort PSComputerName,Variable -Unique
+        $SysBuilds = $SysEnvVars | ? {$_.Variable -match "version"}
 
           #$SysInfoFiles=(Get-ChildItem -Path $SDDCPath -Filter "SystemInfo.TXT" -Recurse -Depth 1).FullName
           $GetComputerInfo=gci $SDDCPath -Filter "GetComputerInfo.xml" -Recurse -Depth 1 | Import-Clixml
@@ -886,6 +901,7 @@ If ($ProcessSDDC -ieq 'y') {
                                 OSName        = $osInfo.OSName.Replace('Microsoft','').Trim() # remove Microsoft
 				                AzureLocalVersion = ''
                                 SysModel      = $osInfo.CsModel
+                                LocalTime   = $osInfo.OsLocalDateTime
                             }
 
         }
@@ -900,6 +916,7 @@ If ($ProcessSDDC -ieq 'y') {
                                 OSName        = $osInfo.Caption.Replace('Microsoft','').Trim() # remove Microsoft
 				                AzureLocalVersion = ''
                                 SysModel      = (gc -Path "$SDDCPath\Node_$($osInfo.CsName)\SystemInfo.TXT" | Select-String "System Model: ").Line.split(":")[-1].Trim()
+                                LocalTime   = $osInfo.LocalDateTime
                                 } 
             }
         }
@@ -996,9 +1013,7 @@ if (-not $mdUrl) {
 }
 
 # Check for archive Support Matrix
-if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}Else{
-$mdUrl}
-$SMRevHistLatest=($mdURL -replace "https://raw.githubusercontent.com/dell/azurestack-docs/main/content/en","https://dell.github.io/azurestack-docs" -replace "_index.md","").ToLower()
+if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}
 
 
 # Step 4: Extract all HTML tables from _index.md
@@ -1035,7 +1050,9 @@ $mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
 
 }
 
+$mdurl
 
+$SMRevHistLatest=($mdURL -replace "https://raw.githubusercontent.com/dell/azurestack-docs/main/content/en","https://dell.github.io/azurestack-docs" -replace "_index.md","").ToLower()
 $mdLines = $mdText -split "`n"
 
 # Initialize variables
@@ -4337,13 +4354,18 @@ function get-DriverVersion {
             [string] $DriverName,
 
             [Parameter(Mandatory = $true)]
-            [string] $OSversion
+            [string] $OSversion,
+
+            [Parameter(Mandatory = $true)]
+            [string] $Platform
+
         )
 $OSversion = ('*'+$OSversion+'*')
+$Platform = ("*$Platform*")
 
 # there is no check on supported platforms
 
-return ($SMFWDRVRData |Where-Object{$_.SupportedOS -like $OSversion} | Where-Object{$_.Component -like $DriverName} | Select-Object DriverMinimumSupportedVersion | Sort-Object -Unique).DriverMinimumSupportedVersion
+return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Object{$_.SupportedPlatforms -like $Platform} | Where-Object{$_.SupportedOS -like $OSversion} | Select-Object DriverMinimumSupportedVersion | Sort-Object -Unique).DriverMinimumSupportedVersion
 
 }
 
@@ -4372,9 +4394,9 @@ return ($SMFWDRVRData |Where-Object{$_.SupportedOS -like $OSversion} | Where-Obj
     $DriverSuites=$DriverSuites | Select PSComputerName,Qlogic,Intel,Mellanox,Broadcom,B1GB,` #Fix 06072023
      @{Label='Chipset';Expression={($SDDCFiles."$($_.PSComputerName)GetChipsetVersion").Version | Select -First 1}}
  #debug tests
-#get-DriverVersion -DriverName "Broadcom 57414*" -OSVersion $OSVersionNodes
+#get-DriverVersion -DriverName "Broadcom 57414*" -OSVersion $OSVersionNodes -Platform $Platform
 #$SMFWDRVRData | Where-Object{$_.Component -like "Broadcom*25*LOM*"} 
-
+    $Platform=$SysInfo[0].SysModel -replace "APEX MC","AX"
     $UpdateOutofBoxdrivers=Foreach ($key in ($SDDCFiles.keys -like "*GetDrivers")) {$SDDCFiles."$key" |`
     Where-Object{$_.Manufacturer -notmatch "Microsoft"}|`
     Where-Object{$_.DeviceName -match "HBA"`
@@ -4407,38 +4429,40 @@ return ($SMFWDRVRData |Where-Object{$_.SupportedOS -like $OSversion} | Where-Obj
     #Driver not on support matrix web page
     'QLogic 57800*'               {'7.13.171.0'}`
 
-    'QLogic FastLinQ*Adapter' {get-DriverVersion -DriverName "Qlogic FastLinQ 41262*SFP28*" -OSVersion $OSVersionNodes}`
-    'QLogic FastLinQ*VBD*'    {get-DriverVersion -DriverName "Qlogic FastLinQ 41262*SFP28*" -OSVersion $OSVersionNodes}`
+    'QLogic FastLinQ*Adapter' {get-DriverVersion -DriverName "Qlogic FastLinQ 41262*SFP28*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'QLogic FastLinQ*VBD*'    {get-DriverVersion -DriverName "Qlogic FastLinQ 41262*SFP28*" -OSVersion $OSVersionNodes -Platform $Platform}`
 
-    'Mellanox ConnectX-4*'    {get-DriverVersion -DriverName "Mellanox ConnectX-4*" -OSVersion $OSVersionNodes}`
-    'Mellanox Connectx-5*'    {get-DriverVersion -DriverName "Mellanox Connectx-5*" -OSVersion $OSVersionNodes}`
-    'Mellanox ConnectX-6*'    {get-DriverVersion -DriverName "Mellanox ConnectX-6*" -OSVersion $OSVersionNodes}`
+    'Mellanox ConnectX-4*'    {get-DriverVersion -DriverName "Mellanox ConnectX-4*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Mellanox Connectx-5*'    {get-DriverVersion -DriverName "Mellanox Connectx-5*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Mellanox ConnectX-6*'    {(get-DriverVersion -DriverName "Mellanox ConnectX-6*" -OSVersion $OSVersionNodes -Platform $Platform)+".0"}`
 
-    'Intel*Gigabit*I350*'     {get-DriverVersion -DriverName "Intel*1Gb*Ethernet*NDC*" -OSVersion $OSVersionNodes}`
-    'Intel*Ethernet*X710*'    {get-DriverVersion -DriverName "*X710*" -OSVersion $OSVersionNodes}`
+    'Intel*Gigabit*I350*'     {get-DriverVersion -DriverName "Intel*1Gb*Ethernet*NDC*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Intel*Ethernet*X710*'    {get-DriverVersion -DriverName "*X710*" -OSVersion $OSVersionNodes -Platform $Platform}`
 
-    'Broadcom*BCM57412*'      {get-DriverVersion -DriverName "Broadcom 57412*" -OSVersion $OSVersionNodes}`
-    'Broadcom BCM5720*'       {get-DriverVersion -DriverName "Broadcom 5720*" -OSVersion $OSVersionNodes}`
-    'Broadcom*57414*'         {get-DriverVersion -DriverName "Broadcom 57414*" -OSVersion $OSVersionNodes}`
-    'Broadcom*57416*'         {get-DriverVersion -DriverName "Broadcom 57416*" -OSVersion $OSVersionNodes}`
-    'Broadcom NetXtreme Gigabit*' {get-DriverVersion -DriverName "Broadcom 5720*" -OSVersion $OSVersionNodes}`
-'Broadcom*E-Series*10Gb*'      {get-DriverVersion -DriverName "Broadcom*10*LOM*" -OSVersion $OSVersionNodes}`
-'Broadcom*E-Series*25Gb*'      {get-DriverVersion -DriverName "Broadcom*25*LOM*" -OSVersion $OSVersionNodes}`
+    'Broadcom*BCM57412*'      {get-DriverVersion -DriverName "Broadcom 57412*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Broadcom BCM5720*'       {get-DriverVersion -DriverName "Broadcom 5720*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Broadcom*57414*'         {get-DriverVersion -DriverName "Broadcom 57414*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Broadcom*57416*'         {get-DriverVersion -DriverName "Broadcom 57416*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Broadcom NetXtreme Gigabit*' {get-DriverVersion -DriverName "Broadcom 5720*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Broadcom*E-Series*10Gb*LOM*'      {get-DriverVersion -DriverName "Broadcom*10*LOM*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Broadcom*E-Series*10Gb*SFP*'      {get-DriverVersion -DriverName "Broadcom*10*SFP*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Broadcom*E-Series*25Gb*LOM*'      {get-DriverVersion -DriverName "Broadcom*25*LOM*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Broadcom*E-Series*25Gb*SFP*'      {get-DriverVersion -DriverName "Broadcom*25*SFP*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    
+    '*HBA330*'                {get-DriverVersion -DriverName "HBA330*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    '*HBA355*'                {get-DriverVersion -DriverName "HBA355*" -OSVersion $OSVersionNodes -Platform $Platform}`
 
-'*HBA330*'                {get-DriverVersion -DriverName "HBA330*" -OSVersion $OSVersionNodes}`
-'*HBA355*'                {get-DriverVersion -DriverName "HBA355*" -OSVersion $OSVersionNodes}`
-
-    '*BOSS*'                  {get-DriverVersion -DriverName "BOSS-S1*" -OSVersion $OSVersionNodes}`
-    '*Unify*'                 {get-DriverVersion -DriverName "BOSS-S2*" -OSVersion $OSVersionNodes}`
+    '*BOSS*'                  {get-DriverVersion -DriverName "BOSS-S1*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    '*Unify*'                 {get-DriverVersion -DriverName "BOSS-S2*" -OSVersion $OSVersionNodes -Platform $Platform}`
       
-    '*AMD*Chipset*'           {get-DriverVersion -DriverName "Chipset*AMD*" -OSVersion $OSVersionNodes}`
+    '*AMD*Chipset*'           {get-DriverVersion -DriverName "Chipset*AMD*" -OSVersion $OSVersionNodes -Platform $Platform}`
     'Intel*C620*Chipset*'  {
     $searchTxt = "Chipset*driver*14G*Intel*"
 # newer AX models use a different package, ero different search string
 if (($ClusterNodes[0].model -eq "AX-650") -or ($ClusterNodes[0].model -eq "AX-750")) {
 $searchTxt = ("*Chipset*Driver*15G*Intel*") #Fix 06072023
 }
-get-DriverVersion -DriverName $searchTxt -OSVersion $OSVersionNodes
+get-DriverVersion -DriverName $searchTxt -OSVersion $OSVersionNodes -Platform $Platform
   }` #Intel*C620*Chipset*
     }}}, Manufacturer
     }
@@ -4452,7 +4476,7 @@ $DriverVersionCheck+=$Device | Select-Object PSComputerName, DeviceName, `
 @{Label='DriverVersion';Expression={
 $DriverVersion=$_.DriverVersion        
 # skip check on inbox driver, this is always correct
-IF(($_.AvailableVersion -ne $null) -and ($_.AvailableVersion -notmatch 'inbox')){
+IF(($_.AvailableVersion -ne $null) -and ($_.AvailableVersion -notmatch 'inbox' -and $SysInfo[0].SysModel -notmatch "^APEX")){
 Switch($_.AvailableVersion){
 # DriverVersion < AvailableVersion
 {[System.Version]$DriverVersion -lt [System.Version]$_}{"RREEDD$DriverVersion"}
@@ -4545,16 +4569,17 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
         Write-Host "    Gathering $Name..."  
         $OSVersion=$OSVersionNodes
         If ($SysInfo[0].AzureLocalVersion -gt "") {
+           $SupportedDate=Get-Date (Get-Date).AddMonths(-6) -Format "yyMM"
            Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -ErrorAction Stop -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
            $SUVersions=(([xml](Get-Content $env:temp\outfile.xml)).ASZSolutionBundleUpdates.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} 
            if (([version]$SysInfo[0].AzureLocalVersion).major -eq '11' -and (Get-Date) -lt (Get-Date "09/15/2025")) {$SUVersions=$SUVersions | ? {([version]$_.Version).major -ne '12'}}
            Invoke-WebRequest -Uri "https://aka.ms/AzureStackSBEUpdate/DellEMC" -UseBasicParsing -OutFile $env:temp\outfile.xml
            $SBEVersions=(([xml](Get-Content $env:temp\outfile.xml)).SBEUpdatesManifest.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} | ? Family -match $GenerationNodes
            $CurrentUpdatesandHotfixes=Foreach ($key in ($SDDCFiles.keys -like "*GetStampInformation")) { $SDDCFiles."$key" |`
-              Select-Object @{Label="PSComputerName";Expression={$key.replace("GetStampInformation","")}},@{Label='SBE Version';Expression={$sbever=$_.OemVersion;"YYEELLLLOOWW"*([Version]$SBEVersions[-1].Version -ne [version]$sbever)+$sbever}},
-             @{Label='MS Solution';Expression={$suver=$_.StampVersion;"YYEELLLLOOWW"*([Version]$SUVersions[-1].Version -ne [version]$suver)+$suver}},@{Label='Deployed Version';Expression={$_.InitialDeployedVersion}},
-             @{Label='Next SBE';Expression={if ([Version]$SBEVersions[-1].Version -ne [version]$_.OemVersion) {($SBEVersions | ? RequiredSBE -match $_.OemVersion | ? RequiredSolution -match (([version]$_.StampVersion).major.tostring()+"."+([version]$_.StampVersion).minor))[-1].Version}}},
-             @{Label='Next MS SU';Expression={if ([Version]$SUVersions[-1].Version -ne [version]$_.StampVersion) {($SUVersions | ? RequiredSolution -match (([version]$_.StampVersion).major.tostring()+"."+([version]$_.StampVersion).minor))[-1].Version}}}
+              Select-Object @{Label="PSComputerName";Expression={$key.replace("GetStampInformation","")}},@{Label='SBE Version';Expression={$sbever=$_.OemVersion;if (([version]$sbever).Build -lt $SupportedDate) {"RREEDD$sbever"} else{ "YYEELLLLOOWW"*([Version]$SBEVersions[-1].Version -ne [version]$sbever)+$sbever}}},
+             @{Label='MS Solution';Expression={$suver=$_.StampVersion;if (([version]$suver).Minor -lt $SupportedDate) {"RREEDD$suver"} else{ "YYEELLLLOOWW"*([Version]$SUVersions[-1].Version -ne [version]$suver)+$suver}}},@{Label='Deployed Version';Expression={$_.InitialDeployedVersion}},
+             @{Label='Next SBE';Expression={$suver=$_.StampVersion;$sbever=$_.OemVersion;if ([Version]$SBEVersions[-1].Version -ne [version]$sbever) {(($SBEVersions | ? RequiredSBE -match ($sbever.split(".")[0..2] -join ".") | ? {$_.RequiredSolution -match ($suver.split(".")[0..1] -join ".") -or $_.RequiredSolution -match ("$(([version]$suver).Major).*.$(([version]$suver).Build)")})[-1]).Version}}},
+             @{Label='Next MS SU';Expression={$suver=$_.StampVersion;if ([Version]$SUVersions[-1].Version -ne [version]$suver) {(($SUVersions | ?{$_.RequiredSolution -match ($suver.split(".")[0..1] -join ".") -or $_.RequiredSolution -match ("$(([version]$suver).Major).*.$(([version]$suver).Build)")})[-1]).Version}}}
 
 
            }
@@ -4795,9 +4820,20 @@ $KBItemsToShow = 6
             }
             #>
             If($OSVersion -imatch '2\dH2'){
+                Switch ($OSVersion) {
+                    '20H2' {$url="https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-20h2-64c79b7f-d536-015d-b8dd-575f01090efd"}
+                    '21H2' {$url="https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-21h2-5c5e6adf-e006-4a29-be22-f6faeff90173"}
+                    '22H2' {$url="https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-22h2-fea63106-a0a9-4b6c-bb72-a07985c98a56"}
+                    '23H2' {$url="https://support.microsoft.com/en-us/topic/windows-server-version-23h2-update-history-68c851ff-825a-4dbc-857b-51c5aa0ab248"}
+                    '24H2' {$url=""}
+                    '25H2' {$url=""}
+                    '26H2' {$url=""}
+                }
+
+                
                 # Download the HTML content
                 #$url = "https://support.microsoft.com/en-us/help/5018894"
-                $url = "https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-23h2-018b9b10-a75b-4ad7-b9d1-7755f81e5b0b"
+                #$url = "https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-23h2-018b9b10-a75b-4ad7-b9d1-7755f81e5b0b"
                 $webClient = New-Object System.Net.WebClient
                 $htmlpage = $webClient.DownloadString($url)
 
@@ -4875,7 +4911,7 @@ $KBItemsToShow = 6
                     '26100' {'24H2'}
                 }
                 # Download the HTML content
-                $url = "https://support.microsoft.com/en-us/help/5005454"
+                $url = "https://support.microsoft.com/en-us/topic/windows-server-2025-update-history-10f58da7-e57b-4a9d-9c16-9f1dcd72d7d7"
                 $webClient = New-Object System.Net.WebClient
                 $htmlpage = $webClient.DownloadString($url)
 
@@ -5026,26 +5062,70 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
 
         $resultObject=@()
         foreach ($ErrorMessage in $derr) {
-
-            $resultObject += [PSCustomObject] @{
-                PSComputerName                  = "RREEDD" + (($ErrorMessage.Context.PreContext | select-string 'Value') -split ': On ')[-1].trim(':')
+                         
+            try {$resultObject +=  [PSCustomObject] @{
+                Target                  = (($ErrorMessage.Context.PreContext | select-string 'Value') -split ': On ')[-1].trim(':')
                 TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm tt")
                 Message                         = $ErrorMessage.Line.Trim()
                 
             }
+            } catch {}
         }
         $derr=$ap | select-string -SimpleMatch 'Test-EnvironmentReadiness: the following results were not successful:' -Context 0,20
 
         foreach ($ErrorMessage in $derr) {
 
-            $resultObject += [PSCustomObject] @{
-                PSComputerName                  = "RREEDD" + (($ErrorMessage.Context.PostContext | select-string 'TargetResourceName') -split ':')[-1].trim()
+            try {$resultObject +=   [PSCustomObject] @{
+                Target                  = (($ErrorMessage.Context.PostContext | select-string 'TargetResourceName') -split ':')[-1].trim()
                 TimeStamp                       = (Get-Date (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm tt")
                 Message                         = ((($ErrorMessage.Context.PostContext | select-string 'TargetResourceName' -Context 0,5).Context.PostContext ) -replace "Description        : ","").Trim() -join ","
                 
             }
+            } catch {}
         }
-        $ActionPlanErrors=$resultObject | sort PSComputerName,TimeStamp,Message -Unique
+        $ECEzip=$null
+        $APLMU=$null
+        $apupdate=$null
+        $StopError=$null
+        $ECEzip=(gci $SDDCPath -Filter "ECE.zip" -Recurse).fullname
+        If ($ECEzip) {
+            Foreach ($ECE in $ECEzip) {
+                try {
+                $zip = [System.IO.Compression.ZipFile]::OpenRead($ECE)
+                $entry = $zip.Entries | Where-Object {$_.FullName -like "AzureStackFailedActionPlanInformation-*.json"}
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry,"$(Split-Path (Split-Path $ECE -Parent) -Parent)\AzureStackFailedActionPlanInformation.json")
+                } catch {}
+            }
+        
+        }
+        Foreach ($APLMU in (Get-ChildItem -Path $SDDCPath -Filter "AzureStackFailedActionPlanInformation.json" -Recurse)) {
+            $apfails=(gc $APLMU.FullName | ConvertFrom-Json).ProgressAsXml | select -Last 5
+            Foreach ($apupdate in $apfails) {
+                $StopError = ([xml]$apupdate).SelectNodes("//Task") | where Status -eq "Error" | where Action -eq $null | where Exception -ne $null
+                $APTime=$StopError.EndTimeUtc
+                If (!($APTime)) {$APTime=$StopError.StartTimeUtc}
+                $APTime=try {(Get-Date $APTime -Format "MM/dd/yyyy HH:mm tt")} catch {(Get-Date -Format "MM/dd/yyyy HH:mm tt")}
+                if ($StopError) {
+                    $resultObject +=     [PSCustomObject] @{
+                        Target                  = $APLMU.Directory.Name -replace "Node_",""
+                        TimeStamp                       = $APTime
+                        Message                         = ($StopError.Exception.Message.split("`n") | select -first 10).Trim() -join ","
+                
+                    }
+                    
+                }
+            }
+        }
+
+
+        $ActionPlanErrors=$resultObject | sort TimeStamp -Descending | sort Target,Message -Unique | sort TimeStamp -Descending
+        Foreach ($apfailure in $ActionPlanErrors) {
+            if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-7)) {
+                    $apfailure.Target="RREEDD" + $apfailure.Target
+            } elseif ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-30)) {
+                    $apfailure.Target="YYEELLLLOOWW" + $apfailure.Target
+            }
+        }
         If ($ActionPlanErrors) {
            #HTML Report
            $html+='<H2 id="LatestActionPlanFailure">Latest Action Plan Failure</H2>'
@@ -5124,9 +5204,10 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             # Check if the numbers are equal
                 if ($number1 -ne $number2) {"RREEDD"+$_.progress} else {$_.progress}}},
         @{L="ConfigurationStatus";E={IF($_.ConfigurationStatus -inotmatch "Success"){"RREEDD"+$_.ConfigurationStatus} else {$_.ConfigurationStatus}}},
-        @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){"RREEDD"+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}}
-
-        $GetNetIntentStatusXmlOut+=$SDDCFiles."GetNetIntentStatusGlobalOverrides" | Select-Object Host,@{L="IntentName";E={"Global"}},LastSuccess,Error,@{L="Progress";E={
+        @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){"RREEDD"+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}},
+        IsComputeIntentSet,IsManagementIntentSet,IsStorageIntentSet,IsStretchIntentSet,
+        @{L="Type";E={$m=@("Compute"*[int]($_.IsComputeIntentSet -eq $true);"Mgmt"*[int]($_.IsManagementIntentSet -eq $true);"Storage"*[int]($_.IsStorageIntentSet -eq $true);"Stretch"*[int]($_.IsStretchIntentSet -eq $true)) | ? {$_ -gt ""};$m -Join ","}}
+        $GetNetIntentStatusXmlOut+=$SDDCFiles."GetNetIntentStatusGlobalOverrides" | Select-Object Host,@{L="IntentName";E={"NA"}},LastSuccess,Error,@{L="Progress";E={
             # Use a regular expression to extract the numbers from the match string
                 $numbers = [regex]::Matches($_.progress, "\d+")
             # Convert the extracted numbers to integers
@@ -5135,14 +5216,15 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             # Check if the numbers are equal
                 if ($number1 -ne $number2) {"RREEDD"+$_.progress} else {$_.progress}}},
         @{L="ConfigurationStatus";E={IF($_.ConfigurationStatus -inotmatch "Success"){"RREEDD"+$_.ConfigurationStatus} else {$_.ConfigurationStatus}}},
-        @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){"RREEDD"+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}}
+        @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){"RREEDD"+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}},
+        @{L="Type";E={"Global"}}
         
         $GetNetIntentStatusXmlOut = $GetNetIntentStatusXmlOut | Where-Object{$_.host -ne $null} | Sort-Object IntentName,Host
         #$GetNetIntentStatusXmlOut| ft
 
             # HTML Report
             $html+='<H2 id="NetworkATCStatus">NetworkATC Status</H2>'
-            $html+=$GetNetIntentStatusXmlOut | ConvertTo-html -Fragment
+            $html+=$GetNetIntentStatusXmlOut | Select-Object Host,IntentName,Type,LastSuccess,Progress,ConfigurationStatus,ProvisioningStatus | ConvertTo-html -Fragment
             $html=$html `
              -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
              -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'                
@@ -5558,13 +5640,14 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $FoundGetNetAdaptervmq=@()
         $EnabledNICS=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapter")) {$SDDCFiles."$key" |Where-Object{$_.state -eq "2"}}
         #$EnabledNICS | FL
+        $NotConverged=(($GetNetIntentStatusXmlOut | ? {$_.IsComputeIntentSet -eq $true -and $_.IsStorageIntentSet -eq $true}).count -eq 0)
         $GetNetAdaptervmq=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapterVmq")) {$SDDCFiles."$key"}
         ForEach($VMQ in $GetNetAdaptervmq){
             $FoundGetNetAdaptervmq+=$VMQ|Where-Object{$_.Name -cne $EnabledNICS.Name}|`
                 Select-Object PSComputerName,Name,InterfaceDescription,`
                     @{L='Enabled';E={$VMQEnabled=$_.Enabled
                         IF($StorageNicsUnique -imatch $_.Name){
-                           IF($VMQEnabled -eq 1){"RREEDD$VMQEnabled"}Else{$VMQEnabled}
+                           IF($VMQEnabled -eq 1 -and $NotConverged){"RREEDD$VMQEnabled"}Else{$VMQEnabled}
                         }Else{$VMQEnabled}
                     }},`
                 BaseProcessorNumber,MaxProcessors,NumberOfReceiveQueues
@@ -6391,7 +6474,7 @@ SupportProvider = "RREEDDMissing"
 				        Else{$_.DisplayValue}
                     }
                     # None Storage NICs should be 1514
-                    ElseIF($_.DisplayValue -inotmatch 'Disabled' -and $_.DisplayValue -inotmatch '1514' -and $SysInfo[0].SysModel -notmatch "^APEX"){"YYEELLLLOOWW"+$_.DisplayValue}
+                    ElseIF($_.DisplayValue -inotmatch 'Disabled' -and $_.DisplayValue -inotmatch '1514' -and $SysInfo[0].SysModel -notmatch "^APEX" -and $NotConverged){"YYEELLLLOOWW"+$_.DisplayValue}
                     Else{$_.DisplayValue}
                 }
             }
