@@ -26,6 +26,13 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/09/08:v1.72 -  1. New Update: TP - New version 1.72 DEV
+                        2. Bug Fix: SA - Remove trailing slash
+						3. Bug Fix: SA - Removed hard PageFile check for 24h2
+                        4. Bug Fix: TP - Some systems were not finding the Compression module.
+                        5. Bug Fix: TP - Intel E810 driver version does not match. Support Matrix is 24, real driver is 1.17.73.0
+                        6. New Feature: TP - In Physical Disks show CannotPoolReason.
+
     2025/08/28:v1.71 -  1. New Update: TP - New version 1.71 DEV
                         2. Bug Fix: TP - When finding updates in the support matrix also restrict by server model.
                         3. Bug Fix: TP - Broadcom 25gb SFP nics were no longer getting the correct driver version.
@@ -181,7 +188,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.71"
+$CluChkVer="1.72"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -2221,7 +2228,7 @@ public class Counters
     $htmloutPerfReport+='</body></html>'
 
     # Generate HTML Report
-    $SDDCFileName=($SDDCPath -split '\\')[-1]
+    $SDDCFileName=($SDDCPath.TrimEnd('\') -split '\\')[-1]
     If($CluChkReportLoc.Count -gt 1) {$CluChkReportLoc = $CluchkReportLoc[0]}
     $HtmlReport= Join-Path -Path $CluChkReportLoc -ChildPath CluChkPerfReport_v$CluChkVer-$DTString$SDDCFileName.html
     Write-Host ("Report Output location: " + $HtmlReport)
@@ -3229,6 +3236,13 @@ $htmlout+=$html
         @{Label='SerialNumber';Expression={
             If($_.SerialNumber -imatch '^[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*.'){$_.AdapterSerialNumber -replace " ",""}
             Else{$_.SerialNumber -replace " ",""}
+        }},@{Label="CannotPool";E={
+           Switch ($_.CannotPoolReason)  {
+           "2" {'In a pool'}
+           "32771" {'RREEDDNot Compliant'}
+           Default {"RREEDD$($_.CannotPoolReason)"}
+           }
+        
         }},@{Label='Slot';Expression={([REGEX]::Match($_.PhysicalLocation ,'^*Slot\s\d*')).value -replace 'Slot ',""}},`
         @{Label='MediaType';Expression={`
             @('','','','HDD','SSD','SCM')[$_.MediaType]
@@ -3324,7 +3338,7 @@ $AllNVMe=$True
             ForEach($Disk in $PhysicalDisks){
                 $ConnectHost2PhysicalDisk+=$Disk | Select-Object `
                 @{Label='Node';Expression={$NodeD=($GetStorageFaultDomain|Where-Object{$_.SerialNumber -eq $disk.SerialNumber}|Select-Object -expandproperty Node -first 1);IF($NodeD){$NodeD}Else{"Missing"}}`
-                } ,ID,FriendlyName,UniqueID,SerialNumber,Slot,MediaType,CanPool,OperationalStatus,HealthStatus,Usage,Size,AllocatedSize,Utilization,Outlier,`
+                } ,ID,FriendlyName,UniqueID,SerialNumber,Slot,MediaType,CanPool,CannotPool,OperationalStatus,HealthStatus,Usage,Size,AllocatedSize,Utilization,Outlier,`
                 @{L='MatrixVersion';E={$diskmdlsfirm[$_.model]}},
 @{L='InstalledVersion';E={
 IF (($_.FirmwareVersion -gt $diskmdlsfirm[$_.Model]) -and $diskmdlsfirm[$_.Model] -notmatch "Not found in matrix" -and $SysInfo[0].SysModel -notmatch "^APEX"){
@@ -4376,6 +4390,7 @@ return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Obj
     #$UpdateOutofBoxdrivers=@()
     #$UpdateOutofBoxdrivers | gm
     $UpdateOutofBoxdriversOut=@()
+    $UpdateOutofBoxdrivers=@()
     $DriverSuites=@()
     $DriverSuites=Foreach ($key in ($SDDCFiles.keys -like "*GetDriverSuiteVersion")) {$SDDCFiles."$key" |`
      Select-Object @{Label="PSComputerName";Expression={$key -replace "GetDriverSuiteVersion",""}},`
@@ -4438,6 +4453,11 @@ return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Obj
 
     'Intel*Gigabit*I350*'     {get-DriverVersion -DriverName "Intel*1Gb*Ethernet*NDC*" -OSVersion $OSVersionNodes -Platform $Platform}`
     'Intel*Ethernet*X710*'    {get-DriverVersion -DriverName "*X710*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Intel*Ethernet*E810*'    {$dver=get-DriverVersion -DriverName "*E810-*" -OSVersion $OSVersionNodes -Platform $Platform
+                               Switch ($dver) {
+                               "24"  {"1.17.73.0"}
+                               Default {$dver}
+                               }}`
 
     'Broadcom*BCM57412*'      {get-DriverVersion -DriverName "Broadcom 57412*" -OSVersion $OSVersionNodes -Platform $Platform}`
     'Broadcom BCM5720*'       {get-DriverVersion -DriverName "Broadcom 5720*" -OSVersion $OSVersionNodes -Platform $Platform}`
@@ -4479,9 +4499,9 @@ $DriverVersion=$_.DriverVersion
 IF(($_.AvailableVersion -ne $null) -and ($_.AvailableVersion -notmatch 'inbox' -and $SysInfo[0].SysModel -notmatch "^APEX")){
 Switch($_.AvailableVersion){
 # DriverVersion < AvailableVersion
-{[System.Version]$DriverVersion -lt [System.Version]$_}{"RREEDD$DriverVersion"}
+{[System.Version]$DriverVersion -lt [System.Version](($_+".0"*3).split(".")[0..3] -join ".")}{"RREEDD$DriverVersion"}
 # DriverVersion > AvailableVersion
-{[System.Version]$DriverVersion -gt [System.Version]$_}{"YYEELLLLOOWW$DriverVersion"}
+{[System.Version]$DriverVersion -gt [System.Version](($_+".0"*3).split(".")[0..3] -join ".")}{"YYEELLLLOOWW$DriverVersion"}
 Default{$DriverVersion}
 }
 }Else{$DriverVersion}
@@ -5089,6 +5109,7 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
         $StopError=$null
         $ECEzip=(gci $SDDCPath -Filter "ECE.zip" -Recurse).fullname
         If ($ECEzip) {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
             Foreach ($ECE in $ECEzip) {
                 try {
                 $zip = [System.IO.Compression.ZipFile]::OpenRead($ECE)
@@ -6621,7 +6642,12 @@ $html=""
                 @{L="PageFileSize(MB)";E={$PFS=$_.OsFreeSpaceInPagingFiles/1KB;
                   IF($PFS -ne (51200 + $ClusterName.BlockCacheSize) -and $SysInfo[0].SysModel -notmatch "^APEX"){
                     IF($PFS -gt (51200 + $ClusterName.BlockCacheSize)){
-                      "YYEELLLLOOWW"+$PFS
+                      IF ($OSVersionNodes -eq "24H2") {
+						 # no hard requirement for 24H2 anymore, as of 2025 Aug deployment guide
+						 $PFS
+					  } else {
+					    "YYEELLLLOOWW"+$PFS
+					  }
                     } else {
                       "RREEDD"+$PFS
                     }
@@ -6936,7 +6962,7 @@ IF($selection -ne "4"){
     $htmloutReport+='</body></html>'
 
     # Generate HTML Report
-    $SDDCFileName=($SDDCPath -split '\\')[-1]
+    $SDDCFileName=($SDDCPath.TrimEnd('\') -split '\\')[-1]
     If($CluChkReportLoc.Count -gt 1) {$CluChkReportLoc = $CluchkReportLoc[0]}
     $HtmlReport= Join-Path -Path $CluChkReportLoc -ChildPath CluChkReport_v$CluChkVer-$DTString$SDDCFileName.html
     Write-Host ("Report Output location: " + $HtmlReport)
@@ -6956,7 +6982,7 @@ IF($SDDCPerf -ieq "YES"){
     $PowerShell2.EndInvoke($Job2)
     $Runspace2.Close()
     $Runspace2.Dispose()
-    $SDDCFileName=($SDDCPath -split '\\')[-1]
+    $SDDCFileName=($SDDCPath.TrimEnd('\') -split '\\')[-1]
     If($CluChkReportLoc.Count -gt 1) {$CluChkReportLoc = $CluchkReportLoc[0]}
     $HtmlReport= Join-Path -Path $CluChkReportLoc -ChildPath CluChkPerfReport_v$CluChkVer-$DTString$SDDCFileName.html
     Write-Host ("Report Output location: " + $HtmlReport)
