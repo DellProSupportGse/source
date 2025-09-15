@@ -26,9 +26,12 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/09/15:v1.73 -  1. New Update: TP - New version 1.73 DEV
+                        2. Bug Fix: TP - Set date for 11.x to 12.x update to Oct 10th, 2025
+
     2025/09/08:v1.72 -  1. New Update: TP - New version 1.72 DEV
                         2. Bug Fix: SA - Remove trailing slash
-						3. Bug Fix: SA - Removed hard PageFile check for 24h2
+                        3. Bug Fix: SA - Removed hard PageFile check for 24h2
                         4. Bug Fix: TP - Some systems were not finding the Compression module.
                         5. Bug Fix: TP - Intel E810 driver version does not match. Support Matrix is 24, real driver is 1.17.73.0
                         6. New Feature: TP - In Physical Disks show CannotPoolReason.
@@ -188,7 +191,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.72"
+$CluChkVer="1.73"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -4592,7 +4595,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
            $SupportedDate=Get-Date (Get-Date).AddMonths(-6) -Format "yyMM"
            Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -ErrorAction Stop -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
            $SUVersions=(([xml](Get-Content $env:temp\outfile.xml)).ASZSolutionBundleUpdates.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} 
-           if (([version]$SysInfo[0].AzureLocalVersion).major -eq '11' -and (Get-Date) -lt (Get-Date "09/15/2025")) {$SUVersions=$SUVersions | ? {([version]$_.Version).major -ne '12'}}
+           if (([version]$SysInfo[0].AzureLocalVersion).major -eq '11' -and (Get-Date) -lt (Get-Date "10/10/2025")) {$SUVersions=$SUVersions | ? {([version]$_.Version).major -ne '12'}}
            Invoke-WebRequest -Uri "https://aka.ms/AzureStackSBEUpdate/DellEMC" -UseBasicParsing -OutFile $env:temp\outfile.xml
            $SBEVersions=(([xml](Get-Content $env:temp\outfile.xml)).SBEUpdatesManifest.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} | ? Family -match $GenerationNodes
            $CurrentUpdatesandHotfixes=Foreach ($key in ($SDDCFiles.keys -like "*GetStampInformation")) { $SDDCFiles."$key" |`
