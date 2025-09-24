@@ -26,6 +26,17 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/09/24:v1.74 -  1. New Update: TP - New version 1.74 DEV
+                        2. Bug Fix: SA - Fix for single node cluster
+                        3. Bug Fix: SA - Fix for OEM Support Provider check
+                        4. Bug Fix: SA - Physical disk in storagepool on a single node cluster
+                        5. Bug Fix: SA - Vitrual disk in storagepool on a single node cluster
+                        6. New Feature: TP - Searches latest ECE etl for SBE content issue
+                        7. New Feature: TP - Create DHealthTest junction in user profile to avoid long path errors
+                        8. New Feature: TP - If SU/SBE is not Installed or Obsolete then show latest as Next MS SU or Next SBE
+                        9. New Feature: TP - Request from LA, ProvisioningType for Virtual Disks
+                        10. New Feature: TP - LA Request, mark non-converged non-storage nics as yellow for enabled Net QOS
+
     2025/09/15:v1.73 -  1. New Update: TP - New version 1.73 DEV
                         2. Bug Fix: TP - Set date for 11.x to 12.x update to Oct 10th, 2025
 
@@ -191,7 +202,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.73"
+$CluChkVer="1.74"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -700,11 +711,19 @@ Write-Host "    ERROR: SDDC Path does not exist. Existing" -ForegroundColor Red
 EndScript
 }
 $SDDCPath = $SDDCInputFolder
+
 $CluChkReportLoc=Split-Path -Path $SDDCPath
 }
 IF($selection -eq "4"){$Global:ProcessSDDC = "N"}
  }
 #endregion SDDC Locate and Extract
+
+try {(Get-Item "$($env:USERPROFILE)\DHealthTest" -ErrorAction SilentlyContinue).Delete()} catch {}
+$SDDCOldPath=$SDDCPath
+If ($SDDCOldPath.Length -gt 90) {
+    New-Item -ItemType Junction -Path "$($env:USERPROFILE)\DHealthTest" -Target (Split-Path $SDDCPath -Parent) | Out-Null
+    $SDDCPath="$($env:USERPROFILE)\DHealthTest\"+(Split-Path $SDDCPath -Leaf)
+}
 
 #region  Ask for TSRs
 #$ProcessTSR = Read-Host "Would you like to process TSRs? [y/n]"
@@ -2794,9 +2813,10 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
             $html+=$ClusterPool | ConvertTo-html -Fragment 
             If($ClusterName.S2DEnabled -eq 1){
                 #Sets the FaultDomainAwarenessDefault red if S2D is enabled and the value is not StorageScaleUnit
-                $html=$html -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
-                            -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
-                            -replace '<td>StorageEnclosure</td>','<td style="color: #ffffff; background-color: #ff0000">StorageEnclosure</td>'`
+				if ($ClusterNodeCount -gt 1) {
+                    $html=$html -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
+				}
+                $html=$html -replace '<td>StorageEnclosure</td>','<td style="color: #ffffff; background-color: #ff0000">StorageEnclosure</td>'`
                             -replace '<td>StorageChassis</td>','<td style="color: #ffffff; background-color: #ff0000">StorageChassis</td>'`
                             -replace '<td>StorageRack</td>','<td style="color: #ffffff; background-color: #ff0000">StorageRack</td>'
             }
@@ -2936,7 +2956,7 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
           '2'{'By Policy'}`
           '5'{'Unknown'}`
         }} else {$_.DetachedReason}}},
-        FileSystem,
+        FileSystem,ProvisioningType,
         IsSnapshot,@{Label='Access';Expression={If ($_.Access -match "\d") {@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]} else {"RREEDD"*($_.Access -ne "Read/Write")+$_.Access}}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
         #$VirtualDisks | FT -AutoSize -Wrap
 
@@ -3174,9 +3194,10 @@ $htmlout+=$html
             $html+=$VDROutput | ConvertTo-html -Fragment 
             If($ClusterName.S2DEnabled -eq 1){
                 #Sets the FaultDomainAwarenessDefault red if S2D is enabled and the value is PhysicalDisk
-                $html=$html -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
-                            -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
-                            -replace '<td>StorageEnclosure</td>','<td style="color: #ffffff; background-color: #ff0000">StorageEnclosure</td>'`
+				if ($ClusterNodeCount -gt 1) {
+                    $html=$html -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
+                }
+                $html=$html -replace '<td>StorageEnclosure</td>','<td style="color: #ffffff; background-color: #ff0000">StorageEnclosure</td>'`
                             -replace '<td>StorageChassis</td>','<td style="color: #ffffff; background-color: #ff0000">StorageChassis</td>'`
                             -replace '<td>StorageRack</td>','<td style="color: #ffffff; background-color: #ff0000">StorageRack</td>'`
                             -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -4586,23 +4607,58 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
 }
     
  Write-Host "Total Time here is $(((Get-Date)-$dstartSDDC).totalmilliseconds)"
+
+#region Solution and SBE Updates
+        $Name="Solution and SBE Updates"
+        Write-Host "    Gathering $Name..."  
+        If ($SysInfo[0].AzureLocalVersion -gt "") {
+           $Name="Solution and SBE Updates"
+           #Write-Host "    Gathering $Name..."
+           $SolutionUpdates=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -match 'GetSolutionUpdate' }| Select-Object -First 1)" |`
+           Sort-Object ResourceId | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},MinVersionRequired,MinSBEVersionRequied,ComponentVersions
+        
+            #Azure Table
+               $AzureTableData=@()
+               $AzureTableData=$ClusterHeartbeatConfigurationXml | Select *,
+                   @{L='ReportID';E={$CReportID}}
+               $PartitionKey=$Name -replace '\s'
+               $TableName="CluChk$($PartitionKey)"
+               $SasToken='?sv=2019-02-02&si=CluChkUpdate&sig=f69DyaUGlwcc%2BUujAbpnJ%2B4VPk3PigwCgjIIa0DQCQY%3D&tn=CluChkClusterHeartbeatConfiguration'
+               $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
+
+           #HTML Report
+           $html+='<H2 id="SolutionandSBEUpdates">Solution and SBE Updates</H2>'
+           $html+=$SolutionUpdates | ConvertTo-html -Fragment
+           $html=$html `
+           -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
+           -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
+           $html+="<h5>&nbsp;&nbsp;<a href='https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2' target='_blank'>Ref: https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2</a></h5>"
+           $ResultsSummary+=Set-ResultsSummary -name $name -html $html
+           $htmlout+=$html
+           $html=""
+           $Name=""
+        }
+#end region Solution and SBE Updates
+
+
 #region Recommended updates and hotfixes for Windows Server 
         $dstart=Get-Date
         $Name="Recommended Updates and Hotfixes"
         Write-Host "    Gathering $Name..."  
         $OSVersion=$OSVersionNodes
+        $ReadySUs=$SolutionUpdates | ? State -notmatch "Installed|Obsolete"
         If ($SysInfo[0].AzureLocalVersion -gt "") {
            $SupportedDate=Get-Date (Get-Date).AddMonths(-6) -Format "yyMM"
            Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -ErrorAction Stop -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
            $SUVersions=(([xml](Get-Content $env:temp\outfile.xml)).ASZSolutionBundleUpdates.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} 
-           if (([version]$SysInfo[0].AzureLocalVersion).major -eq '11' -and (Get-Date) -lt (Get-Date "10/10/2025")) {$SUVersions=$SUVersions | ? {([version]$_.Version).major -ne '12'}}
+           if (([version]$SysInfo[0].AzureLocalVersion).major -ne '12' -and (Get-Date) -lt (Get-Date "10/10/2025")) {$SUVersions=$SUVersions | ? {([version]$_.Version).major -ne '12'}}
            Invoke-WebRequest -Uri "https://aka.ms/AzureStackSBEUpdate/DellEMC" -UseBasicParsing -OutFile $env:temp\outfile.xml
            $SBEVersions=(([xml](Get-Content $env:temp\outfile.xml)).SBEUpdatesManifest.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} | ? Family -match $GenerationNodes
            $CurrentUpdatesandHotfixes=Foreach ($key in ($SDDCFiles.keys -like "*GetStampInformation")) { $SDDCFiles."$key" |`
               Select-Object @{Label="PSComputerName";Expression={$key.replace("GetStampInformation","")}},@{Label='SBE Version';Expression={$sbever=$_.OemVersion;if (([version]$sbever).Build -lt $SupportedDate) {"RREEDD$sbever"} else{ "YYEELLLLOOWW"*([Version]$SBEVersions[-1].Version -ne [version]$sbever)+$sbever}}},
              @{Label='MS Solution';Expression={$suver=$_.StampVersion;if (([version]$suver).Minor -lt $SupportedDate) {"RREEDD$suver"} else{ "YYEELLLLOOWW"*([Version]$SUVersions[-1].Version -ne [version]$suver)+$suver}}},@{Label='Deployed Version';Expression={$_.InitialDeployedVersion}},
-             @{Label='Next SBE';Expression={$suver=$_.StampVersion;$sbever=$_.OemVersion;if ([Version]$SBEVersions[-1].Version -ne [version]$sbever) {(($SBEVersions | ? RequiredSBE -match ($sbever.split(".")[0..2] -join ".") | ? {$_.RequiredSolution -match ($suver.split(".")[0..1] -join ".") -or $_.RequiredSolution -match ("$(([version]$suver).Major).*.$(([version]$suver).Build)")})[-1]).Version}}},
-             @{Label='Next MS SU';Expression={$suver=$_.StampVersion;if ([Version]$SUVersions[-1].Version -ne [version]$suver) {(($SUVersions | ?{$_.RequiredSolution -match ($suver.split(".")[0..1] -join ".") -or $_.RequiredSolution -match ("$(([version]$suver).Major).*.$(([version]$suver).Build)")})[-1]).Version}}}
+             @{Label='Next SBE';Expression={if ($ReadySUs | ? ResourceID -match SBE) {($ReadySUs | ? ResourceID -match SBE)[-1].Version} else {$suver=$_.StampVersion;$sbever=$_.OemVersion;if ([Version]$SBEVersions[-1].Version -ne [version]$sbever) {(($SBEVersions | ? RequiredSBE -match ($sbever.split(".")[0..2] -join ".") | ? {$_.RequiredSolution -match ($suver.split(".")[0..1] -join ".") -or $_.RequiredSolution -match ("$(([version]$suver).Major).*.$(([version]$suver).Build)")})[-1]).Version}}}},
+             @{Label='Next MS SU';Expression={if ($ReadySUs | ? ResourceID -match Solution) {($ReadySUs | ? ResourceID -match Solution)[-1].Version} else {$suver=$_.StampVersion;if ([Version]$SUVersions[-1].Version -ne [version]$suver) {(($SUVersions | ?{$_.RequiredSolution -match ($suver.split(".")[0..1] -join ".") -or $_.RequiredSolution -match ("$(([version]$suver).Major).*.$(([version]$suver).Build)")})[-1]).Version}}}}
 
 
            }
@@ -5044,38 +5100,6 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
         #Write-Host "Total time taken is $(($dstop-$dstart).totalmilliseconds)"
 #endregion Recommended updates and hotfixes for Windows Server
 
-#Solution and SBE Updates
-        $Name="Solution and SBE Updates"
-        Write-Host "    Gathering $Name..."  
-        If ($SysInfo[0].AzureLocalVersion -gt "") {
-           $Name="Solution and SBE Updates"
-           #Write-Host "    Gathering $Name..."
-           $SolutionUpdates=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -match 'GetSolutionUpdate' }| Select-Object -First 1)" |`
-           Sort-Object ResourceId | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},MinVersionRequired,MinSBEVersionRequied,ComponentVersions
-        
-            #Azure Table
-               $AzureTableData=@()
-               $AzureTableData=$ClusterHeartbeatConfigurationXml | Select *,
-                   @{L='ReportID';E={$CReportID}}
-               $PartitionKey=$Name -replace '\s'
-               $TableName="CluChk$($PartitionKey)"
-               $SasToken='?sv=2019-02-02&si=CluChkUpdate&sig=f69DyaUGlwcc%2BUujAbpnJ%2B4VPk3PigwCgjIIa0DQCQY%3D&tn=CluChkClusterHeartbeatConfiguration'
-               $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
-           #HTML Report
-           $html+='<H2 id="SolutionandSBEUpdates">Solution and SBE Updates</H2>'
-           $html+=$SolutionUpdates | ConvertTo-html -Fragment
-           $html=$html `
-           -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
-           -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
-           $html+="<h5>&nbsp;&nbsp;<a href='https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2' target='_blank'>Ref: https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2</a></h5>"
-           $ResultsSummary+=Set-ResultsSummary -name $name -html $html
-           $htmlout+=$html
-           $html=""
-           $Name=""
-        }
-#end region Solution and SBE Updates
-
 #Latest Action Plan Failure
 If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse).count) {
         $Name="Latest Action Plan Failure"
@@ -5088,7 +5112,7 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
                          
             try {$resultObject +=  [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PreContext | select-string 'Value') -split ': On ')[-1].trim(':')
-                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm tt")
+                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
                 Message                         = $ErrorMessage.Line.Trim()
                 
             }
@@ -5100,7 +5124,7 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
 
             try {$resultObject +=   [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PostContext | select-string 'TargetResourceName') -split ':')[-1].trim()
-                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm tt")
+                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
                 Message                         = ((($ErrorMessage.Context.PostContext | select-string 'TargetResourceName' -Context 0,5).Context.PostContext ) -replace "Description        : ","").Trim() -join ","
                 
             }
@@ -5116,9 +5140,12 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
             Foreach ($ECE in $ECEzip) {
                 try {
                 $zip = [System.IO.Compression.ZipFile]::OpenRead($ECE)
+                $entry = $zip.Entries | Where-Object {$_.FullName -like "*_AzureStack.ECE.*.etl"}
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry,"$(Split-Path (Split-Path $ECE -Parent) -Parent)\AzureStack.ECE.etl")
                 $entry = $zip.Entries | Where-Object {$_.FullName -like "AzureStackFailedActionPlanInformation-*.json"}
                 [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry,"$(Split-Path (Split-Path $ECE -Parent) -Parent)\AzureStackFailedActionPlanInformation.json")
                 } catch {}
+
             }
         
         }
@@ -5128,7 +5155,7 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
                 $StopError = ([xml]$apupdate).SelectNodes("//Task") | where Status -eq "Error" | where Action -eq $null | where Exception -ne $null
                 $APTime=$StopError.EndTimeUtc
                 If (!($APTime)) {$APTime=$StopError.StartTimeUtc}
-                $APTime=try {(Get-Date $APTime -Format "MM/dd/yyyy HH:mm tt")} catch {(Get-Date -Format "MM/dd/yyyy HH:mm tt")}
+                $APTime=try {(Get-Date $APTime -Format "MM/dd/yyyy HH:mm tt")} catch {(Get-Date -Format "MM/dd/yyyy HH:mm")}
                 if ($StopError) {
                     $resultObject +=     [PSCustomObject] @{
                         Target                  = $APLMU.Directory.Name -replace "Node_",""
@@ -5140,8 +5167,39 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
                 }
             }
         }
+        $ECEErrors="Extra content found error
+Extra directory found error
+SBE Manifest Credentialist Schema for secret
+Unable to get host IP address information
+Unable to get SBE CredentialList
+No secretname assocated with SBE secret error
+Unable to lookup KV details for
+Unable to add KV info to
+File hash mismatch error
+/(?!'0') missing\/invalid files in" -split ("`r`n")
 
+        Foreach ($ECE in (Get-ChildItem -Path $SDDCPath -Filter "AzureStack.ECE.etl" -Recurse)) {
+            tracerpt.exe "$($ECE.fullname)" -of xml -o "$($ECE.Directory)\$($ECE.Basename).xml" -y | Out-Null
+            [xml]$ECELog=gc "$($ECE.Directory)\$($ECE.Basename).xml"
+            $ECEEvents=($ecelog.events.event.eventdata.data | ? Name -eq message | ? {$_.'#text' -notmatch "^\[Test-SBEContentIntegrity" -and $_.'#text' -cnotlike "*SUCCESS*"}).'#text'
+            $TheseErrors=@()
+            Foreach ($FindErr in $ECEErrors) { 
+                $TheseErrors+=$ECEEvents | ? {$_ -match $FindErr}
+                
+                }
+                $TheseErrors=$TheseErrors | sort -Descending | sort {($_ -split '\[Test-SBEContentIntegrity\]')[-1]} -Unique
+                Foreach ($ThisError in $TheseErrors) {
+                    $ThisErrorGroups=($ThisError | select-string "\[(.*)\]\:(\d{4}-\d{2}-\d{2} \d{2}.\d{2}.\d{2}).*\[Test-SBEContentIntegrity\] (.*)").Matches.Groups
+                    $resultObject +=     [PSCustomObject] @{
+                        Target                  = $ThisErrorGroups[1].Value
+                        TimeStamp               = (Get-Date $ThisErrorGroups[2].Value -Format "MM/dd/yyyy HH:mm")
+                        Message                 = $ThisErrorGroups[3].Value
+                
+                    }
+            }
+            #[AZL-BORO-HOST03]:2025-09-11 17:17:25 Warning  2> [EnvironmentValidator:EnvironmentValidatorPreUpdate] [Test-SBEContentIntegrity] Extra content found error : 'C:\CloudContent\Microsoft_Reserved\Update\...
 
+        }
         $ActionPlanErrors=$resultObject | sort TimeStamp -Descending | sort Target,Message -Unique | sort TimeStamp -Descending
         Foreach ($apfailure in $ActionPlanErrors) {
             if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-7)) {
@@ -6160,7 +6218,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             Sort-Object PSComputerName,Name | Select-Object PSComputerName,Name,DisplayName,DisplayValue
         }
         $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,DisplayName,`
-        @{Label='DisplayValue';Expression={If(($_.name -imatch $StorageNics.name | Sort-Object -Unique ) -and ($_.DisplayValue -inotmatch 'Enabled')){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}}}
+        @{Label='DisplayValue';Expression={$nn=$_.name;"RREEDD"*(($nn -imatch ($StorageNics.name | Sort-Object -Unique)) -and ($_.DisplayValue -inotmatch 'Enabled'))+"YYEELLLLOOWW"*($NotConverged -and (($StorageNics.name | Sort-Object -Unique) -notcontains $nn))+$_.DisplayValue}}
         #$GetNetAdapterAdvancedProperty | FT -AutoSize
         #Azure Table
             $AzureTableData=@()
@@ -6181,6 +6239,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $html+="<h5><b>Should be:</b></h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-DisplayName=Quality Of Service</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-DisplayValue=Enabled</h5>"
+        $html+="<h5><b>If Management NIC with Non-Converged Intent this should be Disabled</b></h5><br>"
         $html+=$GetNetAdapterAdvancedProperty | ConvertTo-html -Fragment
         $html=$html `
          -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -6319,7 +6378,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $Name=""
         }
   }
-    $SystemInfoContent=@((Get-Content -Path ((Get-ChildItem -Path $SDDCPath -Filter "SystemInfo.TXT" -Recurse -Depth 1).FullName[0]))[0..5])
+    $SystemInfoContent=@((Get-Content -Path ((Get-ChildItem -Path $SDDCPath -Filter "SystemInfo.TXT" -Recurse -Depth 1)[0].FullName))[0..5])
 
     #Disable SMB Signing
         $Name="Disable SMB Signing"
@@ -6423,31 +6482,32 @@ If($SystemInfoContent[2] -imatch 'HCI'){
             $Name="OEM Information Support Provider"
             Write-Host "    Gathering $Name..." 
             $GetRegOEMInformation=Foreach ($key in ($SDDCFiles.keys -like "*GetRegOEMInformation")) {$SDDCFiles."$key" | Select *,@{L="ComputerName";E={$key.Replace("GetRegOEMInformation","")}}}
-            #Skip if no 
-                $GetRegOEMInformationOutMissing=@()
-                $GetRegOEMInformationOutAll=@()
-                $GetRegOEMInformationOut=@()
-                $GetRegOEMInformationOut+=$GetRegOEMInformation|Where-Object{$_.SupportProvider -ne $Null} | Sort-Object ComputerName | Select-Object ComputerName,@{L='SupportProvider';E={$SupportProvider=$_.SupportProvider;IF($SupportProvider -inotmatch 'dell'){"RREEDD$SupportProvider"}Else{$SupportProvider}}}
-                #Checking/Adding missing nodes
-#check when none of the nodes have an entry, just list them all then
-if($GetRegOEMInformationOut.PSComputerName.count -eq 0 -and $SysInfo[0].SysModel -notmatch "^APEX") {
-ForEach($Node in $ClusterNodes){
+
+            $GetRegOEMInformationOutMissing=@()
+            $GetRegOEMInformationOutAll=@()
+            $GetRegOEMInformationOut=@()
+            $GetRegOEMInformationOut+=$GetRegOEMInformation|Where-Object{$_.SupportProvider -ne $Null} | Sort-Object ComputerName | Select-Object ComputerName,@{L='SupportProvider';E={$SupportProvider=$_.SupportProvider;IF($SupportProvider -inotmatch 'dell'){"RREEDD$SupportProvider"}Else{$SupportProvider}}}
+            #Checking/Adding missing nodes
+            #check when none of the nodes have an entry, just list them all then
+            if($GetRegOEMInformationOut.ComputerName.count -eq 0 -and $SysInfo[0].SysModel -notmatch "^APEX") {
+                ForEach($Node in $ClusterNodes){
+                    $GetRegOEMInformationOut+=[PSCustomObject]@{
+                        ComputerName = $Node.name
+                        SupportProvider = "RREEDDMissing"
+                    }
+                }
+            } else {
+			    $ClusterNodeCount=($SDDCFiles."GetClusterNode" |Measure-Object).count
+                IF($GetRegOEMInformationOut.ComputerName.count -le $ClusterNodeCount){
+                    $MissingNodes=(Compare-Object $GetRegOEMInformationOut.ComputerName $ClusterNodes.name).InputObject
+                    ForEach($Node in $MissingNodes){
                         $GetRegOEMInformationOut+=[PSCustomObject]@{
-                            PSComputerName = $Node.name
+                            ComputerName = $Node
                             SupportProvider = "RREEDDMissing"
                         }
                     }
-} else {
-IF($GetRegOEMInformationOut.PSComputerName.count -le $ClusterNodeCount){
-$MissingNodes=(Compare-Object $GetRegOEMInformationOut.PSComputerName $ClusterNodes.name).InputObject
-ForEach($Node in $MissingNodes){
-$GetRegOEMInformationOut+=[PSCustomObject]@{
-PSComputerName = $Node
-SupportProvider = "RREEDDMissing"
-}
-}
-}
-}
+                }
+            }
             #$GetRegOEMInformationOut | FT -AutoSize
             #Azure Table
                 $AzureTableData=@()
@@ -6994,6 +7054,9 @@ IF($SDDCPerf -ieq "YES"){
 }
 #endregion  Create CluChk Html Report
 
+If ($SDDCOldPath.Length -gt 90) {
+    (Get-Item "$($env:USERPROFILE)\DHealthTest" -ErrorAction SilentlyContinue).Delete()
+}
 
 TLogCleanup 
 $allArrayout=@()
