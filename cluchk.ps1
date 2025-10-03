@@ -26,6 +26,11 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/10/03:v1.75 -  1. New Update: TP - New version 1.75 DEV
+                        2. New Update: TP - Added resolution for CauReport WSMan provider error in latest action plan
+                        3. New Update: TP - Added RPs not registered to latest action plan
+                        4. Bug Fix: TP - From JF, if a node is down it may show up multiple times in Cluster Node table.
+
     2025/09/24:v1.74 -  1. New Update: TP - New version 1.74 DEV
                         2. Bug Fix: SA - Fix for single node cluster
                         3. Bug Fix: SA - Fix for OEM Support Provider check
@@ -202,7 +207,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.74"
+$CluChkVer="1.75"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -2689,8 +2694,8 @@ ForEach($Sys in $SysInfo){
         @{L="Time Zone";E={
             $allproperties | ? {$_.'Host Name' -ieq $Sys.Hostname} | %{if ($_.'Time Zone' -ne $primarytz) {"RREEDD$($_['Time Zone'])"} else {"$($_['Time Zone'])"} }
         }}
-        $ClusterNodesOut+=$ClusterNodes | Where-Object {!($Sysinfo.HostName -match $_.name)}
 }
+$ClusterNodesOut+=$ClusterNodes | Where-Object {!($Sysinfo.HostName -match $_.name)}
 $NewestUBR=($ClusterNodesOut | sort UBR)[-1].UBR
 #$ClusterNodesOut = $ClusterNodesOut | Select-Object Name,Model,SerialNumber,State,StatusInformation,Id,OSName,OSVersion,OSBuild,AzureLocal,@{L="UBR";E={"RREEDD"*($_.UBR -ne $NewestUBR)+$_.UBR}},'Time Zone'
 
@@ -2707,8 +2712,8 @@ $NewestUBR=($ClusterNodesOut | sort UBR)[-1].UBR
     $html+="<h5><b>Should be:</b></h5>"
     $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;OSBuildVersion = 26100(HCI OS 24H2), 25398(HCI OS 23H2), 20349(HCI OS 22H2), 20348(Server 2022 LTSB or HCI OS 21H2), 19042(HCI OS 20H2), 2610(Server 2025), 20348(Server 2022), 17763(Server 2019), 14393(Server 2016) </h5>"
     If($ClusterNodesOut.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No Cluster Nodes found</span></h5>'}
-    $html+=$ClusterNodesOut | ConvertTo-html -Fragment 
-    IF(($sys.OSName -imatch "Stack") -and ($ClusterNodesOut.OSBuild -imatch "RREEDD")){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;NOTE: 20H2,21H2 are EoL MUST upgrade to 22H2 for Support. Return to Rework</h5>"}
+    $html+=$ClusterNodesOut | Sort Name | ConvertTo-html -Fragment 
+    IF(($sys.OSName -imatch "Stack") -and ($ClusterNodesOut.OSBuild -imatch "RREEDD")){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;NOTE: 20H2,21H2,22H2 are EoL MUST upgrade to 23H2 for Support. Return to Rework</h5>"}
     $html=$html `
      -replace '<td>Paused</td>','<td style="background-color: #ffff00">Paused</td>'`
      -replace '<td>Quarantined</td>','<td style="background-color: #ffff00">Quarantined</td>'`
@@ -5121,15 +5126,31 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
         $derr=$ap | select-string -SimpleMatch 'Test-EnvironmentReadiness: the following results were not successful:' -Context 0,20
 
         foreach ($ErrorMessage in $derr) {
-
+            $ThisError=((($ErrorMessage.Context.PostContext | select-string 'TargetResourceName' -Context 0,5).Context.PostContext ) -replace "Description        : ","").Trim() -join ","
             try {$resultObject +=   [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PostContext | select-string 'TargetResourceName') -split ':')[-1].trim()
                 TimeStamp                       = (Get-Date (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
-                Message                         = ((($ErrorMessage.Context.PostContext | select-string 'TargetResourceName' -Context 0,5).Context.PostContext ) -replace "Description        : ","").Trim() -join ","
-                
+                Message                         = $ThisError
             }
             } catch {}
         }
+        $derr=$ap | select-string -SimpleMatch 'Mandatory RP Providers' -Context 10,1
+        foreach ($ErrorMessage in $derr) {
+            $ThisError=$ErrorMessage.Line.Trim()
+            $RPs=$ErrorMessage.Line.Trim() | select-string  "(\w*\.\w*)"
+            $RPs= $RPs.Matches.Groups.Value | sort -Unique | ForEach-Object { '"{0}"' -f $_ }
+            $RParray="@("+($RPs -join ",")+")"
+            $FixCmd="$RParray | %{Register-AzResourceProvider -ProviderNamespace `$_}"
+            $ThisError='BBOOLLDDOONNPlease run the following in Azure CLI to resolve this error:RRREEETTT'+$FixCmd+'RRREEETTTRRREEETTTRun the following on any node in the cluster:RRREEETTTGet-ClusterGroup "azure stack hci * cluster group" | Stop-ClusterGroup | Start-ClusterGroupRRREEETTTInvoke-SolutionUpdatePrecheck # Wait '+(5+$ClusterNodeCount*5)+' MinutesBBOOLLDDOOFFFF RRREEETTT RRREEETTT'+$ThisError
+            try {$resultObject +=   [PSCustomObject] @{
+                Target                  = (($ErrorMessage.Context.PreContext | select-string 'TargetResourceName') -split ':')[-1].trim()
+                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
+                Message                         = $ThisError
+            }
+            } catch {}
+        }
+
+
         $ECEzip=$null
         $APLMU=$null
         $apupdate=$null
@@ -5157,10 +5178,16 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
                 If (!($APTime)) {$APTime=$StopError.StartTimeUtc}
                 $APTime=try {(Get-Date $APTime -Format "MM/dd/yyyy HH:mm tt")} catch {(Get-Date -Format "MM/dd/yyyy HH:mm")}
                 if ($StopError) {
+                    $ThisError=($StopError.Exception.Message.split("`n") | select -first 10).Trim() -join ","
+                    if ($ThisError -match 'Invoke-Command for Get-CauReport failed. Error=Processing data.*remote.*failed with the following error message\: The WSMan provider host process did not return a proper response') {
+                        if ((gci $SDDCPath -Filter "CauReport-00000101000000.xml" -Recurse).count) {
+                            $ThisError='BBOOLLDDOONNPlease run the following to resolve this error:RRREEETTTInvoke-Command -ComputerName (Get-ClusterNode).Name -ScriptBlock {Remove-Item C:\Windows\Cluster\Reports\CauReport-00000101000000.xml -Force}BBOOLLDDOOFFFF RRREEETTT RRREEETTT'+$ThisError
+                        }
+                    }
                     $resultObject +=     [PSCustomObject] @{
                         Target                  = $APLMU.Directory.Name -replace "Node_",""
                         TimeStamp                       = $APTime
-                        Message                         = ($StopError.Exception.Message.split("`n") | select -first 10).Trim() -join ","
+                        Message                         = $ThisError
                 
                     }
                     
@@ -5214,7 +5241,10 @@ File hash mismatch error
            $html+=$ActionPlanErrors | ConvertTo-html -Fragment
            $html=$html `
            -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
-           -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
+           -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'`
+           -replace 'BBOOLLDDOONN','<b>'`
+           -replace 'BBOOLLDDOOFFFF','</b>'`
+           -replace 'RRREEETTT','<br>'
            #$html+="<h5>&nbsp;&nbsp;<a href='https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2' target='_blank'>Ref: https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2</a></h5>"
            $ResultsSummary+=Set-ResultsSummary -name $name -html $html
            $htmlout+=$html
@@ -5309,7 +5339,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $html+=$GetNetIntentStatusXmlOut | Select-Object Host,IntentName,Type,LastSuccess,Progress,ConfigurationStatus,ProvisioningStatus | ConvertTo-html -Fragment
             $html=$html `
              -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
-             -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'                
+             -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
             $ResultsSummary+=Set-ResultsSummary -name $name -html $html
             $htmlout+=$html
             $html=""
