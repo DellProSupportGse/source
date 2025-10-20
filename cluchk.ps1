@@ -26,6 +26,12 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/10/20:v1.76 -  1. New Update: TP - New version 1.76 DEV
+                        2. New Update: TP - Added Priority/Pri to the Cluster Groups and VM Info tables for both clustered and local VMs.
+                        3. Bug Fix: TP - JG noticed VD fault resiliency not longer marks parity volumes with a warning.
+                        4. Bug Fix: TP - 14g S2d ready nodes not showing driver vesion for N-1. Added check for N-2.
+                        5. Bug Fix: SA - Fix Memory warning
+
     2025/10/03:v1.75 -  1. New Update: TP - New version 1.75 DEV
                         2. New Update: TP - Added resolution for CauReport WSMan provider error in latest action plan
                         3. New Update: TP - Added RPs not registered to latest action plan
@@ -207,7 +213,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.75"
+$CluChkVer="1.76"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -1083,7 +1089,37 @@ if (-not $mdUrl) {
 $mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
 
 }
+If (!($mdText -match "<td>$($sysinfo[0].SysModel)</td>")) {
 
+# Step 1: Get SupportMatrix versions N-2
+$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing
+$latestFolder = $topResponse | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d{4}$' } |
+    Sort-Object name -Descending | Select-Object -Skip 2 | Select-Object -First 1
+$latestVersion = $latestFolder.name
+$latestVersionPath = "$basePath/$latestVersion"
+
+# Step 2: Get platform folders under latest version
+$platformFolders = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$latestVersionPath" -Headers $headers |
+    Where-Object { $_.type -eq 'dir' }
+
+# Step 3: Choose platform folder (update this as needed)
+$matchedPlatform = $platformFolders | Where-Object { $_.name -imatch $GenerationNodes }
+$mdUrl = $null
+
+if ($matchedPlatform) {
+    $mdPath = "$latestVersionPath/$($matchedPlatform.name)"
+    $mdIndex = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$mdPath" -Headers $headers |
+        Where-Object { $_.name -eq "_index.md" }
+    $mdUrl = $mdIndex.download_url
+}
+
+if (-not $mdUrl) {
+    Write-Warning "No matching _index.md found for platform $GenerationNodes"
+}
+# Step 4: Extract all HTML tables from _index.md
+$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
+
+}
 $mdurl
 
 $SMRevHistLatest=($mdURL -replace "https://raw.githubusercontent.com/dell/azurestack-docs/main/content/en","https://dell.github.io/azurestack-docs" -replace "_index.md","").ToLower()
@@ -2360,7 +2396,8 @@ $Name=""
                 '1'{'Enabled'}}}
         }},@{Label="Quorum";Expression={@("Static","Dynamic","Unknown")[$_.DynamicQuorum]}},
         @{Label="Mixed Mode";Expression={if (($SDDCFiles."GetClusterNodeSupportedVersion").ClusterFunctionalLevel.count -gt 1) {'RREEDDTrue'} else {'False'}}},
-        @{L="CAU Auto Update";E={$CauRole=$SDDCFiles."GetCauClusterRole";if ($CauRole) {if ($CauRole[1].value.value -eq "Online" -and $CauRole[-1].value -gt -1 -and $CauRole[-2].value.value -gt '' -and $CauRole[2].value -lt (Get-Date).AddDays(30)) {"RREEDDEnabled"}else{"Disabled"}}}}
+        @{L="CAU Auto Update";E={$CauRole=$SDDCFiles."GetCauClusterRole";if ($CauRole) {if ($CauRole[1].value.value -eq "Online" -and $CauRole[-1].value -gt -1 -and $CauRole[-2].value.value -gt '' -and $CauRole[2].value -lt (Get-Date).AddDays(30)) {"RREEDDEnabled"}else{"Disabled"}}}},`
+        ShutdownTimeoutInMinutes
         #$ClusterName | FT -AutoSize -Wrap
 
         #Azure Table
@@ -2474,7 +2511,7 @@ If($ClusterOwner.count -eq 0){$html+='<h5><span style="color: #ffffff; backgroun
                    }}
                IF($ClusterNodeCount -gt 2){
                   IF(!($ClusterWitness) -and $SysInfo[0].SysModel -notmatch "^APEX"){
-                       $html+='<p style="color: #000000; background-color: #ffff00">&nbsp;&nbsp;&nbsp;&nbsp;WARNING: Missing Cluster Witness. It is Recommened to have a Cluster Witness for clusters with Less Than Five(5) Nodes to improve resilancy.</p>' 
+                       $html+='<p style="color: #000000; background-color: #ffff00">&nbsp;&nbsp;&nbsp;&nbsp;WARNING: Missing Cluster Witness. It is Recommened to have a Cluster Witness for clusters with Less Than Five(5) Nodes to improve resiliency.</p>' 
                   }}}
             IF($ClusterNodeCount -gt 5){
                 IF(!($ClusterWitness) -and $SysInfo[0].SysModel -notmatch "^APEX"){
@@ -2521,7 +2558,7 @@ If($ClusterOwner.count -eq 0){$html+='<h5><span style="color: #ffffff; backgroun
                 '1536' {'Healthy'}`
                 Default {$_.StatusInformation}
 
-        }}},Id
+        }}},Id,Priority
         #$ClusterGroup-Objects | FT -AutoSize -Wrap
 
         #Azure Table
@@ -2562,7 +2599,7 @@ If($ClusterOwner.count -eq 0){$html+='<h5><span style="color: #ffffff; backgroun
                 '8'{'5'}#2012
             }
         $VMInfo=foreach ($key in ($SDDCFiles.keys -like "*GetVM")) { $SDDCFiles."$key" |`
-        Sort-Object ComputerName,Name | Select-Object @{L="Host";E={$_.ComputerName}},VMName,State,CPUUsage,ProcessorCount,`
+        Sort-Object ComputerName,Name | Select-Object @{L="Host";E={$_.ComputerName}},VMName,State,@{L="Pri";E={$vmname=$_.VMName;if ($_.IsClustered) {[int](($ClusterGroup | Where {$_.Name -eq $vmname}).Priority/1000)}else{[int]($_.AutomaticStartAction)-2}}},CPUUsage,ProcessorCount,`
         @{Name="MemoryAssigned";Expression={Convert-BytesToSize $_.MemoryAssigned}},`
         Uptime,Status,@{Name="ConfigurationVersion";Expression={
             # Check for VM Configuration Version Less Than Host
@@ -2622,6 +2659,10 @@ If($ClusterOwner.count -eq 0){$html+='<h5><span style="color: #ffffff; backgroun
         #HTML Report
             $html+='<H2 id="VMInfo">Virtual Machine Information</H2>'
 If($VMInfo.count -eq 0){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;No Virtual Machines found</h5>"}
+            $html+="<h5>Note: These are the Pri Values for Non-Clustered Nodes:</h5>"
+            $html+="<h5>0 - No auto start</h5>"
+            $html+="<h5>1 - Start if previously running</h5>"
+            $html+="<h5>2 - Always auto start</h5>"
             $html+=$VMInfo | ConvertTo-html -Fragment 
             $html=$html`
                 -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -2665,7 +2706,22 @@ $HighestVersion = ($SysInfo | sort AzureLocalVersion -desc | select -first 1).Az
 $NewestUBR=Foreach ($key in ($SDDCFiles.Keys | ? {$_ -match "GetCurrentVersion"})) {$SDDCFiles.$key.ubr}
 $NewestUBR=($NewestUBR | sort)[-1]
 ForEach($Sys in $SysInfo){
-    $ClusterNodesOut+=$ClusterNodes | Where-Object{$_.Name -imatch $Sys.HostName}|Sort-Object Name | Select-Object Name,Model,SerialNumber,State,StatusInformation,Id,`
+    [xml]$sysinfofull=gc "$SDDCPath\Node_$($Sys.HostName)\msinfo.nfo"
+    $logicalProcessors=0
+    foreach ($processorLine in (($sysinfofull.msinfo.Category.data | ? InnerText -match 'Processor').innertext)) { 
+        $logicalProcessors += [regex]::Match($processorLine, '(\d+) Logical Processor\(s\)').Groups[1].Value}
+    $totalmemstr=($sysinfofull.msinfo.Category.data | ? InnerText -match 'Total Physical Memory').innertext.replace('Total Physical Memory','')
+    $memorymul=Switch -Wildcard ($totalmemstr) {
+        "*KB" {1024}
+        "*MB" {1024*1024}
+        "*GB" {1024*1024*1024}
+        "*TB" {1024*1024*1024*1024}
+        Default {1}
+    }
+    $totalmem=[int]($totalmemstr -replace "[^\d]","")*$memorymul
+    $ClusterNodesOut+=$ClusterNodes | Where-Object{$_.Name -imatch $Sys.HostName}|Sort-Object Name | Select-Object Name,Model,SerialNumber,State,@{L="Status";E={$_.StatusInformation}},Id,`
+        @{L="CPUs";E={$logicalProcessors}},`
+        @{L="Memory";E={"YYEELLLLOOWW"*($totalmem -gt 1TB -and $ClusterName.ShutdownTimeoutInMinutes -lt 1440)+$totalmemstr}},`
         @{L="OSName";E={$Sys.OSName}},`
         @{L="OSVersion";E={$Sys.OSVersion}},`
         @{L="UBR";E={
@@ -2714,13 +2770,15 @@ $NewestUBR=($ClusterNodesOut | sort UBR)[-1].UBR
     If($ClusterNodesOut.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No Cluster Nodes found</span></h5>'}
     $html+=$ClusterNodesOut | Sort Name | ConvertTo-html -Fragment 
     IF(($sys.OSName -imatch "Stack") -and ($ClusterNodesOut.OSBuild -imatch "RREEDD")){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;NOTE: 20H2,21H2,22H2 are EoL MUST upgrade to 23H2 for Support. Return to Rework</h5>"}
+    IF(($totalmem -gt 1TB -and $ClusterName.ShutdownTimeoutInMinutes -lt 1440)) {$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;NOTE: For a cluster with nodes over 1TB of memory, run (Get-Cluster).ShutdownTimeoutInMinutes = 1440</h5>"}
     $html=$html `
      -replace '<td>Paused</td>','<td style="background-color: #ffff00">Paused</td>'`
      -replace '<td>Quarantined</td>','<td style="background-color: #ffff00">Quarantined</td>'`
      -replace '<td>Isolated</td>','<td style="background-color: #ffff00">Isolated</td>'`
      -replace '<td>Down</td>','<td style="color: #ffffff; background-color: #ff0000">Down</td>'`
      -replace '<td>Unknown</td>','<td style="color: #ffffff; background-color: #ff0000">Unknown</td>'`
-     -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'
+     -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
+	 -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
     $ResultsSummary+=Set-ResultsSummary -name $name -html $html        
     $htmlout+=$html
     $html=""
@@ -3066,7 +3124,7 @@ $htmlout+=$html
                 #Resiliency 
                     IF($VD.ResiliencySettingName -eq 'Mirror' -and $VD.PhysicalDiskRedundancy -eq 1){
                         #2-way and 3+ nodes mark yellow as we can only have 1 fault
-                        IF($ClusterNodeCount -ge 3){$VDResiliency="YYEELLLLOOWW2-way Mirror"}
+                        IF($ClusterNodeCount -ge 3){$VDResiliency="2-way Mirror"}
                         Else{$VDResiliency="2-way Mirror"}}
                     IF($VD.ResiliencySettingName -eq 'Mirror' -and $VD.PhysicalDiskRedundancy -eq 2){$VDResiliency="3-Way Mirror"}
                     IF($VD.ResiliencySettingName -eq 'Parity' -and $VD.PhysicalDiskRedundancy -eq 1){$VDResiliency="Single Parity"}
@@ -3121,7 +3179,7 @@ $htmlout+=$html
                         #Resiliency 
                             IF($VDMatch.ResiliencySettingName -eq 'Mirror' -and $VDMatch.PhysicalDiskRedundancy -eq 1){
                                 #2-way and 3+ nodes mark yellow as we can only have 1 fault
-                                IF($ClusterNodeCount -ge 3){$VDResiliency1="YYEELLLLOOWW2-way Mirror"}
+                                IF($ClusterNodeCount -ge 3){$VDResiliency1="2-way Mirror"}
                                 Else{$VDResiliency1="2-way Mirror"}}
                             IF($VDMatch.ResiliencySettingName -eq 'Mirror' -and $VDMatch.PhysicalDiskRedundancy -eq 2){$VDResiliency1="3-way Mirror"}
                             IF($VDMatch.ResiliencySettingName -eq 'Parity' -and $VDMatch.PhysicalDiskRedundancy -eq 1){$VDResiliency1="Single Parity"}
@@ -3154,10 +3212,10 @@ $htmlout+=$html
             $Size=Convert-BytesToSize $Size
             IF($VDMirrorSize -gt 0){$VDMirrorSize=Convert-BytesToSize $VDMirrorSize}Else{$VDMirrorSize=""}
             IF($VDParitySize -gt 0){$VDParitySize=Convert-BytesToSize $VDParitySize}Else{$VDParitySize=""}
-            IF($VDResiliency -imatch "map"){$VDResiliency="Mirror-accelerated parity"}
+            IF($VDResiliency -imatch "map"){$VDResiliency="RREEDDMirror-accelerated parity"}
             
             #Simple
-            IF($VD.ResiliencySettingName -eq "Simple"){$VDResiliency="RREEDDSimple"}
+            IF($VD.ResiliencySettingName -eq "Simple"){$VDResiliency="RREEDDSimple"} elseif ($VDResiliency -inotmatch "way") {$VDResiliency="YYEELLLLOOWW$VDResiliency"}
             
             $VDRData = [PSCustomObject]@{
                 "VirtualDiskName"        = $VDFriendlyName
@@ -3210,6 +3268,7 @@ $htmlout+=$html
             }               
             $html=$html `
                 -replace '<td>Warning</td>','<td style="background-color: #ffff00">Warning</td>'
+            $html+='Ref: <a href="https://learn.microsoft.com/en-us/windows-server/storage/storage-spaces/plan-volumes#when-performance-matters-most">Plan volumes on Azure Local and Windows Server clusters | Microsoft Learn</a>'
             $ResultsSummary+=Set-ResultsSummary -name $name -html $html 
             $htmlout+=$html 
             $html=""
