@@ -833,7 +833,7 @@ Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
 
 #region Gather the Support Matrix for Microsoft HCI Solutions
 Write-Host "    Gathering Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI..."
-if ($OSVersion -eq "2016" -or $OSversion -match "2012") {$URL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/2309/'} else {
+if ($OSVersion -eq "2016" -or $OSversion -match "2012") {$URL='https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/2509/'} else {
 #$webClient = [System.Net.WebClient]::new()
 $SMRevHistLatest=""
 #URL for Dell Technologies Solutions for Microsoft Azure Stack Support Matrix
