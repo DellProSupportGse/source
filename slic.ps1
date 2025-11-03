@@ -18,14 +18,16 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
+    2025/11/03:v1.1 - JG - Resolved Ready to Run not stopping on N
     2025/11/03:v1.0 - JG - Initial release
+
 #>
 Function Invoke-SLIC {
 
 Function EndScript{  
     break
 }
-$Ver="v1.0"
+$Ver="v1.1"
 $ToolName = @"
 $Ver
   ___ _    ___ ___ 
@@ -35,7 +37,7 @@ $Ver
  Switch Log Integrity Checker
             By: Jim Gandy
 "@
-cls
+Clear-Host
 Write-Host $ToolName
 Write-Host ""
 Write-Host "⚠️ SLIC Compatibility Notice:"
@@ -1279,7 +1281,7 @@ $script:HtmlReportPath = $OutputPath
                 $rawUI.WindowSize = New-Object Management.Automation.Host.Size([Math]::Min($width, 300), $rawUI.WindowSize.Height)
 
                 Write-Host "=== $Title ==="
-                Write-Host "Console width set to $width characters (scroll horizontally to view).`n"
+                Write-Host "Console width set to $width characters (scroll horizontally to view)."
             } catch {
                 Write-Warning "Unable to resize console (likely a restricted host). Try Out-GridView instead."
             }
