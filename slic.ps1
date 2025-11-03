@@ -1694,7 +1694,7 @@ $script:HtmlReportPath = $OutputPath
     AddTo-HtmlReport -Title "Storage vLAN Interfaces" `
         -Data $StoragevLANUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
 
