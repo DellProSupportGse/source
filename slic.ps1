@@ -18,7 +18,8 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
-    2025/11/03:v1.1 - JG - Resolved Ready to Run not stopping on N
+    2025/11/03:v1.1 - 1. JG - Resolved Ready to Run not stopping on N
+                      2. JG - Removed smart chars
     2025/11/03:v1.0 - JG - Initial release
 
 #>
@@ -595,7 +596,6 @@ $script:HtmlReportPath = $OutputPath
     #region Show LLDP Neighbors
 
         $ShowLldpNeighbors=@()
-         #$ShowLldpNeighbors += Get-ShowLldpNeighbors "C:\Users\Jim_Gandy\Downloads\tk5tor01-19c-show-tech-20251021-135024.txt"
          $ShowLldpNeighbors += $STSLOC | ForEach-Object { Get-ShowLldpNeighbors -Path $_ }
 
          Function Get-GetNetAdapterInfo {
@@ -709,7 +709,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "Interface-to-Node Map" `
                 -Data $SwPortToHostMap `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -744,7 +744,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "dcbx enable" `
                 -Data $dcbxenableout `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -770,7 +770,7 @@ $script:HtmlReportPath = $OutputPath
                 AddTo-HtmlReport -Title "class-map type queuing Q0" `
                     -Data $classmaptypequeuingQ0 `
                     -Description "" `
-                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
 
@@ -794,7 +794,7 @@ $script:HtmlReportPath = $OutputPath
                 AddTo-HtmlReport -Title "class-map type queuing Q5/7" `
                     -Data $classmaptypequeuingQ57 `
                     -Description "" `
-                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
 
@@ -812,7 +812,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "class-map type queuing Q" `
                 -Data $classmaptypequeuingQOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -836,7 +836,7 @@ $script:HtmlReportPath = $OutputPath
                     AddTo-HtmlReport -Title "class-map type network-qos group 0" `
                         -Data $matchqosgroup0out `
                         -Description "" `
-                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                         -IncludeTitle -IncludeDescription -IncludeFootnotes
                 }
             #match qos-group 3
@@ -852,7 +852,7 @@ $script:HtmlReportPath = $OutputPath
                     AddTo-HtmlReport -Title "class-map type network-qos group 3" `
                         -Data $matchqosgroup3out `
                         -Description "" `
-                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                         -IncludeTitle -IncludeDescription -IncludeFootnotes
                 }
             #match qos-group 7
@@ -868,7 +868,7 @@ $script:HtmlReportPath = $OutputPath
                     AddTo-HtmlReport -Title "class-map type network-qos group 7" `
                         -Data $matchqosgroup7out `
                         -Description "" `
-                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                         -IncludeTitle -IncludeDescription -IncludeFootnotes
                 }
         }Else{
@@ -880,7 +880,7 @@ $script:HtmlReportPath = $OutputPath
                 AddTo-HtmlReport -Title "class-map type network-qos" `
                     -Data $classmaptypenetworkqos `
                     -Description "" `
-                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
         }
@@ -905,7 +905,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "trust dot1p-map trust_map" `
                 -Data $trustdot1pmaptrustmapOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -931,7 +931,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "qos-map traffic-class queue-map" `
                 -Data $qosmaptrafficclassqueuemapOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -951,7 +951,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "policy-map type application policy-iscsi" `
                 -Data $policymaptypeapplicationpolicyiscsiOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -971,7 +971,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy" `
                 -Data $policymaptypeapplicationpolicyiscsiOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1038,42 +1038,42 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q0" `
                 -Data $classQ0Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ3Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q3" `
                 -Data $classQ3Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ57Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5/7" `
                 -Data $classQ57Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ5Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5" `
                 -Data $classQ5Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ7Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q7" `
                 -Data $classQ7Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ0357Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q" `
                 -Data $classQ0357Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         #policy-map type network-qos pfc-policy
@@ -1092,7 +1092,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "Policy-map type network-qos pfc-policy" `
                 -Data $policymaptypenetworkqospfcpolicyOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1115,7 +1115,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "policy-map type network-qos pfc-policy pfc-cos 3" `
                 -Data $pfccos3Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1136,7 +1136,7 @@ $script:HtmlReportPath = $OutputPath
             AddTo-HtmlReport -Title "System QOS" `
                 -Data $systemqosOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1256,7 +1256,7 @@ $script:HtmlReportPath = $OutputPath
 
             # If in PowerShell ISE
             if ($psISE) {
-                Write-Host "Detected PowerShell ISE — opening '$Title' in Out-GridView..."
+                Write-Host "Detected PowerShell ISE - opening '$Title' in Out-GridView..."
                 try {
                     $data | Out-GridView -Title $Title
                 } catch {
@@ -1413,7 +1413,7 @@ $script:HtmlReportPath = $OutputPath
     AddTo-HtmlReport -Title "Storage Interfaces" `
         -Data $StorageUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #-------------------------------------------------------------
@@ -1458,7 +1458,7 @@ $script:HtmlReportPath = $OutputPath
     AddTo-HtmlReport -Title "Mgmt Interfaces" `
         -Data $MgmtUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #region VLTi
@@ -1659,7 +1659,7 @@ $script:HtmlReportPath = $OutputPath
     AddTo-HtmlReport -Title "VLTi Interfaces" `
         -Data $VLTiUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations – RoCE/iWarp Reference Guide</a></p>' `
+        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #endregion VLTi
