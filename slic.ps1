@@ -20,6 +20,7 @@
 .UPDATES
     2025/11/03:v1.1 - 1. JG - Resolved Ready to Run not stopping on N
                       2. JG - Removed smart chars
+                      3. JG - Save-HtmlReport - Added support for UTF-8 with BOM for symbols
     2025/11/03:v1.0 - JG - Initial release
 
 #>
@@ -369,18 +370,21 @@ $script:HtmlReportPath = $OutputPath
         }
     }
 
-    function Save-HtmlReport {
-        if (-not $script:HtmlReportSections) {
-            Write-Warning "No sections added to report."
-            return
-        }
-
-        $finalHtml = $script:HtmlReportHeader + ($script:HtmlReportSections -join "`n") + $script:HtmlReportFooter
-        
-        Out-File -FilePath $script:HtmlReportPath -InputObject $finalHtml -Encoding UTF8
-        Write-Host "✅ Report saved to: $script:HtmlReportPath"
-        Invoke-Item $script:HtmlReportPath
+function Save-HtmlReport {
+    if (-not $script:HtmlReportSections) {
+        Write-Warning "No sections added to report."
+        return
     }
+
+    $finalHtml = $script:HtmlReportHeader + ($script:HtmlReportSections -join "`n") + $script:HtmlReportFooter
+
+    # ✅ Save clean UTF-8 without BOM for browser compatibility
+    [System.IO.File]::WriteAllText($script:HtmlReportPath, $finalHtml, [System.Text.UTF8Encoding]::new($false))
+
+    Write-Host "✅ Report saved to: $script:HtmlReportPath"
+    Invoke-Item $script:HtmlReportPath
+}
+
 
     #endregion === HTML Report System ===
 
