@@ -76,7 +76,7 @@ If($confirmed -eq $true){
     }
 
     Write-Host "Please Select Show Tech-Support File(s) to use..."
-    $STSLOC = Get-FileName "$env:USERPROFILE\Documents\SRs" "Please Select Show Tech-Support File(s)." "Logs (*.zip,*.txt,*.log)| *.zip;*.TXT;*.log"
+    $STSLOC = Get-FileName "$env:USERPROFILE\Documents\SRs" "Please Select Show Tech-Support File(s)." "Logs (*.txt,*.log)| *.TXT;*.log"
     If(!($STSLOC)){
         Write-Host "No logs provided. Exiting script..."
         EndScript
