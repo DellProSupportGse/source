@@ -21,6 +21,7 @@
     2025/11/03:v1.0 - JG - Initial release
 #>
 Function Invoke-SLIC {
+
 Function EndScript{  
     break
 }
@@ -1277,7 +1278,7 @@ $script:HtmlReportPath = $OutputPath
                 $rawUI.BufferSize = New-Object Management.Automation.Host.Size($width, $rawUI.BufferSize.Height)
                 $rawUI.WindowSize = New-Object Management.Automation.Host.Size([Math]::Min($width, 300), $rawUI.WindowSize.Height)
 
-                Write-Host "`n=== $Title ==="
+                Write-Host "=== $Title ==="
                 Write-Host "Console width set to $width characters (scroll horizontally to view).`n"
             } catch {
                 Write-Warning "Unable to resize console (likely a restricted host). Try Out-GridView instead."
