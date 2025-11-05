@@ -421,7 +421,7 @@ function Save-HtmlReport {
 
     # Create new report
     $OutputPath = "$OutputPath\SLIC_Report_{0:yyyyMMdd_HHmm}.html" -f (Get-Date)
-    New-HtmlReport -Title "SLIC: Switch Log Insight Checker" -Version "1.0" -RunDate (Get-Date) -OutputPath $OutputPath
+    New-HtmlReport -Title "SLIC: Switch Log InspeCtor" -Version "1.0" -RunDate (Get-Date) -OutputPath $OutputPath
 
 
     function Get-OS10RunningConfigSections {
