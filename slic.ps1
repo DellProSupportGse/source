@@ -36,7 +36,7 @@ $Ver
  / __| |  |_ _/ __|
  \__ \ |__ | | (__ 
  |___/____|___\___|
- Switch Log Integrity Checker
+ Switch Log InspeCtor
             By: Jim Gandy
 "@
 Clear-Host
