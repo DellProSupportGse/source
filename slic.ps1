@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    SLIC - Switch Log Integrity Checker
+    SLIC - Switch Log InspeCtor
     Verifies switch configurations for S2D and Azure Local environments.
 
 .DESCRIPTION
