@@ -892,7 +892,7 @@ function Save-HtmlReport {
                     $matchqosgroup5out = $matchqosgroup5 | sort FileName -Unique | select Filename, SwHostName,@{L=$matchqosgroup5.lines[1];E={
                         IF($_.lines -imatch "class-map type network-qos"){"Found"}Else{"RREEDDMissing"}}},
                         @{L="match qos-group 5/7";E={IF($_.lines -imatch "match qos-group 5"){
-                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Found"}
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Match Switch=Q5 Server=Q5"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}}}
                     #$matchqosgroup5out | ft
                     # Add to HTML report output sections
@@ -910,7 +910,7 @@ function Save-HtmlReport {
                     $matchqosgroup7out = $matchqosgroup7 | sort FileName -Unique | select Filename, SwHostName,@{L=$matchqosgroup7.lines[1];E={
                         IF($_.lines -imatch "class-map type network-qos"){"Found"}Else{"RREEDDMissing"}}},
                         @{L="match qos-group 5/7";E={IF($_.lines -imatch "match qos-group 7"){
-                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Found"}
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Match Switch=Q7 Server=Q7"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}}}
                     #$matchqosgroup7out | ft
                     # Add to HTML report output sections
@@ -971,11 +971,11 @@ function Save-HtmlReport {
                 @{L="queue 5/7 qos-group 5/7";E={
                     IF($_.lines -imatch "queue 5 qos-group 5"){
                         #Does Server Qos Policy Match Switch Q
-                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Found"}
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Match Switch=Q5 Server=Q5"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}                 
                     ElseIf($_.lines -imatch "queue 7 qos-group 7"){
                         #Does Server Qos Policy Match Switch Q
-                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Found"}
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Match Switch=Q7 Server=Q7"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}
                     ElseIf(($_.lines -inotmatch "queue 7 qos-group 7") -and ($_.lines -inotmatch "queue 5 qos-group 5")){"RREEEDDMissing"}}}
         }Else{
@@ -1065,7 +1065,7 @@ function Save-HtmlReport {
                 $classQ5Out = $classQ0357 | ?{$_.Header -imatch "Q5"} | select Filename, SwHostName,
                     @{L="class Q5/7";E={IF($_.lines -imatch "class Q5"){
                         #Does Server Qos Policy Match Switch Q
-                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Found"}
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Match Switch=Q5 Server=Q5"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}}},
                     @{L="bandwidth percent 1 or 2";E={IF($_.lines -imatch "bandwidth percent (1|2)"){"Found"}Else{"RREEDDMissing"}}}
             }
@@ -1074,7 +1074,7 @@ function Save-HtmlReport {
                     $classQ7Out = $classQ0357 | ?{$_.Header -imatch "Q7"} | select Filename, SwHostName,
                         @{L="class Q5/7";E={IF($_.lines -imatch "class Q7"){
                         #Does Server Qos Policy Match Switch Q
-                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Found"}
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Match Switch=Q7 Server=Q7"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}}},
                         @{L="bandwidth percent 1 or 2";E={IF($_.lines -imatch "bandwidth percent (1|2)"){"Found"}Else{"RREEDDMissing"}}}
             }
