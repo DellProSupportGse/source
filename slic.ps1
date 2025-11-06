@@ -18,6 +18,13 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
+    2025/11/06:v1.2 - 1. JG - policy-map type queuing ets-policy class Q5/7 - Added Q-class matching between Switch and Server
+                      2. JG - class-map type network-qos group 5/7 - Added Q-class matching between Switch and Server
+                      3. JG - Fixed issue where switchport trunk allowed vlan was incorrectly flagged red when Management or Storage VLANs were missing
+                      4. JG - Added Ref links to the switch model if we have it
+                      5. JG - Show Version - Removed SwHostName as we do not get it until we build the next table
+                      6. JG - qos-map traffic-class queue-map - Added matching between Switch and Server
+
     2025/11/03:v1.1 - 1. JG - Resolved Ready to Run not stopping on N
                       2. JG - Removed smart chars
                       3. JG - Save-HtmlReport - Added support for UTF-8 with BOM for symbols
@@ -29,7 +36,7 @@ Function Invoke-SLIC {
 Function EndScript{  
     break
 }
-$Ver="v1.1"
+$Ver="v1.2"
 $ToolName = @"
 $Ver
   ___ _    ___ ___ 
@@ -302,7 +309,7 @@ $htmlStyle
 </head>
 <body>
 <h1>$Title</h1>
-<h3>&nbsp;Version: $Version</h3>
+<h3>&nbsp;Version: $Ver</h3>
 <h3>&nbsp;Run Date: $RunDate</h3>
 
 <div class='warning-banner'>
@@ -516,15 +523,32 @@ function Save-HtmlReport {
         $ShowVersionOut = ""
         $ShowVersionOut = ([pscustomobject]@{
             FileName   = $Path.split("/\")[-1]
-            SwHostName = $SwitchHostname
             OSVersion  = (($lines | ?{$_ -imatch "OS Version:"}) -split ": ")[-1]
             SystemType = (($lines | ?{$_ -imatch "System Type:"}) -split ": ")[-1]
             UpTime     = (($lines | ?{$_ -imatch "Up Time:"}) -split ": ")[-1]
         })
         return $ShowVersionOut
     }
+
     $ShowVersions = @()
     $ShowVersions += $STSLOC | ForEach-Object{Get-showversion -path $_}
+
+    #Create Ref Link for footnotes
+        # Get unique system types
+        $ShowVersionOut
+        $SystemTypeUnique = $ShowVersions | Sort-Object SystemType -Unique | Select-Object -ExpandProperty SystemType
+
+        # Map to reference link
+        $SwitchRefLink = switch -Regex ($SystemTypeUnique) {
+            "4112" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s4112f-on-switch-8/' ; break }
+            "4148" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s4148f-on-switch-8/' ; break }
+            "5148" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s5148f-on-switch-8/' ; break }
+            "5212" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s5212f-on-switch-8/' ; break }
+            "5232" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s5232f-on-switch-8/' ; break }
+            "5248" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s5248f-on-switch-8/' ; break }
+            default { 'https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/' }
+        }
+
     # Add to HTML report output sections
     if($ShowVersions){
         AddTo-HtmlReport -Title "Show Version" `
@@ -664,6 +688,9 @@ function Save-HtmlReport {
 
 
          $GetNetAdapterInfos = Get-GetNetAdapterInfo -path $SDDCPath
+         # Find which Qos Priorities the nodes are using to compare later
+            $GetNetQOSPolicyInfo = Get-ChildItem -Path $SDDCPath -Recurse -Filter GetNetQOSPolicy.xml | Import-Clixml
+            $GetNetQOSPolicyPriorities = $GetNetQOSPolicyInfo | Sort-Object PriorityValue -Unique | select PriorityValue
          $ShowRunningConfigs = $STSLOC | ForEach-Object { Get-OS10RunningConfigSections -Path $_ }
          $ShowRunningConfigs = $ShowRunningConfigs | ?{$_.hostname -ne "False"}
 
@@ -713,7 +740,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "Interface-to-Node Map" `
                 -Data $SwPortToHostMap `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -748,7 +775,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "dcbx enable" `
                 -Data $dcbxenableout `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -774,7 +801,7 @@ function Save-HtmlReport {
                 AddTo-HtmlReport -Title "class-map type queuing Q0" `
                     -Data $classmaptypequeuingQ0 `
                     -Description "" `
-                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
 
@@ -798,7 +825,7 @@ function Save-HtmlReport {
                 AddTo-HtmlReport -Title "class-map type queuing Q5/7" `
                     -Data $classmaptypequeuingQ57 `
                     -Description "" `
-                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
 
@@ -816,7 +843,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "class-map type queuing Q" `
                 -Data $classmaptypequeuingQOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -840,7 +867,7 @@ function Save-HtmlReport {
                     AddTo-HtmlReport -Title "class-map type network-qos group 0" `
                         -Data $matchqosgroup0out `
                         -Description "" `
-                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                         -IncludeTitle -IncludeDescription -IncludeFootnotes
                 }
             #match qos-group 3
@@ -856,24 +883,44 @@ function Save-HtmlReport {
                     AddTo-HtmlReport -Title "class-map type network-qos group 3" `
                         -Data $matchqosgroup3out `
                         -Description "" `
-                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                         -IncludeTitle -IncludeDescription -IncludeFootnotes
                 }
-            #match qos-group 7
+            #match qos-group 5
+                $matchqosgroup5 = $classmaptypenetworkqosManagement | ?{$_.lines -imatch "match qos-group 5"}
+                IF($matchqosgroup5){
+                    $matchqosgroup5out = $matchqosgroup5 | sort FileName -Unique | select Filename, SwHostName,@{L=$matchqosgroup5.lines[1];E={
+                        IF($_.lines -imatch "class-map type network-qos"){"Found"}Else{"RREEDDMissing"}}},
+                        @{L="match qos-group 5/7";E={IF($_.lines -imatch "match qos-group 5"){
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Found"}
+                            ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}}}
+                    #$matchqosgroup5out | ft
+                    # Add to HTML report output sections
+                    if($matchqosgroup5out){
+                        AddTo-HtmlReport -Title "class-map type network-qos group 5/7" `
+                            -Data $matchqosgroup5out `
+                            -Description "" `
+                            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                            -IncludeTitle -IncludeDescription -IncludeFootnotes
+                    }
+                }
+            #Match qos-group 7
                 $matchqosgroup7 = $classmaptypenetworkqosManagement | ?{$_.lines -imatch "match qos-group 7"}
                 IF($matchqosgroup7){
-                    $matchqosgroup7out = $matchqosgroup7 | sort FileName -Unique | select Filename, SwHostName,@{L=$matchqosgroup7.lines[1];E={IF(($_.lines -imatch "class-map type network-qos") -and ($_.lines -imatch "match qos-group 7")){"Found"}Else{"RREEDDMissing"}}},@{L="match qos-group 7";E={IF($_.lines -imatch "match qos-group 7"){"Found"}Else{"RREEDDMissing"}}}
-                }Else{
-                    $matchqosgroup7out = $classmaptypenetworkqosManagement | sort FileName -Unique | select Filename, SwHostName,@{L="class-map type network-qos";E={"RREEDDMissing"}},@{L="match queue 7";E={"RREEDDMissing"}}
-                }
-                #$matchqosgroup7out | ft
-                # Add to HTML report output sections
-                if($matchqosgroup7out){
-                    AddTo-HtmlReport -Title "class-map type network-qos group 7" `
-                        -Data $matchqosgroup7out `
-                        -Description "" `
-                        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
-                        -IncludeTitle -IncludeDescription -IncludeFootnotes
+                    $matchqosgroup7out = $matchqosgroup7 | sort FileName -Unique | select Filename, SwHostName,@{L=$matchqosgroup7.lines[1];E={
+                        IF($_.lines -imatch "class-map type network-qos"){"Found"}Else{"RREEDDMissing"}}},
+                        @{L="match qos-group 5/7";E={IF($_.lines -imatch "match qos-group 7"){
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Found"}
+                            ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}}}
+                    #$matchqosgroup7out | ft
+                    # Add to HTML report output sections
+                    if($matchqosgroup7out){
+                        AddTo-HtmlReport -Title "class-map type network-qos group 5/7" `
+                            -Data $matchqosgroup7out `
+                            -Description "" `
+                            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                            -IncludeTitle -IncludeDescription -IncludeFootnotes
+                    }
                 }
         }Else{
             #no class-map type network-qos
@@ -884,7 +931,7 @@ function Save-HtmlReport {
                 AddTo-HtmlReport -Title "class-map type network-qos" `
                     -Data $classmaptypenetworkqos `
                     -Description "" `
-                    -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
         }
@@ -909,7 +956,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "trust dot1p-map trust_map" `
                 -Data $trustdot1pmaptrustmapOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -919,12 +966,18 @@ function Save-HtmlReport {
         IF($qosmaptrafficclassqueuemap){
             $qosmaptrafficclassqueuemapOut = $qosmaptrafficclassqueuemap | sort FileName -Unique | select Filename, SwHostName,
                 @{L="qos-map traffic-class queue-map";E={IF($_.lines -imatch "qos-map traffic-class queue-map"){"Found"}Else{"RREEDDMissing"}}},
-                @{L="queue 0 qos-group 0-2,4-6";E={IF($_.lines -imatch "queue 0 qos-group 0-2,4-6"){"Found"}Else{"RREEDDMissing"}}},
+                @{L="queue 0 qos-group 0-2,4-6";E={IF($_.lines -imatch "queue 0 qos-group 0-2,4-6"){"Found"}Else{"RREEDDMismatch "+$($_.lines | ?{$_ -imatch 'queue 0 qos-group'})}}},
                 @{L="queue 3 qos-group 3";E={IF($_.lines -imatch " queue 3 qos-group 3"){"Found"}Else{"RREEDDMissing"}}},
                 @{L="queue 5/7 qos-group 5/7";E={
-                    IF($_.lines -imatch "queue 5 qos-group 5"){"Found"}
-                    ElseIf($_.lines -imatch "queue 7 qos-group 7"){"Found"}
-                    Else{"RREEDDMissing"}}}
+                    IF($_.lines -imatch "queue 5 qos-group 5"){
+                        #Does Server Qos Policy Match Switch Q
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Found"}
+                            ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}                 
+                    ElseIf($_.lines -imatch "queue 7 qos-group 7"){
+                        #Does Server Qos Policy Match Switch Q
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Found"}
+                            ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}
+                    ElseIf(($_.lines -inotmatch "queue 7 qos-group 7") -and ($_.lines -inotmatch "queue 5 qos-group 5")){"RREEEDDMissing"}}}
         }Else{
             #no qos-map traffic-class queue-map
             $qosmaptrafficclassqueuemapOut = $ShowRunningConfigs | sort FileName -Unique | select Filename, SwHostName,@{L="qos-map traffic-class queue-map";E={"RREEDDMissing"}}
@@ -935,7 +988,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "qos-map traffic-class queue-map" `
                 -Data $qosmaptrafficclassqueuemapOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -955,7 +1008,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "policy-map type application policy-iscsi" `
                 -Data $policymaptypeapplicationpolicyiscsiOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -975,7 +1028,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy" `
                 -Data $policymaptypeapplicationpolicyiscsiOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1007,31 +1060,33 @@ function Save-HtmlReport {
                     @{L="class Q3";E={IF($_.lines -imatch "class Q3"){"Found"}Else{"RREEDDMissing"}}},
                     @{L="bandwidth percent 50";E={IF($_.lines -imatch "bandwidth percent 50"){"Found"}Else{"RREEDDMissing"}}}
             }
-            #Case 1 no Q5 and no Q7
-            IF($classQ0357 | ?{$_.Header -inotmatch "Q7" -and $_.Header -inotmatch "Q5"}){
+            #Case 1 we have a Q5 and no Q7
+            IF($classQ0357 | ?{$_.Header -imatch "Q5" -and $_.Header -inotmatch "Q7"}){
+                $classQ5Out = $classQ0357 | ?{$_.Header -imatch "Q5"} | select Filename, SwHostName,
+                    @{L="class Q5/7";E={IF($_.lines -imatch "class Q5"){
+                        #Does Server Qos Policy Match Switch Q
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Found"}
+                            ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}}},
+                    @{L="bandwidth percent 1 or 2";E={IF($_.lines -imatch "bandwidth percent (1|2)"){"Found"}Else{"RREEDDMissing"}}}
+            }
+            #Case 2 we have a Q7 and no Q5
+            IF($classQ0357 | ?{$_.Header -imatch "Q7" -and $_.Header -inotmatch "Q5"}){
+                    $classQ7Out = $classQ0357 | ?{$_.Header -imatch "Q7"} | select Filename, SwHostName,
+                        @{L="class Q5/7";E={IF($_.lines -imatch "class Q7"){
+                        #Does Server Qos Policy Match Switch Q
+                            If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Found"}
+                            ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}}},
+                        @{L="bandwidth percent 1 or 2";E={IF($_.lines -imatch "bandwidth percent (1|2)"){"Found"}Else{"RREEDDMissing"}}}
+            }
+            #Case 3 no Q5 and no Q7
+            IF(!($classQ5Out) -and ($classQ7Out)){
                 $classQ57Out = $classQ0357 | select Filename, SwHostName,
                     @{L="class Q5/7";E={IF($_.lines -imatch "class Q5/7"){"Found"}Else{"RREEDDMissing Q5 and Q7"}}},
                     @{L="bandwidth percent 1 or 2";E={IF($_.lines -imatch "bandwidth percent (1|2)"){"Found"}Else{"RREEDDMissing"}}}
             }
-            #Case 2 we have a Q5 and no Q7
-            IF($classQ0357 | ?{$_.Header -imatch "Q5" -and $_.Header -inotmatch "Q7"}){
-                If($classQ0357 | ?{$_.Header -imatch "Q5"}){
-                    $classQ5Out = $classQ0357 | ?{$_.Header -imatch "Q5"} | select Filename, SwHostName,
-                        @{L="class Q7";E={IF($_.lines -imatch "class Q5"){"Found"}Else{"RREEDDMissing"}}},
-                        @{L="bandwidth percent 1 or 2";E={IF($_.lines -imatch "bandwidth percent (1|2)"){"Found"}Else{"RREEDDMissing"}}}
-                    }
-            }
-            #Case 3 we have a Q7 and no Q5
-            IF($classQ0357 | ?{$_.Header -imatch "Q7" -and $_.Header -inotmatch "Q5"}){
-                If($classQ0357 | ?{$_.Header -imatch "Q7"}){
-                    $classQ7Out = $classQ0357 | ?{$_.Header -imatch "Q7"} | select Filename, SwHostName,
-                        @{L="class Q7";E={IF($_.lines -imatch "class Q7"){"Found"}Else{"RREEDDMissing"}}},
-                        @{L="bandwidth percent 1 or 2";E={IF($_.lines -imatch "bandwidth percent (1|2)"){"Found"}Else{"RREEDDMissing"}}}
-                }
-            }
         }Else{
             #no policy-map type queuing ets-policy
-            $classQ0357Out = $ShowRunningConfigs | sort FileName -Unique | select Filename, SwHostName,@{L="class Q0|3|5|7";E={"RREEDDMissing"}}
+            $classQ0357Out = $ShowRunningConfigs | sort FileName | select Filename, SwHostName,@{L="class Q0|3|5|7";E={"RREEDDMissing"}}
         }
         #$classQ0Out | ft
         #$classQ3Out | ft
@@ -1042,42 +1097,42 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q0" `
                 -Data $classQ0Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ3Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q3" `
                 -Data $classQ3Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ57Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5/7" `
                 -Data $classQ57Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ5Out){
-            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5" `
+            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5/7" `
                 -Data $classQ5Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ7Out){
-            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q7" `
+            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5/7" `
                 -Data $classQ7Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ0357Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q" `
                 -Data $classQ0357Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         #policy-map type network-qos pfc-policy
@@ -1096,7 +1151,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "Policy-map type network-qos pfc-policy" `
                 -Data $policymaptypenetworkqospfcpolicyOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1119,7 +1174,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "policy-map type network-qos pfc-policy pfc-cos 3" `
                 -Data $pfccos3Out `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1140,7 +1195,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "System QOS" `
                 -Data $systemqosOut `
                 -Description "" `
-                -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1391,7 +1446,9 @@ function Save-HtmlReport {
                                                                        #Check for missing storage vlan
                                                                         if($_ -inotmatch [regex]::Escape($StorageUsedInterface.vLAN.ToString())){"RREEDD"+$_}
                                                                        #We should NOT have Mgmt vLANs in storage trunk ex: switchport trunk allowed vlan 201,711-712,1701-1702,3939 where 201=Mgmt
-                                                                        Elseif($_ -imatch ($MgmtvLans -join '|')){"RREEDD"+$_}
+                                                                        IF($MgmtvLans){
+                                                                         IF($_ -imatch ($MgmtvLans -join '|')){"RREEDD"+$_}
+                                                                        }
                                                                        #Matches storage vlan 
                                                                         Elseif($_ -imatch [regex]::Escape($StorageUsedInterface.vLAN.ToString())){$_}
                                                                  }}).'switchport trunk allowed vlan'
@@ -1417,7 +1474,7 @@ function Save-HtmlReport {
     AddTo-HtmlReport -Title "Storage Interfaces" `
         -Data $StorageUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #-------------------------------------------------------------
@@ -1437,11 +1494,13 @@ function Save-HtmlReport {
             'switchport mode trunk'           = Get-LineValue $MgmtUsedInterface.Lines 'switchport mode trunk'
             'switchport trunk allowed vlan'   = (Get-LineValue $MgmtUsedInterface.Lines 'switchport trunk allowed vlan' | select @{L='switchport trunk allowed vlan';E={
                                                     #Check for missing Mgmt vlan
-                                                    if($_ -inotmatch [regex]::Escape($MgmtUsedInterface.vLAN.ToString())){"RREEDD"+$_}
+                                                     if($_ -inotmatch [regex]::Escape($MgmtUsedInterface.vLAN.ToString())){"RREEDD"+$_}
                                                     #We should NOT have storage vLANs in storage trunk ex: switchport trunk allowed vlan 201,711-712,1701-1702,3939 where 201=Mgmt
-                                                    Elseif($_ -imatch ($Storagevlans -join '|')){"RREEDD"+$_}
+                                                     IF($Storagevlans){
+                                                      if($_ -imatch ($Storagevlans -join '|')){"RREEDD"+$_}
+                                                     }
                                                     #Matches Mgmt vlan 
-                                                    Elseif($_ -imatch [regex]::Escape($MgmtUsedInterface.vLAN.ToString())){$_}
+                                                     Elseif($_ -imatch [regex]::Escape($MgmtUsedInterface.vLAN.ToString())){$_}
                                                 }}).'switchport trunk allowed vlan'
             'MTU9216'                         = Get-LineValue $MgmtUsedInterface.Lines '9216'
             'flowcontrol receive on'          = (Get-LineValue $MgmtUsedInterface.Lines 'flowcontrol receive' | select @{L="flowcontrol receive on";E={
@@ -1462,7 +1521,7 @@ function Save-HtmlReport {
     AddTo-HtmlReport -Title "Mgmt Interfaces" `
         -Data $MgmtUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #region VLTi
@@ -1663,7 +1722,7 @@ function Save-HtmlReport {
     AddTo-HtmlReport -Title "VLTi Interfaces" `
         -Data $VLTiUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #endregion VLTi
@@ -1698,7 +1757,7 @@ function Save-HtmlReport {
     AddTo-HtmlReport -Title "Storage vLAN Interfaces" `
         -Data $StoragevLANUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes 'Highlighted in red or yellow if out of spec. <p><a href="https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/" target="_blank">Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>' `
+        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
 
