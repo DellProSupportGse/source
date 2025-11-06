@@ -24,6 +24,9 @@
                       4. JG - Added Ref links to the switch model if we have it
                       5. JG - Show Version - Removed SwHostName as we do not get it until we build the next table
                       6. JG - qos-map traffic-class queue-map - Added matching between Switch and Server
+                      7. JG - trust dot1p-map trust_map - Added matching between Switch and Server
+                      8. JG - Storage Interfaces - Fixed nested vlan check
+                      9. JG - Mgmt Interfaces - Fixed nested vlan check
 
     2025/11/03:v1.1 - 1. JG - Resolved Ready to Run not stopping on N
                       2. JG - Removed smart chars
@@ -943,9 +946,25 @@ function Save-HtmlReport {
         IF($trustdot1pmaptrustmap){
             $trustdot1pmaptrustmapOut = $trustdot1pmaptrustmap | sort FileName -Unique | select Filename, SwHostName,
                 @{L="trust dot1p-map trust_map";E={IF($_.lines -imatch "trust dot1p-map trust_map"){"Found"}Else{"RREEDDMissing"}}},
-                @{L="qos-group 0 dot1p 0-2,4-6";E={IF($_.lines -imatch "qos-group 0 dot1p 0-2,4-6"){"Found"}Else{"RREEDDMissing"}}},
-                @{L="qos-group 3 dot1p 3";E={IF($_.lines -imatch "qos-group 3 dot1p 3"){"Found"}Else{"RREEDDMissing"}}},
-                @{L="qos-group 7 dot1p 7";E={IF($_.lines -imatch "qos-group 7 dot1p 7"){"Found"}Else{"RREEDDMissing"}}}
+                @{L="qos-group 0 dot1p";E={
+                    # Check for dop1p7
+                    IF($_.lines -imatch "qos-group 0 dot1p 0-2,4-6"){
+                        If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Match qos-group 0 dot1p 0-2,4-6"}}
+                    # Check for dop1p5
+                    ElseIF($_.lines -imatch "qos-group 0 dot1p 0-2,4,6-7"){
+                        IF($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Match qos-group 0 dot1p 0-2,4,6-7"}}}},
+                @{L="qos-group 3 dot1p 3";E={IF($_.lines -imatch "qos-group 3 dot1p 3"){"Match qos-group 3 dot1p 3"}Else{"RREEDDMissing"}}},
+                @{L="qos-group 5/7 dot1p 5/7";E={
+                    IF($_.lines -imatch "qos-group 7 dot1p 7"){
+                    #Q7
+                        If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Match qos-group 7 dot1p 7"}
+                        ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}
+                    ElseIf($_.lines -imatch "qos-group 5 dot1p 5"){
+                    #Q5
+                        If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Match qos-group 5 dot1p 5"}
+                        ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}
+                    #No Q5 or 7
+                    ElseIf(($_.lines -inotmatch "qos-group 7 dot1p 7") -and ($_.lines -inotmatch "qos-group 5 dot1p 5")){"RREEEDDMissing"}}}
         }Else{
             #no trust dot1p-map trust_map
             $trustdot1pmaptrustmapOut = $ShowRunningConfigs | sort FileName -Unique | select Filename, SwHostName,@{L="trust dot1p-map trust_map";E={"RREEDDMissing"}}
@@ -966,7 +985,10 @@ function Save-HtmlReport {
         IF($qosmaptrafficclassqueuemap){
             $qosmaptrafficclassqueuemapOut = $qosmaptrafficclassqueuemap | sort FileName -Unique | select Filename, SwHostName,
                 @{L="qos-map traffic-class queue-map";E={IF($_.lines -imatch "qos-map traffic-class queue-map"){"Found"}Else{"RREEDDMissing"}}},
-                @{L="queue 0 qos-group 0-2,4-6";E={IF($_.lines -imatch "queue 0 qos-group 0-2,4-6"){"Found"}Else{"RREEDDMismatch "+$($_.lines | ?{$_ -imatch 'queue 0 qos-group'})}}},
+                @{L="queue 0 qos-group 0-2,4-6/6-7";E={
+                    IF($_.lines -imatch "queue 0 qos-group 0-2,4,6-7"){"Match queue 0 qos-group 0-2,4,6-7"}
+                    ElseIf($_.lines -imatch "queue 0 qos-group 0-2,4-6"){"Match queue 0 qos-group 0-2,4-6"}
+                    ElseIF(($_.lines -inotmatch "queue 0 qos-group 0-2,4,6-7") -and ($_.lines -inotmatch "queue 0 qos-group 0-2,4-6")){"Mismatch "+$_.Line[2]}}},
                 @{L="queue 3 qos-group 3";E={IF($_.lines -imatch " queue 3 qos-group 3"){"Found"}Else{"RREEDDMissing"}}},
                 @{L="queue 5/7 qos-group 5/7";E={
                     IF($_.lines -imatch "queue 5 qos-group 5"){
@@ -1443,14 +1465,12 @@ function Save-HtmlReport {
             'no shutdown'                                      = Get-LineValue $StorageUsedInterface.Lines 'no shutdown'
             'switchport mode trunk'                            = Get-LineValue $StorageUsedInterface.Lines 'switchport mode trunk'
             'switchport trunk allowed vlan'                    = (Get-LineValue $StorageUsedInterface.Lines 'switchport trunk allowed vlan' | select @{L='switchport trunk allowed vlan';E={
-                                                                       #Check for missing storage vlan
-                                                                        if($_ -inotmatch [regex]::Escape($StorageUsedInterface.vLAN.ToString())){"RREEDD"+$_}
+                                                                       #Check for storage vlan
+                                                                        if($_ -imatch [regex]::Escape($StorageUsedInterface.vLAN.ToString())){$_}else{"RREEDD"+$_}
                                                                        #We should NOT have Mgmt vLANs in storage trunk ex: switchport trunk allowed vlan 201,711-712,1701-1702,3939 where 201=Mgmt
                                                                         IF($MgmtvLans){
                                                                          IF($_ -imatch ($MgmtvLans -join '|')){"RREEDD"+$_}
                                                                         }
-                                                                       #Matches storage vlan 
-                                                                        Elseif($_ -imatch [regex]::Escape($StorageUsedInterface.vLAN.ToString())){$_}
                                                                  }}).'switchport trunk allowed vlan'
             'MTU9216'                                          = Get-LineValue $StorageUsedInterface.Lines '9216'
             'flowcontrol receive off'                          = Get-LineValue $StorageUsedInterface.Lines 'flowcontrol receive off'
@@ -1493,14 +1513,12 @@ function Save-HtmlReport {
             'no shutdown'                     = Get-LineValue $MgmtUsedInterface.Lines 'no shutdown'
             'switchport mode trunk'           = Get-LineValue $MgmtUsedInterface.Lines 'switchport mode trunk'
             'switchport trunk allowed vlan'   = (Get-LineValue $MgmtUsedInterface.Lines 'switchport trunk allowed vlan' | select @{L='switchport trunk allowed vlan';E={
-                                                    #Check for missing Mgmt vlan
-                                                     if($_ -inotmatch [regex]::Escape($MgmtUsedInterface.vLAN.ToString())){"RREEDD"+$_}
+                                                    #Check for Mgmt vlan
+                                                     if($_ -imatch [regex]::Escape($MgmtUsedInterface.vLAN.ToString())){$_}Else{"RREEDD"+$_}
                                                     #We should NOT have storage vLANs in storage trunk ex: switchport trunk allowed vlan 201,711-712,1701-1702,3939 where 201=Mgmt
                                                      IF($Storagevlans){
                                                       if($_ -imatch ($Storagevlans -join '|')){"RREEDD"+$_}
                                                      }
-                                                    #Matches Mgmt vlan 
-                                                     Elseif($_ -imatch [regex]::Escape($MgmtUsedInterface.vLAN.ToString())){$_}
                                                 }}).'switchport trunk allowed vlan'
             'MTU9216'                         = Get-LineValue $MgmtUsedInterface.Lines '9216'
             'flowcontrol receive on'          = (Get-LineValue $MgmtUsedInterface.Lines 'flowcontrol receive' | select @{L="flowcontrol receive on";E={
