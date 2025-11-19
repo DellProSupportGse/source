@@ -18,6 +18,11 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
+    2025/11/19:v1.3 - 1. JG - Added tri-state collapse button
+                      2. JG - Resolved red cell missing
+                      3. JG - Change column names to match the q of the nodes
+                      4. JG - Added Go to top link
+
     2025/11/06:v1.2 - 1. JG - policy-map type queuing ets-policy class Q5/7 - Added Q-class matching between Switch and Server
                       2. JG - class-map type network-qos group 5/7 - Added Q-class matching between Switch and Server
                       3. JG - Fixed issue where switchport trunk allowed vlan was incorrectly flagged red when Management or Storage VLANs were missing
@@ -39,7 +44,7 @@ Function Invoke-SLIC {
 Function EndScript{  
     break
 }
-$Ver="v1.2"
+$Ver="v1.3"
 $ToolName = @"
 $Ver
   ___ _    ___ ___ 
@@ -167,8 +172,26 @@ div[id^='section'] { margin-bottom: 4px; }
   font-size: 0.8em;
 }
 .reset-btn:hover { background-color: #d78c3b; }
-</style>
+#backToTop {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  padding: 6px 12px;
+  background-color: #0078d4;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+  display: none; /* hidden until scroll */
+  z-index: 9999;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
 
+#backToTop:hover {
+  background-color: #005ea0;
+}
+</style>
 <script>
 // --- Toggle sections ---
 function toggleSection(id, elem) {
@@ -182,8 +205,8 @@ function toggleSection(id, elem) {
   }
 }
 
-// --- Multi-column sortable tables (first row fixed) ---
 document.addEventListener('DOMContentLoaded', function () {
+  // --- Multi-column sortable tables (first row fixed) ---
   document.querySelectorAll('table').forEach(function (tbl) {
     var headers = tbl.querySelectorAll('th');
     var sortState = [];
@@ -269,7 +292,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
-  // --- Auto-collapse sections with no highlighted cells ---
+  // --- Auto-collapse sections with no highlighted cells AND no warning banner ---
   document.querySelectorAll('h2').forEach(function (hdr) {
     const toggleIcon = hdr.querySelector('.toggle');
     const sectionId = toggleIcon ? toggleIcon.getAttribute('onclick').match(/'(.*?)'/)[1] : null;
@@ -279,12 +302,92 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!sectionDiv) return;
 
     const hasHighlight = sectionDiv.querySelector('td[style*="ff0000"], td[style*="ffff00"]');
-    if (!hasHighlight) {
+    const hasWarningBanner = sectionDiv.querySelector('.warning-banner');
+
+    // Collapse ONLY if no highlight AND no warning banner
+    if (!hasHighlight && !hasWarningBanner) {
       sectionDiv.style.display = 'none';
       if (toggleIcon) toggleIcon.innerText = '▶';
       sectionDiv.style.marginBottom = '2px';
     }
   });
+
+  // --- Tri-State Toggle Button ---
+  // States:
+  // 0 = Expand All
+  // 1 = Collapse Sections Without Issues (no highlight + no warning banner)
+  // 2 = Collapse All
+
+  let triState = 0; // start simple; first click = Expand All
+
+  const btn = document.createElement('button');
+  btn.className = "reset-btn";
+  btn.style.margin = "8px 0";
+  btn.style.fontSize = "0.9em";
+  btn.innerText = "Expand All";
+
+  document.body.insertBefore(btn, document.body.firstChild);
+
+  btn.addEventListener('click', function () {
+    const sections = [];
+
+    // Discover all sections and attributes
+    document.querySelectorAll('h2 .toggle').forEach(function (icon) {
+      const sectionId = icon.getAttribute('onclick').match(/'(.*?)'/)[1];
+      const div = document.getElementById(sectionId);
+
+      if (div) {
+        const hasHighlight = div.querySelector('td[style*="ff0000"], td[style*="ffff00"]');
+        const hasWarningBanner = div.querySelector('.warning-banner');
+
+        sections.push({
+          div: div,
+          icon: icon,
+          hasHighlight: !!hasHighlight,
+          hasWarningBanner: !!hasWarningBanner
+        });
+      }
+    });
+
+    // 0: Expand All
+    if (triState === 0) {
+      sections.forEach(s => {
+        s.div.style.display = 'block';
+        s.icon.innerText = '▼';
+      });
+      btn.innerText = "Opimized";
+      triState = 1;
+      return;
+    }
+
+    // 1: Collapse Sections Without Issues (no highlight + no warning banner)
+    if (triState === 1) {
+      sections.forEach(s => {
+        if (s.hasHighlight || s.hasWarningBanner) {
+          s.div.style.display = 'block';
+          s.icon.innerText = '▼';
+        } else {
+          s.div.style.display = 'none';
+          s.icon.innerText = '▶';
+        }
+      });
+      btn.innerText = "Collapse All";
+      triState = 2;
+      return;
+    }
+
+    // 2: Collapse All
+    if (triState === 2) {
+      sections.forEach(s => {
+        s.div.style.display = 'none';
+        s.icon.innerText = '▶';
+      });
+      btn.innerText = "Expand All";
+      triState = 0;
+      return;
+    }
+  });
+
 });
 </script>
 "@
@@ -351,8 +454,8 @@ $script:HtmlReportPath = $OutputPath
                 $html += "<div id='$sectionId' style='display:block;'>"
             }
 
-            if ($IncludeDiscription -and $Discription) {
-                $html += "<h5><b>Discription:</b> $ShouldBe</h5>`n"
+            if ($IncludeDescription -and $Description) {
+                $html += "<h5><b>Discription:</b> $Description</h5>`n"
             }
 
             # Convert the input objects to HTML table fragment
@@ -737,13 +840,23 @@ function Save-HtmlReport {
                     }
                 }
             }
+        If(!($SwPortToHostMap)){Write-Host "    WARNING: No matches found. Suspect SDDC is NOT for show tech" -ForegroundColor Yellow}
         #$SwPortToHostMap | sort SwHostName,SwLocPortId,ComputerName,ifAlias | ft
         # Add to HTML report output sections
         if($SwPortToHostMap){
             AddTo-HtmlReport -Title "Interface-to-Node Map" `
                 -Data $SwPortToHostMap `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
+                -IncludeTitle -IncludeDescription -IncludeFootnotes
+        }Else{
+            Write-Host "    WARNING: No matches found. Suspect SDDC is NOT for show tech" -ForegroundColor Yellow
+            $Description = "<div class='warning-banner'><b>WARNING:</b> No matches found. Suspect SDDC is NOT for these show tech(s)</div>"
+
+            AddTo-HtmlReport -Title "Interface-to-Node Map" `
+                -Data ""`
+                -Description $Description `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -778,7 +891,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "dcbx enable" `
                 -Data $dcbxenableout `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -804,7 +917,7 @@ function Save-HtmlReport {
                 AddTo-HtmlReport -Title "class-map type queuing Q0" `
                     -Data $classmaptypequeuingQ0 `
                     -Description "" `
-                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
 
@@ -812,7 +925,7 @@ function Save-HtmlReport {
             ####Add 5 or 7
             IF($classmaptypequeuingQ | ?{$_.lines -imatch 'class-map type queuing Q(5|7)'}){
                 $classmaptypequeuingQ57 += $classmaptypequeuingQ | ?{$_.lines -imatch 'class-map type queuing Q5'} | select Filename, SwHostName,
-                    @{L="class-map type queuing Q7";E={IF($_.Lines -imatch 'class-map type queuing Q5'){"Found"}Else{"RREEDDMissing"}}},
+                    @{L="class-map type queuing Q5";E={IF($_.Lines -imatch 'class-map type queuing Q5'){"Found"}Else{"RREEDDMissing"}}},
                     @{L="match queue 5";            E={IF($_.lines -imatch 'match queue 5'){"Found"}Else{"RREEDDMissing"}}}
                 
                 $classmaptypequeuingQ57 += $classmaptypequeuingQ | ?{$_.lines -imatch 'class-map type queuing Q7'} | select Filename, SwHostName,
@@ -820,15 +933,15 @@ function Save-HtmlReport {
                     @{L="match queue 7";            E={IF($_.lines -imatch 'match queue 7'){"Found"}Else{"RREEDDMissing"}}}
             }Else{
                 #Write-Host "     FAIL: Missing both class-map type queuing Q5 and Q7. Assume Q7" -ForegroundColor red
-                $classmaptypequeuingQ57 += $classmaptypequeuingQ | sort FileName -Unique | select Filename, SwHostName,@{L="class-map type queuing Q5/7";E={"RREEDDMissing"}},@{L="match queue 5/7";E={"RREEDDMissing"}}
+                $classmaptypequeuingQ57 += $classmaptypequeuingQ | sort FileName -Unique | select Filename, SwHostName,@{L="class-map type queuing Q5/7";E={"RREEDDMissing both"}},@{L="match queue 5/7";E={"RREEDDMissing both"}}
             }
             #$classmaptypequeuingQ7 | ft
             # Add to HTML report output sections
             if($classmaptypequeuingQ57){
-                AddTo-HtmlReport -Title "class-map type queuing Q5/7" `
+                AddTo-HtmlReport -Title "class-map type queuing" `
                     -Data $classmaptypequeuingQ57 `
                     -Description "" `
-                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
 
@@ -846,7 +959,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "class-map type queuing Q" `
                 -Data $classmaptypequeuingQOut `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -870,7 +983,7 @@ function Save-HtmlReport {
                     AddTo-HtmlReport -Title "class-map type network-qos group 0" `
                         -Data $matchqosgroup0out `
                         -Description "" `
-                        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                         -IncludeTitle -IncludeDescription -IncludeFootnotes
                 }
             #match qos-group 3
@@ -886,7 +999,7 @@ function Save-HtmlReport {
                     AddTo-HtmlReport -Title "class-map type network-qos group 3" `
                         -Data $matchqosgroup3out `
                         -Description "" `
-                        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                         -IncludeTitle -IncludeDescription -IncludeFootnotes
                 }
             #match qos-group 5
@@ -894,16 +1007,16 @@ function Save-HtmlReport {
                 IF($matchqosgroup5){
                     $matchqosgroup5out = $matchqosgroup5 | sort FileName -Unique | select Filename, SwHostName,@{L=$matchqosgroup5.lines[1];E={
                         IF($_.lines -imatch "class-map type network-qos"){"Found"}Else{"RREEDDMissing"}}},
-                        @{L="match qos-group 5/7";E={IF($_.lines -imatch "match qos-group 5"){
+                        @{L="match qos-group 5";E={IF($_.lines -imatch "match qos-group 5"){
                             If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Match Switch=Q5 Server=Q5"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}}}
                     #$matchqosgroup5out | ft
                     # Add to HTML report output sections
                     if($matchqosgroup5out){
-                        AddTo-HtmlReport -Title "class-map type network-qos group 5/7" `
+                        AddTo-HtmlReport -Title "class-map type network-qos group" `
                             -Data $matchqosgroup5out `
                             -Description "" `
-                            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                             -IncludeTitle -IncludeDescription -IncludeFootnotes
                     }
                 }
@@ -912,16 +1025,16 @@ function Save-HtmlReport {
                 IF($matchqosgroup7){
                     $matchqosgroup7out = $matchqosgroup7 | sort FileName -Unique | select Filename, SwHostName,@{L=$matchqosgroup7.lines[1];E={
                         IF($_.lines -imatch "class-map type network-qos"){"Found"}Else{"RREEDDMissing"}}},
-                        @{L="match qos-group 5/7";E={IF($_.lines -imatch "match qos-group 7"){
+                        @{L="match qos-group 7";E={IF($_.lines -imatch "match qos-group 7"){
                             If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Match Switch=Q7 Server=Q7"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}}}
                     #$matchqosgroup7out | ft
                     # Add to HTML report output sections
                     if($matchqosgroup7out){
-                        AddTo-HtmlReport -Title "class-map type network-qos group 5/7" `
+                        AddTo-HtmlReport -Title "class-map type network-qos group" `
                             -Data $matchqosgroup7out `
                             -Description "" `
-                            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                             -IncludeTitle -IncludeDescription -IncludeFootnotes
                     }
                 }
@@ -934,7 +1047,7 @@ function Save-HtmlReport {
                 AddTo-HtmlReport -Title "class-map type network-qos" `
                     -Data $classmaptypenetworkqos `
                     -Description "" `
-                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                    -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                     -IncludeTitle -IncludeDescription -IncludeFootnotes
             }
         }
@@ -964,7 +1077,7 @@ function Save-HtmlReport {
                         If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Match qos-group 5 dot1p 5"}
                         ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}
                     #No Q5 or 7
-                    ElseIf(($_.lines -inotmatch "qos-group 7 dot1p 7") -and ($_.lines -inotmatch "qos-group 5 dot1p 5")){"RREEEDDMissing"}}}
+                    ElseIf(($_.lines -inotmatch "qos-group 7 dot1p 7") -and ($_.lines -inotmatch "qos-group 5 dot1p 5")){"RREEDDMissing"}}}
         }Else{
             #no trust dot1p-map trust_map
             $trustdot1pmaptrustmapOut = $ShowRunningConfigs | sort FileName -Unique | select Filename, SwHostName,@{L="trust dot1p-map trust_map";E={"RREEDDMissing"}}
@@ -975,7 +1088,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "trust dot1p-map trust_map" `
                 -Data $trustdot1pmaptrustmapOut `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -999,7 +1112,7 @@ function Save-HtmlReport {
                         #Does Server Qos Policy Match Switch Q
                             If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Match Switch=Q7 Server=Q7"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}
-                    ElseIf(($_.lines -inotmatch "queue 7 qos-group 7") -and ($_.lines -inotmatch "queue 5 qos-group 5")){"RREEEDDMissing"}}}
+                    ElseIf(($_.lines -inotmatch "queue 7 qos-group 7") -and ($_.lines -inotmatch "queue 5 qos-group 5")){"RREEDDMissing"}}}
         }Else{
             #no qos-map traffic-class queue-map
             $qosmaptrafficclassqueuemapOut = $ShowRunningConfigs | sort FileName -Unique | select Filename, SwHostName,@{L="qos-map traffic-class queue-map";E={"RREEDDMissing"}}
@@ -1010,7 +1123,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "qos-map traffic-class queue-map" `
                 -Data $qosmaptrafficclassqueuemapOut `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1030,7 +1143,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "policy-map type application policy-iscsi" `
                 -Data $policymaptypeapplicationpolicyiscsiOut `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1050,7 +1163,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy" `
                 -Data $policymaptypeapplicationpolicyiscsiOut `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1085,7 +1198,7 @@ function Save-HtmlReport {
             #Case 1 we have a Q5 and no Q7
             IF($classQ0357 | ?{$_.Header -imatch "Q5" -and $_.Header -inotmatch "Q7"}){
                 $classQ5Out = $classQ0357 | ?{$_.Header -imatch "Q5"} | select Filename, SwHostName,
-                    @{L="class Q5/7";E={IF($_.lines -imatch "class Q5"){
+                    @{L="class Q5";E={IF($_.lines -imatch "class Q5"){
                         #Does Server Qos Policy Match Switch Q
                             If($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"Match Switch=Q5 Server=Q5"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"RREEDDMismatch Switch=Q5 Server=Q7"}}}},
@@ -1094,7 +1207,7 @@ function Save-HtmlReport {
             #Case 2 we have a Q7 and no Q5
             IF($classQ0357 | ?{$_.Header -imatch "Q7" -and $_.Header -inotmatch "Q5"}){
                     $classQ7Out = $classQ0357 | ?{$_.Header -imatch "Q7"} | select Filename, SwHostName,
-                        @{L="class Q5/7";E={IF($_.lines -imatch "class Q7"){
+                        @{L="class Q7";E={IF($_.lines -imatch "class Q7"){
                         #Does Server Qos Policy Match Switch Q
                             If($GetNetQOSPolicyPriorities.PriorityValue -imatch "7"){"Match Switch=Q7 Server=Q7"}
                             ElseIf($GetNetQOSPolicyPriorities.PriorityValue -imatch "5"){"RREEDDMismatch Switch=Q7 Server=Q5"}}}},
@@ -1119,42 +1232,42 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q0" `
                 -Data $classQ0Out `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ3Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q3" `
                 -Data $classQ3Out `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ57Out){
-            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5/7" `
+            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class" `
                 -Data $classQ57Out `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ5Out){
-            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5/7" `
+            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class" `
                 -Data $classQ5Out `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ7Out){
-            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q5/7" `
+            AddTo-HtmlReport -Title "policy-map type queuing ets-policy class" `
                 -Data $classQ7Out `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         if($classQ0357Out){
             AddTo-HtmlReport -Title "policy-map type queuing ets-policy class Q" `
                 -Data $classQ0357Out `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         #policy-map type network-qos pfc-policy
@@ -1173,7 +1286,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "Policy-map type network-qos pfc-policy" `
                 -Data $policymaptypenetworkqospfcpolicyOut `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1196,7 +1309,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "policy-map type network-qos pfc-policy pfc-cos 3" `
                 -Data $pfccos3Out `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1217,7 +1330,7 @@ function Save-HtmlReport {
             AddTo-HtmlReport -Title "System QOS" `
                 -Data $systemqosOut `
                 -Description "" `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1494,7 +1607,7 @@ function Save-HtmlReport {
     AddTo-HtmlReport -Title "Storage Interfaces" `
         -Data $StorageUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #-------------------------------------------------------------
@@ -1539,7 +1652,7 @@ function Save-HtmlReport {
     AddTo-HtmlReport -Title "Mgmt Interfaces" `
         -Data $MgmtUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #region VLTi
@@ -1740,7 +1853,7 @@ function Save-HtmlReport {
     AddTo-HtmlReport -Title "VLTi Interfaces" `
         -Data $VLTiUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
     #endregion VLTi
@@ -1775,7 +1888,7 @@ function Save-HtmlReport {
     AddTo-HtmlReport -Title "Storage vLAN Interfaces" `
         -Data $StoragevLANUsedInterfacesEasyOut `
         -Description "" `
-        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p>" `
+        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
         -IncludeTitle -IncludeDescription -IncludeFootnotes
 
 
