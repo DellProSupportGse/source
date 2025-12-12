@@ -26,6 +26,16 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/12/12:v1.77 -  1. New Update: TP - New version 1.77 DEV
+                        2. Bug Fix: TP - Fixed issue where duplicate cluster node entries are created
+                        3. Bug Fix: TP - Fixed issue where the archive Support Matrix was not used.
+                        4. Bug Fix: TP - Changed the SM data variable and related tables to work with the archive matrix.
+                        5. Bug Fix: TP - Removed ServerEnableSecuritySignature failure for Windows 2022+ systems
+                        6. Bug Fix: TP - Removed page file error for Azure Stack HCI/Local systems
+                        7. Bug Fix: TP - Change Firmware in Charge yellow for Azure Local systems
+                        8. Bug Fix: TP - Removed driver check for Gigabit nics for Azure Local systems
+                        9. New Feature: TP - Added bios to update out of box drivers
+
     2025/10/20:v1.76 -  1. New Update: TP - New version 1.76 DEV
                         2. New Update: TP - Added Priority/Pri to the Cluster Groups and VM Info tables for both clustered and local VMs.
                         3. Bug Fix: TP - JG noticed VD fault resiliency not longer marks parity volumes with a warning.
@@ -213,7 +223,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.76"
+$CluChkVer="1.77"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -268,6 +278,8 @@ function Convert-HtmlTableToPsObject {
         }
 
         $rowMatches = [regex]::Matches($tableHtml, $rowRegex)
+        if ($rowMatches.count -eq 0) {$rowMatches = [regex]::Matches(($tablehtml -replace '[^\w\d<>/\b \b\.\-]',''), $rowRegex)}
+        
         $rows = @()
         $rowIndex = 0
 
@@ -940,6 +952,7 @@ If ($ProcessSDDC -ieq 'y') {
                                 OSBuildNumber = $osInfo.OsBuildNumber
                                 OSName        = $osInfo.OSName.Replace('Microsoft','').Trim() # remove Microsoft
 				                AzureLocalVersion = ''
+                                Bios          = $osInfo.BiosCaption
                                 SysModel      = $osInfo.CsModel
                                 LocalTime   = $osInfo.OsLocalDateTime
                             }
@@ -955,6 +968,7 @@ If ($ProcessSDDC -ieq 'y') {
                                 OSBuildNumber = $osInfo.BuildNumber
                                 OSName        = $osInfo.Caption.Replace('Microsoft','').Trim() # remove Microsoft
 				                AzureLocalVersion = ''
+                                Bios          = $osInfo.BiosCaption
                                 SysModel      = (gc -Path "$SDDCPath\Node_$($osInfo.CsName)\SystemInfo.TXT" | Select-String "System Model: ").Line.split(":")[-1].Trim()
                                 LocalTime   = $osInfo.LocalDateTime
                                 } 
@@ -1055,7 +1069,6 @@ if (-not $mdUrl) {
 # Check for archive Support Matrix
 if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}
 
-
 # Step 4: Extract all HTML tables from _index.md
 $mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
 If (!($mdText -match "<td>$($sysinfo[0].SysModel)</td>")) {
@@ -1085,6 +1098,9 @@ if ($matchedPlatform) {
 if (-not $mdUrl) {
     Write-Warning "No matching _index.md found for platform $GenerationNodes"
 }
+# Check for archive Support Matrix
+if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}
+
 # Step 4: Extract all HTML tables from _index.md
 $mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
 
@@ -1116,10 +1132,23 @@ if ($matchedPlatform) {
 if (-not $mdUrl) {
     Write-Warning "No matching _index.md found for platform $GenerationNodes"
 }
+
+# Check for archive Support Matrix
+if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}
+
 # Step 4: Extract all HTML tables from _index.md
 $mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
 
 }
+if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {
+    $mdText=$mdtext -replace "Storage Spaces Direct Ready Nodes and AX nodes Supported Firmware versions","Base Components" `
+    -replace "Storage Spaces Direct Ready Nodes and AX nodes Firmware and Drivers for Windows Server 2016","Network Adapters" `
+    -replace "Minimum Supported Version","Driver Minimum Supported Version" `
+    -replace "Supported Systems","Supported Platforms" `
+    -replace "<p>","" `
+    -replace "</p>","" `
+}
+
 $mdurl
 
 $SMRevHistLatest=($mdURL -replace "https://raw.githubusercontent.com/dell/azurestack-docs/main/content/en","https://dell.github.io/azurestack-docs" -replace "_index.md","").ToLower()
@@ -1140,7 +1169,7 @@ foreach ($line in $mdLines) {
         if ($currentTitle -and $tableBuffer.Count -gt 0) {
             $html = ($tableBuffer -join "`n").Trim()
             if ($html -like '<table*') {
-                Write-Host "Parsed table: $currentTitle"
+                Write-Host "Parsing table: $currentTitle"
                 $NamedTables[$currentTitle] = Convert-HtmlTableToPsObject -HtmlContent $html
             }
         }
@@ -1151,6 +1180,7 @@ foreach ($line in $mdLines) {
 
     # Begin collecting table HTML block
     if ($trimmed -eq '{{< rawhtml >}}') {
+        #Write-Host "Starting Parse"
         $inTable = $true
         $tableBuffer = @()
         continue
@@ -1162,11 +1192,13 @@ foreach ($line in $mdLines) {
         if ($currentTitle -and $tableBuffer.Count -gt 0) {
             $html = ($tableBuffer -join "`n").Trim()
             if ($html -like '<table*') {
-                Write-Host "Parsed table: $currentTitle"
+                #$html
+                Write-Host "Finished parsing table: $currentTitle"
                 $NamedTables[$currentTitle] = Convert-HtmlTableToPsObject -HtmlContent $html
             }
         }
         $tableBuffer = @()
+        $currentTitle=$null
         continue
     }
 
@@ -2719,7 +2751,7 @@ ForEach($Sys in $SysInfo){
         Default {1}
     }
     $totalmem=[int]($totalmemstr -replace "[^\d]","")*$memorymul
-    $ClusterNodesOut+=$ClusterNodes | Where-Object{$_.Name -imatch $Sys.HostName}|Sort-Object Name | Select-Object Name,Model,SerialNumber,State,@{L="Status";E={$_.StatusInformation}},Id,`
+    $ClusterNodesOut+=$ClusterNodes | Where-Object{$_.Name -ieq $Sys.HostName}|Sort-Object Name | Select-Object Name,Model,SerialNumber,State,@{L="Status";E={$_.StatusInformation}},Id,`
         @{L="CPUs";E={$logicalProcessors}},`
         @{L="Memory";E={"YYEELLLLOOWW"*($totalmem -gt 1TB -and $ClusterName.ShutdownTimeoutInMinutes -lt 1440)+$totalmemstr}},`
         @{L="OSName";E={$Sys.OSName}},`
@@ -3358,12 +3390,18 @@ $htmlout+=$html
     $diskmdls=($PhysicalDisks | Select-Object Model -Unique).Model
 #Find all drives from Dell Support matrix
         $resultObject=@()
+        $SB="Firmware Software Bundle"
+        $MSV="Firmware Minimum Supported Version"
+        If ($OSVersionNodes -eq "2016") {
+            $SB="Software Bundle"
+            $MSV="Driver Minimum Supported Version"
+        }
         ForEach ($diskmdl in $diskmdls) {
         try {
             $SMDrive=$null
-            $SMDrive= $SupportMatrixtableData.Values.Values | ForEach-Object {$_ | Where-Object { $_.Model -eq $diskmdl }}
+            $SMDrive= $SupportMatrixtableData.Values.Values | ForEach-Object {$_ | Where-Object { $_.Model -match $diskmdl }}
 
-            $SMDrive=$SMDrive | Where Model -eq $diskmdl | Sort 'Firmware Min*' -Descending | Select -First 1
+            $SMDrive=$SMDrive | Sort $MSV -Descending | Select -First 1
                     #Create a customer object
                         $resultObject += [PSCustomObject] @{
                                         Type             = $SMDrive.Type
@@ -3372,10 +3410,10 @@ $htmlout+=$html
                                         Endurance        = $SMDrive.Endurance
                                         Vendor           = $SMDrive.Vendor
                                         Series           = $SMDrive.Series
-                                        Model            = $SMDrive.Model
+                                        Model            = $diskmdl
                                         DevicePartNumber = $SMDrive.'Device Part Number (P/N)'
-                                        SoftwareBundle   = $SMDrive.'Firmware Software Bundle'
-                                        Firmware         = $SMDrive.'Firmware Minimum Supported Version'
+                                        SoftwareBundle   = $SMDrive.$SB
+                                        Firmware         = $SMDrive.$MSV
                                         Capacity         = $SMDrive.Capacity
                                         Use              = $SMDrive.Use
     }
@@ -4337,9 +4375,15 @@ $previousOS = ''
 $previousPlatform = ''
 $previousComponent= ''
 $previousPN=''
+If ($OSVersionNodes -eq "2016") {
+    $previousOS="Windows Server 2016"
+}
     ForEach($SMNicData in $SMFWDRVRTable[0]){
 if (!($SMNicData | gm | ? Name -match 'Component')) {$SMNicData | Add-Member -NotePropertyName Component -NotePropertyValue ''}
 if (!($SMNicData | gm | ? Name -match 'Part Number')) {$SMNicData | Add-Member -NotePropertyName 'Part Number' -NotePropertyValue ''}
+if (!($SMNicData | gm | ? Name -match 'Supported OS')) {$SMNicData | Add-Member -NotePropertyName 'Supported OS' -NotePropertyValue ''}
+if (!($SMNicData | gm | ? Name -match 'Supported Platforms')) {$SMNicData | Add-Member -NotePropertyName 'Supported Platforms' -NotePropertyValue ''}
+if (!($SMNicData | gm | ? Name -match 'Driver Minimum Supported Version')) {$SMNicData | Add-Member -NotePropertyName 'Driver Minimum Supported Version' -NotePropertyValue ''}
 if ($SMNicData.'Driver Minimum Supported Version'.length -eq 0) { $SMNicData.'Driver Minimum Supported Version' = $previousVersion }
 if ($SMNicData.'Supported OS'.length -eq 0) { $SMNicData.'Supported OS' = $previousOS }
 if ($SMNicData.'Supported Platforms'.length -eq 0) { $SMNicData.'Supported Platforms' = $previousPlatform }
@@ -4385,22 +4429,30 @@ $previousPN = $SMNicData.'Part Number'
 # parse storage controllers
     $SMFWDRVRTable=@()
     $SMFWDRVRTable=$SupportMatrixtableData['Storage Controllers']
+    if (!($SMFWDRVRTable)) {$SMFWDRVRTable=$SMData=@();$SupportMatrixtableData.values | %{$_.values | %{$SMFWDRVRTable+=$_}};$SMFWDRVRTable=$SMFWDRVRTable | ? Category -eq "Storage-HBA"}
     #$SMFWDRVRTable.count
-
+    $SupportedOS="Supported OS"
+    $PN="Dell Part Number"
+    If ($OSVersionNodes -eq "2016") {
+        $previousOS="Windows Server 2016"
+    }
+ 
     $resultObject=@()
     $SMStorageCtrlData=@()
 $previousVersion = ''
 $previousOS = ''
 $previousPlatform = ''
     ForEach($SMStorageCtrlData in $SMFWDRVRTable[0]){
-
+    if (!($SMStorageCtrlData | gm | ? Name -match 'Supported OS')) {$SMStorageCtrlData | Add-Member -NotePropertyName 'Supported OS' -NotePropertyValue ''}
+if (!($SMStorageCtrlData | gm | ? Name -match 'Supported Platforms')) {$SMStorageCtrlData | Add-Member -NotePropertyName 'Supported Platforms' -NotePropertyValue ''}
+if (!($SMStorageCtrlData | gm | ? Name -match 'Driver Minimum Supported Version')) {$SMStorageCtrlData | Add-Member -NotePropertyName 'Driver Minimum Supported Version' -NotePropertyValue ''}
 if ($SMStorageCtrlData.'Driver Minimum Supported Version'.length -eq 0) { $SMStorageCtrlData.'Driver Minimum Supported Version' = $previousVersion }
 if ($SMStorageCtrlData.'Supported OS'.length -eq 0) { $SMStorageCtrlData.'Supported OS' = $previousOS }
 if ($SMStorageCtrlData.'Supported Platforms'.length -eq 0) { $SMStorageCtrlData.'Supported Platforms' = $previousPlatform }
 
         $resultObject += [PSCustomObject] @{
                 Component                       = $SMStorageCtrlData.Component
-                PartNumber                      = $SMStorageCtrlData.'Dell Part Number'
+                PartNumber                      = $SMStorageCtrlData.'Part Number'
                 FirmwareSoftwareBundle          = $SMStorageCtrlData.'Firmware Software Bundle'
                 FirmwareMinimumSupportedVersion = $SMStorageCtrlData.'Firmware Minimum Supported Version'
                 DriverSoftwareBundle            = $SMStorageCtrlData.'Driver Software Bundle'
@@ -4426,6 +4478,9 @@ $previousPlatform = $SMStorageCtrlData.'Supported Platforms'
 $previousVersion = ''
 $previousOS = ''
 $previousPlatform = ''
+If ($OSVersionNodes -eq "2016") {
+    $previousOS="Windows Server 2016"
+}
     ForEach($SMBaseData in $SMFWDRVRTable[0]){
 
 if ($SMBaseData.'Driver Minimum Supported Version'.length -eq 0) { Add-Member -Force -InputObject $SMBaseData -MemberType NoteProperty -Name 'Driver Minimum Supported Version' -Value $previousVersion }
@@ -4466,14 +4521,16 @@ $OSversion = ('*'+$OSversion+'*')
 $Platform = ("*$Platform*")
 
 # there is no check on supported platforms
-
-return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Object{$_.SupportedPlatforms -like $Platform} | Where-Object{$_.SupportedOS -like $OSversion} | Select-Object DriverMinimumSupportedVersion | Sort-Object -Unique).DriverMinimumSupportedVersion
-
+If ($OSVersion -match "2016") {
+    return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Object{$_.SupportedPlatforms -like $Platform -or $_.SupportedPlatforms -match "All" -or $_.SupportedPlatforms -eq ""} | Select-Object DriverMinimumSupportedVersion | Sort-Object -Unique).DriverMinimumSupportedVersion -replace " - Windows Server 2016","" -replace "[^\d\.\-]",""
+} else {
+    return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Object{$_.SupportedPlatforms -like $Platform} | Where-Object{$_.SupportedOS -like $OSversion -or $_.SupportedOS -eq "NA"} | Select-Object DriverMinimumSupportedVersion | Sort-Object -Unique).DriverMinimumSupportedVersion
+}
 }
 
-#Update Out of Box drivers
+#Update Out of Box bios and drivers
     #Add baseline based on matrix or s2d catalog. Maybe add this to DriFT if the SDDC is in the same folder as the TSRs then use it for driver info
-    $Name="Update Out of Box drivers"
+    $Name="Update Out of Box bios and drivers"
     Write-Host "    Gathering $Name..."  
     #$UpdateOutofBoxdrivers=@()
     #$UpdateOutofBoxdrivers | gm
@@ -4483,7 +4540,7 @@ return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Obj
     $DriverSuites=Foreach ($key in ($SDDCFiles.keys -like "*GetDriverSuiteVersion")) {$SDDCFiles."$key" |`
      Select-Object @{Label="PSComputerName";Expression={$key -replace "GetDriverSuiteVersion",""}},`
      @{Label='Qlogic';Expression={($_ | Where PSPath -like "*Qlogic*Display*").'(default)'}},`
-     @{Label='Intel';Expression={($_ | Where PSPath -like "*Intel*Product_Version").'(default)'}},`
+     @{Label='Intel';Expression={($_ | Where {$_.PSPath -like "*Intel*Product_Version" -or $_.PSPath -like "Intel(R) Chipset*"}).'(default)'}},`
      @{Label='Mellanox';Expression={($_ | Where PSChildName -like "*MLNX*").'(default)'}},`
      @{Label='Broadcom';Expression={$bcomver=($_ | Where PSPath -like "*BroadcomNXE*Product_Version").'(default)';If ($bcomver.indexof("$([char]0)") -eq -1) {$bcomver} else {$bver.substring(0,$bcomver.indexof("$([char]0)"))}}},`
      @{Label='B1GB';Expression={($_ | Where PSPath -like "*Broadcom\*Product_Version").'(default)'}}
@@ -4500,12 +4557,19 @@ return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Obj
 #get-DriverVersion -DriverName "Broadcom 57414*" -OSVersion $OSVersionNodes -Platform $Platform
 #$SMFWDRVRData | Where-Object{$_.Component -like "Broadcom*25*LOM*"} 
     $Platform=$SysInfo[0].SysModel -replace "APEX MC","AX"
+    if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {
+    Switch -Wildcard ($SysInfo[0].SysModel) {
+       "*R740xd *" {$Platform="R740xd"}
+       "*R740xd2" {$Platform="R740xd2"}
+       "*R640 *" {$Platform="R640"}
+       "*R440 *" {$Platform="R440"}
+   }}
     $UpdateOutofBoxdrivers=Foreach ($key in ($SDDCFiles.keys -like "*GetDrivers")) {$SDDCFiles."$key" |`
     Where-Object{$_.Manufacturer -notmatch "Microsoft"}|`
     Where-Object{$_.DeviceName -match "HBA"`
 -or($_.DeviceName -match "Mellanox")`
 -or($_.DeviceName -match "Marvell")`
--or(($_.DeviceName -match "Chipset") -and ($_.DeviceName -match "Controller"))`
+-or(($_.DeviceName -imatch "Chipset") -and ($_.DeviceName -imatch "Controller"))`
 -or($_.DeviceName -match "Ethernet")`
 -or(($_.DeviceName -match "FastLinQ") -and ($_.DeviceName -match "VBD"))`
 -or($_.DeviceName -match "giga")`
@@ -4557,12 +4621,11 @@ return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Obj
     'Broadcom*E-Series*25Gb*LOM*'      {get-DriverVersion -DriverName "Broadcom*25*LOM*" -OSVersion $OSVersionNodes -Platform $Platform}`
     'Broadcom*E-Series*25Gb*SFP*'      {get-DriverVersion -DriverName "Broadcom*25*SFP*" -OSVersion $OSVersionNodes -Platform $Platform}`
     
-    '*HBA330*'                {get-DriverVersion -DriverName "HBA330*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    '*HBA330*'                {get-DriverVersion -DriverName "*HBA330*" -OSVersion $OSVersionNodes -Platform $Platform}`
     '*HBA355*'                {get-DriverVersion -DriverName "HBA355*" -OSVersion $OSVersionNodes -Platform $Platform}`
 
     '*BOSS*'                  {get-DriverVersion -DriverName "BOSS-S1*" -OSVersion $OSVersionNodes -Platform $Platform}`
-    '*Unify*'                 {get-DriverVersion -DriverName "BOSS-S2*" -OSVersion $OSVersionNodes -Platform $Platform}`
-      
+    '*Unify*'                 {$searchTxt="BOSS-S2";if ($OSVersionNodes -eq "2016") {$searchTxt="BOSS-S1"};get-DriverVersion -DriverName "$searchTxt*" -OSVersion $OSVersionNodes -Platform $Platform}
     '*AMD*Chipset*'           {get-DriverVersion -DriverName "Chipset*AMD*" -OSVersion $OSVersionNodes -Platform $Platform}`
     'Intel*C620*Chipset*'  {
     $searchTxt = "Chipset*driver*14G*Intel*"
@@ -4570,10 +4633,21 @@ return ($SMFWDRVRData | Where-Object{$_.Component -like $DriverName} | Where-Obj
 if (($ClusterNodes[0].model -eq "AX-650") -or ($ClusterNodes[0].model -eq "AX-750")) {
 $searchTxt = ("*Chipset*Driver*15G*Intel*") #Fix 06072023
 }
+if ($OSVersionNodes -eq "2016") {$searchTxt = "Chipset driver for Intel*"}
 get-DriverVersion -DriverName $searchTxt -OSVersion $OSVersionNodes -Platform $Platform
   }` #Intel*C620*Chipset*
     }}}, Manufacturer
     }
+$UpdateOutofBoxdrivers+=ForEach ($Sys in $SysInfo) {
+                [PSCustomObject] @{
+                PSComputerName                  = $Sys.HostName
+                DeviceName                      = "BIOS"
+                DriverVersion                   = $Sys.Bios
+                AvailableVersion                 = get-DriverVersion -DriverName "BIOS" -OSVersion $OSVersionNodes -Platform $Platform
+                Manufacturer                    = "Dell Corporation"
+                }
+                }
+
 
 if ($debug) { $UpdateOutofBoxdrivers | ft }
 
@@ -4584,14 +4658,15 @@ $DriverVersionCheck+=$Device | Select-Object PSComputerName, DeviceName, `
 @{Label='DriverVersion';Expression={
 $DriverVersion=$_.DriverVersion        
 # skip check on inbox driver, this is always correct
-IF(($_.AvailableVersion -ne $null) -and ($_.AvailableVersion -notmatch 'inbox' -and $SysInfo[0].SysModel -notmatch "^APEX")){
+IF(($_.AvailableVersion -ne $null) -and ($_.AvailableVersion -notmatch 'inbox' -and $SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "2016")){
 Switch($_.AvailableVersion){
 # DriverVersion < AvailableVersion
-{[System.Version]$DriverVersion -lt [System.Version](($_+".0"*3).split(".")[0..3] -join ".")}{"RREEDD$DriverVersion"}
+{([System.Version]$DriverVersion -lt [System.Version](($availableversion+".0"*3).split(".")[0..3] -join ".") -and -not ($_.DeviceName -match "Gigabit" -and $SysInfo[0].AzureLocalVersion -gt ""))}{"RREEDD$DriverVersion"}
 # DriverVersion > AvailableVersion
 {[System.Version]$DriverVersion -gt [System.Version](($_+".0"*3).split(".")[0..3] -join ".")}{"YYEELLLLOOWW$DriverVersion"}
 Default{$DriverVersion}
 }
+}ElseIf($OSVersionNodes -eq "2016" -and $_.AvailableVersion -ne $Null) {"RREEDD"*($_.AvailableVersion -notmatch $DriverVersion)+$DriverVersion
 }Else{$DriverVersion}
 }
 },@{Label='AvailableVersion';Expression={
@@ -4645,7 +4720,7 @@ $UpdateOutofBoxdriverstbl.rows.add($row)
             $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
 
         # HTML Report
-    $html+='<H2 id="UpdateOutofBoxdrivers">Update Out of Box drivers</H2>'
+    $html+='<H2 id="UpdateOutofBoxbiosanddrivers">Update Out of Box bios and drivers</H2>'
     $html+="&nbsp;&nbsp;&nbsp;&nbsp;Drivers should be listed once else drivers not same on all nodes"
     $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;<a href='$SMRevHistLatest' target='_blank'>Ref: Support Matrix for Dell EMC Solutions for Microsoft Azure Stack HCI</a></h5>"
     
@@ -5264,7 +5339,7 @@ Unable to add KV info to
 File hash mismatch error
 /(?!'0') missing\/invalid files in" -split ("`r`n")
 
-        Foreach ($ECE in (Get-ChildItem -Path $SDDCPath -Filter "AzureStack.ECE.etl" -Recurse)) {
+        Foreach ($ECE in (Get-ChildItem -Path $SDDCPath -Filter "AzureStack.ECE.etl" -Recurse -Depth 2)) {
             tracerpt.exe "$($ECE.fullname)" -of xml -o "$($ECE.Directory)\$($ECE.Basename).xml" -y | Out-Null
             [xml]$ECELog=gc "$($ECE.Directory)\$($ECE.Basename).xml"
             $ECEEvents=($ecelog.events.event.eventdata.data | ? Name -eq message | ? {$_.'#text' -notmatch "^\[Test-SBEContentIntegrity" -and $_.'#text' -cnotlike "*SUCCESS*"}).'#text'
@@ -6436,7 +6511,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 Sort-Object PSComputerName,Name | Select-Object PSComputerName,Name,DisplayName,DisplayValue
             }
             $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,DisplayName,`
-            @{Label='DisplayValue';Expression={If((($StorageNics.name | Sort-Object -Unique) -imatch $_.name ) -and ($SysInfo[0].SysModel -notmatch "^APEX" -and $_.DisplayValue -inotmatch 'Host In Charge')){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}}}
+            @{Label='DisplayValue';Expression={If((($StorageNics.name | Sort-Object -Unique) -imatch $_.name ) -and ($_.DisplayValue -inotmatch 'Host In Charge')){"RREEDD"*(-not $SysInfo[0].AzureLocalVersion)+"YYEELLLLOOWW"*($SysInfo[0].AzureLocalVersion -gt "")+$_.DisplayValue}Else{$_.DisplayValue}}}
             #$GetNetAdapterAdvancedProperty | FT -AutoSize
             #Azure Table
                 $AzureTableData=@()
@@ -6484,9 +6559,9 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $DisableSMBSigningGetSmbServerConfiguration = $GetSmbServerConfiguration | Sort-Object PSComputerName | Select-Object PSComputerName,`
         @{L='ClientEnableSecuritySignature';E={}},`
         @{L='ClientRequireSecuritySignature';E={}},`
-        @{L='ServerEnableSecuritySignature';E={$SEnableSecuritySignature=$_.EnableSecuritySignature;IF($SEnableSecuritySignature -eq $True){"RREEDD$SEnableSecuritySignature"}Else{$SEnableSecuritySignature}}},`
+        @{L='ServerEnableSecuritySignature';E={$SEnableSecuritySignature=$_.EnableSecuritySignature;IF($SEnableSecuritySignature -eq $True -and $SysInfo[0].OSBuildNumber -lt "20348"){"RREEDD$SEnableSecuritySignature"}Else{$SEnableSecuritySignature}}},`
         @{L='ServerEncryptData';E={$EncryptData=$_.EncryptData;IF($EncryptData -eq $True){"RREEDD$EncryptData"}Else{$EncryptData}}},`
-        @{L='ServerRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "23H2" -and $OSVersionNodes -ne "24H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}}
+        @{L='ServerRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -notmatch "2[3-9]H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}}
         $DisableSMBSigning=$DisableSMBSigningGetSmbClientConfiguration+$DisableSMBSigningGetSmbServerConfiguration
         #$DisableSMBSigning | FT -AutoSize
         #Azure Table
@@ -6792,7 +6867,7 @@ $html=""
             $PageFileInfoOut=$GetComputerInfo | Select-Object `
                 @{L="ComputerName";E={$_.CsName}},`
                 @{L="PageFileSize(MB)";E={$PFS=$_.OsFreeSpaceInPagingFiles/1KB;
-                  IF($PFS -ne (51200 + $ClusterName.BlockCacheSize) -and $SysInfo[0].SysModel -notmatch "^APEX"){
+                  IF($PFS -ne (51200 + $ClusterName.BlockCacheSize) -and $SysInfo[0].SysModel -notmatch "^APEX" -and $SysInfo[0].AzureLocalVersion -le ""){
                     IF($PFS -gt (51200 + $ClusterName.BlockCacheSize)){
                       IF ($OSVersionNodes -eq "24H2") {
 						 # no hard requirement for 24H2 anymore, as of 2025 Aug deployment guide
