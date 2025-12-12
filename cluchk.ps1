@@ -32,9 +32,10 @@ Specifies to show debug information
                         4. Bug Fix: TP - Changed the SM data variable and related tables to work with the archive matrix.
                         5. Bug Fix: TP - Removed ServerEnableSecuritySignature failure for Windows 2022+ systems
                         6. Bug Fix: TP - Removed page file error for Azure Stack HCI/Local systems
-                        7. Bug Fix: TP - Change Firmware in Charge yellow for Azure Local systems
-                        8. Bug Fix: TP - Removed driver check for Gigabit nics for Azure Local systems
-                        9. New Feature: TP - Added bios to update out of box drivers
+                        7. Bug Fix: SA - Added some Dell Ent NVME models
+                        8. Bug Fix: TP - Change Firmware in Charge yellow for Azure Local systems
+                        9. Bug Fix: TP - Removed driver check for Gigabit nics for Azure Local systems
+                        10. New Feature: TP - Added bios to update out of box drivers
 
     2025/10/20:v1.76 -  1. New Update: TP - New version 1.76 DEV
                         2. New Update: TP - Added Priority/Pri to the Cluster Groups and VM Info tables for both clustered and local VMs.
@@ -3340,6 +3341,17 @@ $htmlout+=$html
         $PhysicalDisks=$SDDCFiles."GetPhysicalDisk" |`
         Select-Object @{Label='Node';Expression={""}},UniqueID,@{L='ID';E={$_.DeviceId}},FriendlyName,@{L='Model';E={
         Switch -Regex ($_.Model) {
+            "Dell Ent NVMe v2 AGN RI U.2"       {"MZWLR6T4HALA-00AD3"}
+            "Dell Ent NVMe PM1733a RI"          {"MZWLR15THBLAAD3"}
+            "Dell Ent NVMe CM6"                 {"KCM6XVUL1T60"}
+	        "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
+            "Dell Ent NVMe PM1735a"             {"MZWLR6T4HBLAAD3"}
+            "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
+            "Dell Express Flash CD5"            {"KCD5XLUG3T84"}
+            "Dell DC NVMe CD8 U.2 960GB"        {"KCD8XRUG960G"}
+            "Dell DC NVMe CD8 U.2 1.92TB"       {"KCD8XRUG1T92"}
+            "Dell DC NVMe CD8 U.2 3.84TB"       {"KCD8XRUG3T84"}
+            "Dell DC NVMe CD8 U.2 7.68TB"       {"KCD8XRUG7T68"}
             "Dell Ent NVMe v2 AGN RI U.2"       {"MZWLR6T4HALA-00AD3"}
             "Dell Ent NVMe PM1733a RI"          {"MZWLR15THBLAAD3"}
             "Dell Ent NVMe CM6"                 {"KCM6XVUL1T60"}
