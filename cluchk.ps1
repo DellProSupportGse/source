@@ -26,6 +26,10 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2025/12/18:v1.78 -  1. New Update: TP - New version 1.78 DEV
+                        2. Bug Fix: TP - Apex MC models will now use the correct AX version of the Support Matrix
+                        3. Bug Fix: TP - v1.77 update 4 caused a drive table to show up because a variable was not cleared
+
     2025/12/12:v1.77 -  1. New Update: TP - New version 1.77 DEV
                         2. Bug Fix: TP - Fixed issue where duplicate cluster node entries are created
                         3. Bug Fix: TP - Fixed issue where the archive Support Matrix was not used.
@@ -224,7 +228,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.77"
+$CluChkVer="1.78"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -343,7 +347,6 @@ function Convert-HtmlTableToPsObject {
 
     return $result
 }
-
 
 #region Cleanup CluChk Transcripts older than 10 days
 function TLogCleanup {
@@ -1072,7 +1075,7 @@ if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https
 
 # Step 4: Extract all HTML tables from _index.md
 $mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
-If (!($mdText -match "<td>$($sysinfo[0].SysModel)</td>")) {
+If (!($mdText -match "<td>$($sysinfo[0].SysModel.replace('APEX MC','AX'))</td>")) {
 
 # Step 1: Get SupportMatrix versions N-1
 $topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing
@@ -1106,7 +1109,7 @@ if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https
 $mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
 
 }
-If (!($mdText -match "<td>$($sysinfo[0].SysModel)</td>")) {
+If (!($mdText -match "<td>$($sysinfo[0].SysModel.replace('APEX MC','AX'))</td>")) {
 
 # Step 1: Get SupportMatrix versions N-2
 $topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing
@@ -1223,12 +1226,13 @@ $SMxml = $NamedTables | ConvertTo-Xml -As String -NoTypeInformation
 $SupportMatrixtableData = $NamedTables
 
 #$SupportMatrixtableData.Values.values
-
+$html=""
 #endregion Support Matrix
 
 #Report ID
 $htmlout+=""
 $htmlout+="ReportID: $CReportID"
+
 
 #region Prcoess Show Tech-Support Report(s)
 If($ProcessSTS -ieq 'y'){
@@ -3344,7 +3348,7 @@ $htmlout+=$html
             "Dell Ent NVMe v2 AGN RI U.2"       {"MZWLR6T4HALA-00AD3"}
             "Dell Ent NVMe PM1733a RI"          {"MZWLR15THBLAAD3"}
             "Dell Ent NVMe CM6"                 {"KCM6XVUL1T60"}
-	        "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
+            "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
             "Dell Ent NVMe PM1735a"             {"MZWLR6T4HBLAAD3"}
             "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
             "Dell Express Flash CD5"            {"KCD5XLUG3T84"}
@@ -3355,7 +3359,7 @@ $htmlout+=$html
             "Dell Ent NVMe v2 AGN RI U.2"       {"MZWLR6T4HALA-00AD3"}
             "Dell Ent NVMe PM1733a RI"          {"MZWLR15THBLAAD3"}
             "Dell Ent NVMe CM6"                 {"KCM6XVUL1T60"}
-	        "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
+            "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
             "Dell Ent NVMe PM1735a"             {"MZWLR6T4HBLAAD3"}
             "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
             "Dell Express Flash CD5"            {"KCD5XLUG3T84"}
@@ -4441,7 +4445,7 @@ $previousPN = $SMNicData.'Part Number'
 # parse storage controllers
     $SMFWDRVRTable=@()
     $SMFWDRVRTable=$SupportMatrixtableData['Storage Controllers']
-    if (!($SMFWDRVRTable)) {$SMFWDRVRTable=$SMData=@();$SupportMatrixtableData.values | %{$_.values | %{$SMFWDRVRTable+=$_}};$SMFWDRVRTable=$SMFWDRVRTable | ? Category -eq "Storage-HBA"}
+    if (!($SMFWDRVRTable)) {$SMFWDRVRTable=@();$SupportMatrixtableData.values | %{$_.values | %{$SMFWDRVRTable+=$_}};$SMFWDRVRTable=$SMFWDRVRTable | ? Category -eq "Storage-HBA"}
     #$SMFWDRVRTable.count
     $SupportedOS="Supported OS"
     $PN="Dell Part Number"
