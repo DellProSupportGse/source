@@ -26,6 +26,15 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/01/16:v1.79 -  1. New Update: TP - New version 1.79 DEV
+                        2. Bug Fix: TP - Fixed bug that would not show current driver version caused by Update 1.77 Update 9
+                        3. New Feature: TP - Get page file size from Send-DiagnosticData style logs
+                        4. New Feature: TP - Storage Network Cards can work with Send-DiagnoticData report.
+                        5. Bug Fix: TP - Added 15.36TB CM6 NVMe firmware and fixed some problem matches.
+                        6. Bug Fix: TP - Used internal GPT AI to parse Support Matrix and align NVMe disk model numbers
+                        7. New Feature: TP - Added AlertThreshold to Storage Pool and will highlight when an error would occur with fix command
+                        8. Bug Fix: TP - Added Dell DC NVMe 7500 U.2 ISE RI series drives
+
     2025/12/18:v1.78 -  1. New Update: TP - New version 1.78 DEV
                         2. Bug Fix: TP - Apex MC models will now use the correct AX version of the Support Matrix
                         3. Bug Fix: TP - v1.77 update 4 caused a drive table to show up because a variable was not cleared
@@ -228,7 +237,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.78"
+$CluChkVer="1.79"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -964,7 +973,7 @@ If ($ProcessSDDC -ieq 'y') {
         }
         if (!($GetComputerInfo)) {
             $GetComputerInfo=gci $SDDCPath -Filter "Win32_OperatingSystem.xml" -Recurse -Depth 1 | Import-Clixml
-            
+            $GetBIOSInfo=gci $SDDCPath -Filter "Win32_Bios.xml" -Recurse -Depth 1 | Import-Clixml
             ForEach ($osInfo in $GetComputerInfo) {
             $SysInfo += [PSCustomObject] @{
                                 HostName      = $osInfo.CsName
@@ -972,7 +981,7 @@ If ($ProcessSDDC -ieq 'y') {
                                 OSBuildNumber = $osInfo.BuildNumber
                                 OSName        = $osInfo.Caption.Replace('Microsoft','').Trim() # remove Microsoft
 				                AzureLocalVersion = ''
-                                Bios          = $osInfo.BiosCaption
+                                Bios          = ($GetBIOSInfo | ? PSComputerName -eq $osinfo.CsName).SMBIOSBIOSVersion
                                 SysModel      = (gc -Path "$SDDCPath\Node_$($osInfo.CsName)\SystemInfo.TXT" | Select-String "System Model: ").Line.split(":")[-1].Trim()
                                 LocalTime   = $osInfo.LocalDateTime
                                 } 
@@ -2666,7 +2675,7 @@ If($ClusterOwner.count -eq 0){$html+='<h5><span style="color: #ffffff; backgroun
          }
         
         #$VMInfo| FT -AutoSize -Wrap
-
+        
         #Azure Table
             $AzureTableData=@()
             $AzureTableData=$VMInfo|Select-Object -Property `
@@ -2884,6 +2893,9 @@ $InPlaceRepairFreeSpaceNeededInStoragePool=IF(($ClusterNodes|Measure-Object).cou
             }},`
         @{Name="AllocatedSpace";Expression={IF($TotalFootprintOnPool -ne 0){Convert-BytesToSize ($TotalFootprintOnPool)}Else{"Not Available"}}},`
         @{Name="Capacity";Expression={Convert-BytesToSize $_.Size}},
+        @{Name="AlertThreshold";Expression={if ($TotalFootprintOnPool/$_.Size*100 -gt $_.ThinProvisioningAlertThresholds[0]) {
+        Set-Variable -Name "SPNote"  -Scope global -Force -Value "Run Set-StoragePool -FriendlyName $($_.FriendlyName) -ThinProvisioningAlertThresholds $([int]($TotalFootprintOnPool/$_.Size*100+2))"
+        "RREEDD"+$_.ThinProvisioningAlertThresholds[0]} else {$_.ThinProvisioningAlertThresholds[0]}}},
         @{Name="Note";Expression={$SPNote}}
         #$ClusterPool |FL #FT -AutoSize -Wrap
 
@@ -3344,30 +3356,65 @@ $htmlout+=$html
         #Write-Host "    Gathering $Name..."
         $PhysicalDisks=$SDDCFiles."GetPhysicalDisk" |`
         Select-Object @{Label='Node';Expression={""}},UniqueID,@{L='ID';E={$_.DeviceId}},FriendlyName,@{L='Model';E={
-        Switch -Regex ($_.Model) {
-            "Dell Ent NVMe v2 AGN RI U.2"       {"MZWLR6T4HALA-00AD3"}
-            "Dell Ent NVMe PM1733a RI"          {"MZWLR15THBLAAD3"}
-            "Dell Ent NVMe CM6"                 {"KCM6XVUL1T60"}
-            "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
-            "Dell Ent NVMe PM1735a"             {"MZWLR6T4HBLAAD3"}
+            #"Dell Ent NVMe PM1733a RI*"          {"MZWLR15THBLAAD3"}
+            #"Dell Ent NVMe CM6*"                 {"KCM6XVUL1T60"}
+	        #"Dell Ent NVMe CM7*"                 {"KCM7XVUG1T60"}
+
+        Switch -Wildcard ($_.Model) {
+            "Dell DC NVMe 7500 U.2 ISE RI*"      {"MTFDKCC7T6TGP"}
+            "Dell Ent NVMe PM1735a*"             {"MZWLR6T4HBLAAD3"}
+            "Dell Express Flash CD5*"            {"KCD5XLUG3T84"}
             "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
-            "Dell Express Flash CD5"            {"KCD5XLUG3T84"}
+            "Dell Express Flash CD5*"            {"KCD5XLUG3T84"}
             "Dell DC NVMe CD8 U.2 960GB"        {"KCD8XRUG960G"}
             "Dell DC NVMe CD8 U.2 1.92TB"       {"KCD8XRUG1T92"}
             "Dell DC NVMe CD8 U.2 3.84TB"       {"KCD8XRUG3T84"}
             "Dell DC NVMe CD8 U.2 7.68TB"       {"KCD8XRUG7T68"}
-            "Dell Ent NVMe v2 AGN RI U.2"       {"MZWLR6T4HALA-00AD3"}
-            "Dell Ent NVMe PM1733a RI"          {"MZWLR15THBLAAD3"}
-            "Dell Ent NVMe CM6"                 {"KCM6XVUL1T60"}
-            "Dell Ent NVMe CM7"                 {"KCM7XVUG1T60"}
-            "Dell Ent NVMe PM1735a"             {"MZWLR6T4HBLAAD3"}
-            "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
-            "Dell Express Flash CD5"            {"KCD5XLUG3T84"}
-            "Dell DC NVMe CD8 U.2 960GB"        {"KCD8XRUG960G"}
-            "Dell DC NVMe CD8 U.2 1.92TB"       {"KCD8XRUG1T92"}
-            "Dell DC NVMe CD8 U.2 3.84TB"       {"KCD8XRUG3T84"}
-            "Dell DC NVMe CD8 U.2 7.68TB"       {"KCD8XRUG7T68"}
-            default {$_}
+            "DELL NVME ISE PE8110 RI U.2 1.92TB" {"HFS1T9GEETX099N"}
+            "DELL NVME ISE PE8110 RI U.2 7.68TB" {"HFS7T6GEETX099N"}
+            "DELL NVME ISE PE8110 RI U.2 960GB"  {"HFS960GEETX099N"}
+            "Dell Ent NVMe v2 AGN RI U.2*" {"MZWLR7T6HALAAD3"}
+    "Dell Ent NVMe PM1735 SP MU 1.60TB" {"MZWLJ1T6HBJRAD3"}
+    "Dell Ent NVMe PM1735 SP MU 3.20TB" {"MZWLJ3T2HBJRAD3"}
+    "Dell Ent NVMe PM1735 SP MU 6.40TB" {"MZWLJ6T4HALAAD3"}
+    "Dell Ent NVMe PM1735 V2 MU 3.20TB" {"MZWLR3T2HBLSAD3"}
+    "Dell Ent NVMe PM1735 V2 MU 6.40TB" {"MZWLR6T4HALAAD3"}
+    "Dell Ent NVMe PM1745 MU 1.60TB" {"MZWLO1T6HCJR-00AD3"}
+    "Dell Ent NVMe PM1745 MU 3.20TB" {"MZWLO3T2HCLS-00AD3"}
+    "Dell Ent NVMe PM1745 MU 6.40TB" {"MZWLO6T4HBLA-00AD3"}
+    "Dell Ent NVMe CM6 MU 1.60TB" {"KCM6XVUL1T60"}   # Kioxia CM6 Mixed Use
+    "Dell Ent NVMe CM6 MU 3.20TB" {"KCM6XVUL3T20"}
+    "Dell Ent NVMe CM6 MU 6.40TB" {"KCM6XVUL6T40"}
+    "Dell Ent NVMe CM7 MU 1.60TB" {"KCM7XVUG1T60"}   # Kioxia CM7 Mixed Use
+    "Dell Ent NVMe CM7 MU 3.20TB" {"KCM7XVUG3T20"}
+    "Dell Ent NVMe CM7 MU 6.40TB" {"KCM7XVUG6T40"}
+    "Dell Ent NVMe CM6 RI 1.92TB" {"KCM6XRUL1T92"}
+    "Dell Ent NVMe CM6 RI 3.84TB" {"KCM6XRUL3T84"}
+    "Dell Ent NVMe CM6 RI 7.68TB" {"KCM6XRUL7T68"}
+    "Dell Ent NVMe CM6 RI 15.36TB" {"KCM6XRUL15T3"}
+    "Dell Ent NVMe CM7 RI 1.92TB" {"KCM7XRUG1T92"}
+    "Dell Ent NVMe CM7 RI 3.84TB" {"KCM7XRUG3T84"}
+    "Dell Ent NVMe CM7 RI 7.68TB" {"KCM7XRUG7T68"}
+    "Dell Ent NVMe CM7 RI 15.36TB" {"KCM7XRUG15T3"}
+    "Dell Ent NVMe PM1733 V2 RI 3.84TB" {"MZWLR3T8HBLSAD3"}   # Samsung PM1733 V2
+    "Dell Ent NVMe PM1733 V2 RI 7.68TB" {"MZWLR7T6HALAAD3"}
+    "Dell Ent NVMe PM1733a RI 1.92TB" {"MZWLR1T9HCJRAD3"}   # Samsung PM1733a
+    "Dell Ent NVMe PM1733a RI 3.84TB" {"MZWLR3T8HCLSAD3"}
+    "Dell Ent NVMe PM1733a RI 7.68TB" {"MZWLR7T6HBLAAD3"}
+    "Dell Ent NVMe PM1733a RI 15.36TB" {"MZWLR15THBLAAD3"}
+    "Dell Ent NVMe PM9A3 RI 0.96TB" {"MZQL2960HCJRAD3"}   # Samsung PM9A3
+    "Dell Ent NVMe PM9A3 RI 1.92TB" {"MZQL21T9H"}
+    "Dell Ent NVMe PM9A3 RI 3.84TB" {"MZQL23T8HCLSAD3"}
+    "Dell Ent NVMe PM9A3 RI 7.68TB" {"MZQL27T6HBLAAD3"}
+    "Dell Ent NVMe PM9D3a RI 0.96TB" {"MZWL6960HFJA-00AD3"}  # Samsung PM9D3a
+    "Dell Ent NVMe PM9D3a RI 1.92TB" {"MZVL61T9HBL1-00AD3"}
+    "Dell Ent NVMe PM9D3a RI 3.84TB" {"MZWL63T8HFLT-00AD3"}
+    "Dell Ent NVMe PM9D3a RI 7.68TB" {"MZWL67T6HBLC-00AD3"}
+    "Dell Ent NVMe PM1743 RI 1.92TB" {"MZWLO1T9HCJR-00AD3"}   # Samsung PM1743
+    "Dell Ent NVMe PM1743 RI 3.84TB" {"MZWLO3T8HCLS-00AD3"}
+    "Dell Ent NVMe PM1743 RI 7.68TB" {"MZWLO7T6HBLA-00AD3"}
+    "Dell Ent NVMe PM1743 RI 15.36TB" {"MZWLO15THBLA-00AD3"}
+    default {$_}
         }}},`
         @{Label='SerialNumber';Expression={
             If($_.SerialNumber -imatch '^[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*.'){$_.AdapterSerialNumber -replace " ",""}
@@ -4174,9 +4221,11 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
 # Find Storage NICs
     $Name="Storage Network Cards"
     Write-Host "    Gathering $Name..." 
-    If($SDDCFiles.ContainsKey("ClusterNetworkLiveMigration")){
-        $GetSmbMultichannelConnection=Foreach ($key in ($SDDCFiles.keys -like "*GetSmbMultichannelConnection" )) {$SDDCFiles."$key"}
-        $StorageNicsFriendlyName=$GetSmbMultichannelConnection | Where-Object{$_.smbinstance -eq 2} | Select-Object @{L="StorageNicFriendlyName";E={$_.ClientInterfaceFriendlyName}},PSComputerName,ClientInterfaceIndex
+    If($SDDCFiles.ContainsKey("ClusterNetworkLiveMigration") -or ($SDDCFiles.Keys -like "*GetSmbMultichannelConnection-CSV").count){
+        $keys=$SDDCFiles.keys | ? {$_ -like "*GetSmbMultichannelConnection" -or $_ -like "*GetSmbMultichannelConnection-CSV"}
+        $GetSmbMultichannelConnection=Foreach ($key in $keys) {$SDDCFiles."$key"}
+
+        $StorageNicsFriendlyName=$GetSmbMultichannelConnection | Where-Object{$_.smbinstance -eq 2 -or $_.RdmaConnectionCount -gt 1} | Select-Object @{L="StorageNicFriendlyName";E={$_.ClientInterfaceFriendlyName}},PSComputerName,ClientInterfaceIndex
         #$GetSmbMultichannelConnection |select PSComputername,ClientInterfaceFriendlyName,ClientInterfaceIndex,ServerInterfaceIndex
         $StorageNics=@()
         ForEach($StorageNic in $StorageNicsFriendlyName){
@@ -4350,8 +4399,7 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
  }},Address
 
 
-
-            #$LiveMigrationNetworkPrioritiesOut
+             #$LiveMigrationNetworkPrioritiesOut
         #Azure Table
             $AzureTableData=@()
             $AzureTableData=$LiveMigrationNetworkPrioritiesOut|Select-Object *,
@@ -4677,9 +4725,9 @@ $DriverVersion=$_.DriverVersion
 IF(($_.AvailableVersion -ne $null) -and ($_.AvailableVersion -notmatch 'inbox' -and $SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "2016")){
 Switch($_.AvailableVersion){
 # DriverVersion < AvailableVersion
-{([System.Version]$DriverVersion -lt [System.Version](($availableversion+".0"*3).split(".")[0..3] -join ".") -and -not ($_.DeviceName -match "Gigabit" -and $SysInfo[0].AzureLocalVersion -gt ""))}{"RREEDD$DriverVersion"}
+{([System.Version](($DriverVersion+".0"*3).split(".")[0..3] -join ".") -lt [System.Version](($_+".0"*3).split(".")[0..3] -join ".") -and -not ($_.DeviceName -match "Gigabit" -and $SysInfo[0].AzureLocalVersion -gt ""))}{"RREEDD$DriverVersion"}
 # DriverVersion > AvailableVersion
-{[System.Version]$DriverVersion -gt [System.Version](($_+".0"*3).split(".")[0..3] -join ".")}{"YYEELLLLOOWW$DriverVersion"}
+{[System.Version](($DriverVersion+".0"*3).split(".")[0..3] -join ".") -gt [System.Version](($_+".0"*3).split(".")[0..3] -join ".")}{"YYEELLLLOOWW$DriverVersion"}
 Default{$DriverVersion}
 }
 }ElseIf($OSVersionNodes -eq "2016" -and $_.AvailableVersion -ne $Null) {"RREEDD"*($_.AvailableVersion -notmatch $DriverVersion)+$DriverVersion
@@ -6662,21 +6710,21 @@ If($SystemInfoContent[2] -imatch 'HCI'){
             $Name="OEM Information Support Provider"
             Write-Host "    Gathering $Name..." 
             $GetRegOEMInformation=Foreach ($key in ($SDDCFiles.keys -like "*GetRegOEMInformation")) {$SDDCFiles."$key" | Select *,@{L="ComputerName";E={$key.Replace("GetRegOEMInformation","")}}}
-
-            $GetRegOEMInformationOutMissing=@()
-            $GetRegOEMInformationOutAll=@()
-            $GetRegOEMInformationOut=@()
-            $GetRegOEMInformationOut+=$GetRegOEMInformation|Where-Object{$_.SupportProvider -ne $Null} | Sort-Object ComputerName | Select-Object ComputerName,@{L='SupportProvider';E={$SupportProvider=$_.SupportProvider;IF($SupportProvider -inotmatch 'dell'){"RREEDD$SupportProvider"}Else{$SupportProvider}}}
-            #Checking/Adding missing nodes
-            #check when none of the nodes have an entry, just list them all then
-            if($GetRegOEMInformationOut.ComputerName.count -eq 0 -and $SysInfo[0].SysModel -notmatch "^APEX") {
+            if ($GetRegOEMInformation.count -gt 0) {
+              $GetRegOEMInformationOutMissing=@()
+              $GetRegOEMInformationOutAll=@()
+              $GetRegOEMInformationOut=@()
+              $GetRegOEMInformationOut+=$GetRegOEMInformation|Where-Object{$_.SupportProvider -ne $Null} | Sort-Object ComputerName | Select-Object ComputerName,@{L='SupportProvider';E={$SupportProvider=$_.SupportProvider;IF($SupportProvider -inotmatch 'dell'){"RREEDD$SupportProvider"}Else{$SupportProvider}}}
+              #Checking/Adding missing nodes
+              #check when none of the nodes have an entry, just list them all then
+              if($GetRegOEMInformationOut.ComputerName.count -eq 0 -and $SysInfo[0].SysModel -notmatch "^APEX") {
                 ForEach($Node in $ClusterNodes){
                     $GetRegOEMInformationOut+=[PSCustomObject]@{
                         ComputerName = $Node.name
                         SupportProvider = "RREEDDMissing"
                     }
-                }
-            } else {
+                  }
+              } else {
 			    $ClusterNodeCount=($SDDCFiles."GetClusterNode" |Measure-Object).count
                 IF($GetRegOEMInformationOut.ComputerName.count -le $ClusterNodeCount){
                     $MissingNodes=(Compare-Object $GetRegOEMInformationOut.ComputerName $ClusterNodes.name).InputObject
@@ -6687,9 +6735,9 @@ If($SystemInfoContent[2] -imatch 'HCI'){
                         }
                     }
                 }
-            }
-            #$GetRegOEMInformationOut | FT -AutoSize
-            #Azure Table
+              }
+              #$GetRegOEMInformationOut | FT -AutoSize
+              #Azure Table
                 $AzureTableData=@()
                 $AzureTableData=$GetRegOEMInformationOut|Select-Object -Property `
                     @{L='PSComputerName';E={[string]$_.PSComputerName}},
@@ -6711,8 +6759,9 @@ If($SystemInfoContent[2] -imatch 'HCI'){
                  -replace '<td>YYEELLLLOoWW','<td style="background-color: #ffff00">'
                 $ResultsSummary+=Set-ResultsSummary -name $name -html $html
                 $htmlout+=$html
-                $html=""
-                $Name=""
+            }
+            $html=""
+            $Name=""
         }
 
 
@@ -6882,8 +6931,8 @@ $html=""
             $PageFileInfoOut=""
             $PageFileInfoOut=$GetComputerInfo | Select-Object `
                 @{L="ComputerName";E={$_.CsName}},`
-                @{L="PageFileSize(MB)";E={$PFS=$_.OsFreeSpaceInPagingFiles/1KB;
-                  IF($PFS -ne (51200 + $ClusterName.BlockCacheSize) -and $SysInfo[0].SysModel -notmatch "^APEX" -and $SysInfo[0].AzureLocalVersion -le ""){
+                @{L="PageFileSize(MB)";E={$PFS=if ($_.OsFreeSpaceInPagingFiles -ne $null) {$_.OsFreeSpaceInPagingFiles/1KB} else {[int]($_.SizeStoredInPagingFiles/1KB)}
+                    IF($PFS -ne (51200 + $ClusterName.BlockCacheSize) -and $SysInfo[0].SysModel -notmatch "^APEX" -and $SysInfo[0].AzureLocalVersion -le ""){
                     IF($PFS -gt (51200 + $ClusterName.BlockCacheSize)){
                       IF ($OSVersionNodes -eq "24H2") {
 						 # no hard requirement for 24H2 anymore, as of 2025 Aug deployment guide
