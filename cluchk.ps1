@@ -26,6 +26,12 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/02/10:v1.80 -  1. New Update: TP - New version 1.80 DEV
+                        2. Bug Fix: SA - Fix Intel E810 Driver version check
+                        3. Bug Fix: TP - Mirror Accelerated Parity volumes tried to show up as RED and YELLOW. Kept them YELLOW
+                        4. New Feature: TP - Gandy gathered health check failures and they are now included in the new Health Check and Action Plan Failures section
+                        5. New Feature: TP - Checks for NetIntents that have NetworkDirect enabled but nothing defined for NetworkDirectTechnology
+
     2026/01/16:v1.79 -  1. New Update: TP - New version 1.79 DEV
                         2. Bug Fix: TP - Fixed bug that would not show current driver version caused by Update 1.77 Update 9
                         3. New Feature: TP - Get page file size from Send-DiagnosticData style logs
@@ -237,7 +243,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.79"
+$CluChkVer="1.80"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -3261,7 +3267,7 @@ $htmlout+=$html
             $Size=Convert-BytesToSize $Size
             IF($VDMirrorSize -gt 0){$VDMirrorSize=Convert-BytesToSize $VDMirrorSize}Else{$VDMirrorSize=""}
             IF($VDParitySize -gt 0){$VDParitySize=Convert-BytesToSize $VDParitySize}Else{$VDParitySize=""}
-            IF($VDResiliency -imatch "map"){$VDResiliency="RREEDDMirror-accelerated parity"}
+            IF($VDResiliency -imatch "map"){$VDResiliency="Mirror-accelerated parity"}
             
             #Simple
             IF($VD.ResiliencySettingName -eq "Simple"){$VDResiliency="RREEDDSimple"} elseif ($VDResiliency -inotmatch "way") {$VDResiliency="YYEELLLLOOWW$VDResiliency"}
@@ -4671,7 +4677,7 @@ If ($OSVersion -match "2016") {
     'Intel*Ethernet*X710*'    {get-DriverVersion -DriverName "*X710*" -OSVersion $OSVersionNodes -Platform $Platform}`
     'Intel*Ethernet*E810*'    {$dver=get-DriverVersion -DriverName "*E810-*" -OSVersion $OSVersionNodes -Platform $Platform
                                Switch ($dver) {
-                               "24"  {"1.17.73.0"}
+                               "24.0.0"  {"1.17.73.0"}
                                Default {$dver}
                                }}`
 
@@ -4817,12 +4823,19 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
         If ($SysInfo[0].AzureLocalVersion -gt "") {
            $Name="Solution and SBE Updates"
            #Write-Host "    Gathering $Name..."
-           $SolutionUpdates=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -match 'GetSolutionUpdate' }| Select-Object -First 1)" |`
-           Sort-Object ResourceId | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},MinVersionRequired,MinSBEVersionRequied,ComponentVersions
-        
+           $SolutionUpdates=@()
+           $HealthCheckIssues=@()
+           $SolutionUpdateFiles=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -match 'GetSolutionUpdate' }| Select-Object -First 1)"
+           Foreach ($SolutionUpdateFile in $SolutionUpdateFiles) {
+              If ($SolutionUpdateFile.State -gt "") {
+                 $SolutionUpdates=$SolutionUpdates+=$SolutionUpdateFile | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},MinVersionRequired,MinSBEVersionRequied,ComponentVersions
+              }
+           } 
+           $SolutionUpdates = $SolutionUpdates | Sort ResourceId 
+           $HealthCheckIssues=$SolutionUpdateFiles | ? {$_.State -le "" -and $_.Status -ne "SUCCESS" -and $_.Severity -ne "INFORMATIONAL"}
             #Azure Table
                $AzureTableData=@()
-               $AzureTableData=$ClusterHeartbeatConfigurationXml | Select *,
+               $AzureTableData=$SolutionUpdates | Select *,
                    @{L='ReportID';E={$CReportID}}
                $PartitionKey=$Name -replace '\s'
                $TableName="CluChk$($PartitionKey)"
@@ -5303,9 +5316,9 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
         #Write-Host "Total time taken is $(($dstop-$dstart).totalmilliseconds)"
 #endregion Recommended updates and hotfixes for Windows Server
 
-#Latest Action Plan Failure
+#Health Check and Action Plan Failures
 If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse).count) {
-        $Name="Latest Action Plan Failure"
+        $Name="Health Check and Action Plan Failures"
         Write-Host "    Gathering $Name..."
         $ap=Get-Content (Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse | select -first 1).fullname
         $derr=$ap | select-string -SimpleMatch 'ERROR:' -Context 10,1
@@ -5384,7 +5397,7 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
                     }
                     $resultObject +=     [PSCustomObject] @{
                         Target                  = $APLMU.Directory.Name -replace "Node_",""
-                        TimeStamp                       = $APTime
+                        TimeStamp                       = (Get-Date $APTime -Format "MM/dd/yyyy HH:mm")
                         Message                         = $ThisError
                 
                     }
@@ -5425,6 +5438,15 @@ File hash mismatch error
             #[AZL-BORO-HOST03]:2025-09-11 17:17:25 Warning  2> [EnvironmentValidator:EnvironmentValidatorPreUpdate] [Test-SBEContentIntegrity] Extra content found error : 'C:\CloudContent\Microsoft_Reserved\Update\...
 
         }
+        ForEach ($HealthCheckIssue in $HealthCheckIssues) {
+                    $resultObject +=     [PSCustomObject] @{
+                        Target                  = $HealthCheckIssue.TargetResourceID
+                        TimeStamp               = (Get-Date $HealthCheckIssue.Timestamp -Format "MM/dd/yyyy HH:mm")
+                        Message                 = ($HealthCheckIssue.Name,$HealthCheckIssue.DisplayName,$HealthCheckIssue.Description,$HealthCheckIssue.Remediation,$HealthCheckIssue.Status,$HealthCheckIssue.Severity,$HealthCheckIssue.TargetResourceName,$HealthCheckIssue.TargetResourceType,$HealthCheckIssue.AdditionalData.Values) -join ","
+                
+                    }
+        }
+
         $ActionPlanErrors=$resultObject | sort TimeStamp -Descending | sort Target,Message -Unique | sort TimeStamp -Descending
         Foreach ($apfailure in $ActionPlanErrors) {
             if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-7)) {
@@ -5435,7 +5457,8 @@ File hash mismatch error
         }
         If ($ActionPlanErrors) {
            #HTML Report
-           $html+='<H2 id="LatestActionPlanFailure">Latest Action Plan Failure</H2>'
+           $html+='<H2 id="HealthCheckandActionPlanFailures">Health Check and Action Plan Failures</H2>'
+           $html+='<H5><b>NOTE: Failures less than 7 days are marked as ERROR. Some of these may have already been corrected.</b></H5>'
            $html+=$ActionPlanErrors | ConvertTo-html -Fragment
            $html=$html `
            -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -5501,6 +5524,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $Name="NetworkATC Status"
         Write-Host "    Gathering $Name..."
         $GetNetAdapterAll=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapter")) {$SDDCFiles."$key"}
+        $GetNetIntent=$SDDCFiles.GetNetIntent
         #$GetNetIntentStatusXml=""
         #$GetNetIntentStatusXml=$SDDCFiles."GetNetIntentStatus"
         #$GetNetIntentStatusGlobalOverridesXml=$SDDCFiles."GetNetIntentStatusGlobalOverrides"
@@ -5516,7 +5540,14 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         @{L="ConfigurationStatus";E={IF($_.ConfigurationStatus -inotmatch "Success"){"RREEDD"+$_.ConfigurationStatus} else {$_.ConfigurationStatus}}},
         @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){"RREEDD"+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}},
         IsComputeIntentSet,IsManagementIntentSet,IsStorageIntentSet,IsStretchIntentSet,
-        @{L="Type";E={$m=@("Compute"*[int]($_.IsComputeIntentSet -eq $true);"Mgmt"*[int]($_.IsManagementIntentSet -eq $true);"Storage"*[int]($_.IsStorageIntentSet -eq $true);"Stretch"*[int]($_.IsStretchIntentSet -eq $true)) | ? {$_ -gt ""};$m -Join ","}}
+        @{L="Type";E={$m=@("Compute"*[int]($_.IsComputeIntentSet -eq $true);"Mgmt"*[int]($_.IsManagementIntentSet -eq $true);"Storage"*[int]($_.IsStorageIntentSet -eq $true);"Stretch"*[int]($_.IsStretchIntentSet -eq $true)) | ? {$_ -gt ""};$m -Join ","}},
+        @{L="NetworkDirect";E={$in=$_.IntentName;@("Disabled","Enabled")[($GetNetIntent | ? {$_.IntentName -eq $in}).AdapterAdvancedParametersOverride.networkdirect]}},
+        @{L="NetworkDirectTechnology";E={$in=$_.IntentName;@("","iWARP","InfiniBand","RoCE","RoCEV2")[($GetNetIntent | ? {$_.IntentName -eq $in}).AdapterAdvancedParametersOverride.NetworkDirectTechnology]}}
+        ForEach ($netIntentItem in $GetNetIntentStatusXmlOut) {
+           If ($netIntentItem.NetworkDirect -eq "Enabled" -and $netIntentItem.NetworkDirectTechnology.Length -eq 0) {
+              $netIntentItem.NetworkDirect="RREEDD"+$netIntentItem.NetworkDirect
+           }
+        }
         $GetNetIntentStatusXmlOut+=$SDDCFiles."GetNetIntentStatusGlobalOverrides" | Select-Object Host,@{L="IntentName";E={"NA"}},LastSuccess,Error,@{L="Progress";E={
             # Use a regular expression to extract the numbers from the match string
                 $numbers = [regex]::Matches($_.progress, "\d+")
@@ -5534,10 +5565,17 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 
             # HTML Report
             $html+='<H2 id="NetworkATCStatus">NetworkATC Status</H2>'
-            $html+=$GetNetIntentStatusXmlOut | Select-Object Host,IntentName,Type,LastSuccess,Progress,ConfigurationStatus,ProvisioningStatus | ConvertTo-html -Fragment
+            $html+=$GetNetIntentStatusXmlOut | Select-Object Host,IntentName,Type,LastSuccess,Progress,ConfigurationStatus,ProvisioningStatus,NetworkDirect,NetworkDirectTechnology | ConvertTo-html -Fragment
             $html=$html `
              -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
              -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
+            if (($GetNetIntentStatusXmlOut.NetworkDirect -like "RREEDD*").Count) {
+               $html+='<H5><b>NOTE: Please disable NetworkDirect with blank NetworkDirectTechnology for intent: </b></H5>'
+               $html+="<H5><b><pre>`$AdapOver=(Get-Netintent -Name ""$(($GetNetIntentStatusXmlOut | ? NetworkDirect -like "RREEDD*" | Select -First 1).IntentName)"").AdapterAdvancedParametersOverride`r`n"
+               $html+='$AdapOver.NetworkDirect=0'+"`r`n"
+               $html+="Set-NetIntent -Name ""$(($GetNetIntentStatusXmlOut | ? NetworkDirect -like "RREEDD*" | Select -First 1).IntentName)"" -AdapterPropertyOverrides `$AdapOver`r`n</pre></b></H5>"
+
+            }
             $ResultsSummary+=Set-ResultsSummary -name $name -html $html
             $htmlout+=$html
             $html=""
@@ -6116,6 +6154,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                     If($_.DisplayValue -inotmatch 'RoCEv2' -and $_.DisplayValue -ne $null){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}
                 }Else{$_.DisplayValue}
             }}
+            #}
             #Azure Table
                 $AzureTableData=@()
                 $AzureTableData=$GetNetAdapterAdvancedProperty|Select-Object -Property `
@@ -6149,7 +6188,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 
     #RDMA configuration
         $Name="RDMA configuration"
-        Write-Host "    Gathering $Name..."  
+        Write-Host "    Gathering $Name..." 
         $GetNetAdapterRdma=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapterRdma")) {$SDDCFiles."$key" |`
             Sort-Object PSComputerName,Name | Select-Object PSComputerName,Name,Description,Enabled
         }
