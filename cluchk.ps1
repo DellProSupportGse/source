@@ -26,6 +26,16 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/02/20:v1.81 -  1. New Update: TP - New version 1.81 DEV
+                        2. Bug Fix: TP - Restricted the NetworkDirect error for Azure Local clusters only. Also made it only show the NetworkATC tables if there are intents.
+                        3. New Feature: TP - Added errors from AzStackHciEnvironmentChecker.EVTX to the Health Check and etc. section.
+                        4. Bug Fix: TP - Fixed some Nvme firmware misses.
+                        5. New Feature: TP - Added ability to point to unzipped APEX bundle or Send-Diags bundle and script will create new HealthTest directory.
+                        6. Bug Fix: TP - Don't mark iDrac IPs in Error if it looks like that network is not in the Cluster Networks
+                        7. Bug Fix: TP - Solution and SBE updates section was trying to use the wrong information
+                        8. New Feature: TP - If Nodes < 4 and Disks < 11, then only require one largest disk of free space in storage pool
+                        9. Feature Change: TP - Health Check and etc. failures now occur for errors less than 4 days old and warnings less than 8 days.
+
     2026/02/10:v1.80 -  1. New Update: TP - New version 1.80 DEV
                         2. Bug Fix: SA - Fix Intel E810 Driver version check
                         3. Bug Fix: TP - Mirror Accelerated Parity volumes tried to show up as RED and YELLOW. Kept them YELLOW
@@ -243,7 +253,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.80"
+$CluChkVer="1.81"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -696,7 +706,47 @@ $CluChkReportLoc=Split-Path -Path $SDDCPath
 $ExtracLoc=(Split-Path -Path $SDDCPath) +"\"+ (Split-Path -Path $SDDCPath -Leaf).Split(".")[0]
             $IncompleteSDDC=$False
 If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthSummary.log))){
-              If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthGatherTranscript.log))){  
+              If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthGatherTranscript.log))){ 
+                   if (((gci $SDDCPath -Filter "DiagLogs-*" -Recurse -Directory -Depth 4).count -and (gci $SDDCPath -Recurse -Filter "SDDC-*.zip").count) -or (gci $SDDCPath -Recurse -Filter "Azure_Stack_HCI*.zip" -Depth 2).count) {
+
+                   Write-Host "Extracting SDDC logs from Send-Diags..."
+        mkdir "$SDDCPath\SDDCLogs" 2> $null
+        $SDDCFILES=gci $SDDCPath -Recurse -Filter "Azure_Stack_HCI*.zip" -Depth 2
+        if ($SDDCFILES.count -eq 0) {$SDDCFILES=gci $SDDCPath -Recurse -Filter "DiagLogs-*" -Directory -Depth 4
+          $SDDCFILES | %{
+            Unzip $_.fullname "$SDDCPath\SDDCLogs"
+          }
+        } else {
+            $SDDCFILES | %{
+               Unzip $_.fullname "$SDDCPath\SDDCLogs"
+            }
+        gci "$SDDCPath\SDDCLogs" | %{
+           $tag=$_.fullname.split("_")[-1]
+           gci $_.fullname -Filter "SDDC-*.zip" -Recurse | %{
+                 mkdir "$SDDCPath\SDDCLogs\$tag" 2> $null
+                 Unzip $_.fullname "$SDDCPath\SDDCLogs\$tag"
+           }
+
+        }
+        }
+        $GetClusterNode=@()
+        gci "$SDDCPath\SDDCLogs" -Filter "GetClusterNode.xml" -Recurse | %{$GetClusterNode+=Import-Clixml $_.fullname}
+        $Hdir="$SDDCPath\..\HealthTest-$( Get-Date -Format 'yyyyMMdd-HHmmss')"
+        mkdir $Hdir 2>$null
+        $Hdir=(Get-Item $Hdir).FullName
+        Write-Host "Copying files to $Hdir"
+        gci "$SDDCPath\SDDCLogs" | ? Name -notmatch "Azure_Stack_HCI" | %{
+           Copy-Item "$($_.fullname)\*" $Hdir -Recurse
+        }
+        $GetClusterNode | Export-Clixml -Path "$Hdir\GetClusterNode.xml" -Force -Confirm:$false
+        gci "$SDDCPath" -Filter "DiagLogs-*" -Recurse -Directory | %{
+            $destpath="$Hdir\Node_$($_.Name -replace 'DiagLogs-\d*-','')"
+            Copy-Item $_.fullname $destpath -Recurse
+
+        }
+        $SDDCPath=$Hdir
+        Write-Host -ForegroundColor Green "New SDDC Path is $SDDCPath"
+        } else {     
 Do{ Write-Host "    ERROR: Invalid SDDC Path." -ForegroundColor Red 
 $SDDCPath = Read-Host "Please try again"
 $IR+=$IR++
@@ -708,7 +758,7 @@ $SDDCExtracted="NO"
 break
    }}
 While((!(Test-Path -Path "$SDDCPath\0_CloudHealthSummary.log")))
-} else {
+}} else {
                 $IncompleteSDDC=$True
                 Write-Host "    WARNING: Incomplete SDDC Capture." -ForegroundColor Yellow
                 gc (Join-Path $SDDCPath 0_CloudHealthGatherTranscript.log) -tail 10 | %{Write-Host "    $_ " -ForegroundColor Yellow}
@@ -724,6 +774,7 @@ if(!$SDDCLoc){EndScript}
 #Extraction temp location
 $CluChkReportLoc=Split-Path -Path $SDDCLoc
 $ExtracLoc=(Split-Path -Path $SDDCLoc) +"\"+ (Split-Path -Path $SDDCLoc -Leaf).Split(".")[0]
+if ($ExtracLoc -like "*APEXCP_Support_Bundle_*") {$ExtracLoc="$(Split-Path -Path $SDDCLoc)\APEXCP_Bundle_$([Regex]::Match((Split-Path -Path $SDDCLoc -Leaf).Split(".")[0], "(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})").value)"}
 Try{
 If (Test-Path $ExtracLoc -PathType Container){Remove-Item $ExtracLoc -Recurse -Force -ErrorAction Stop | Out-Null}
 }Catch{
@@ -737,24 +788,69 @@ Unzip $SDDCLoc $ExtracLoc
 $SDDCPath=$ExtracLoc
             $IncompleteSDDC=$False
 If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthSummary.log))){
-              If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthGatherTranscript.log))){  
+              If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthGatherTranscript.log))){ 
+                   if (((gci $SDDCPath -Filter "DiagLogs-*" -Recurse -Directory -Depth 4).count -and (gci $SDDCPath -Recurse -Filter "SDDC-*.zip").count) -or (gci $SDDCPath -Recurse -Filter "Azure_Stack_HCI*.zip" -Depth 2).count) {
+
+                   Write-Host "Extracting SDDC logs from Send-Diags..."
+        mkdir "$SDDCPath\SDDCLogs" 2> $null
+        $SDDCFILES=gci $SDDCPath -Recurse -Filter "Azure_Stack_HCI*.zip" -Depth 2
+        if ($SDDCFILES.count -eq 0) {$SDDCFILES=gci $SDDCPath -Recurse -Filter "DiagLogs-*" -Directory -Depth 4
+          $SDDCFILES | %{
+            Unzip $_.fullname "$SDDCPath\SDDCLogs"
+          }
+        } else {
+            $SDDCFILES | %{
+               Unzip $_.fullname "$SDDCPath\SDDCLogs"
+            }
+        gci "$SDDCPath\SDDCLogs" | %{
+           $tag=$_.fullname.split("_")[-1]
+           gci $_.fullname -Filter "SDDC-*.zip" -Recurse | %{
+                 mkdir "$SDDCPath\SDDCLogs\$tag" 2> $null
+                 Unzip $_.fullname "$SDDCPath\SDDCLogs\$tag"
+           }
+
+        }
+        }
+        $GetClusterNode=@()
+        gci "$SDDCPath\SDDCLogs" -Filter "GetClusterNode.xml" -Recurse | %{$GetClusterNode+=Import-Clixml $_.fullname}
+        $Hdir="$SDDCPath\..\HealthTest-$( Get-Date -Format 'yyyyMMdd-HHmmss')"
+        mkdir $Hdir 2>$null
+        $Hdir=(Get-Item $Hdir).FullName
+        Write-Host "Copying files to $Hdir"
+        gci "$SDDCPath\SDDCLogs" | ? Name -notmatch "Azure_Stack_HCI" | %{
+           Copy-Item "$($_.fullname)\*" $Hdir -Recurse
+        }
+        $GetClusterNode | Export-Clixml -Path "$Hdir\GetClusterNode.xml" -Force -Confirm:$false
+        gci "$SDDCPath" -Filter "DiagLogs-*" -Recurse -Directory | %{
+            $destpath="$Hdir\Node_$($_.Name -replace 'DiagLogs-\d*-','')"
+            Copy-Item $_.fullname $destpath -Recurse
+
+        }
+        $SDDCPath=$Hdir
+        Write-Host -ForegroundColor Green "New SDDC Path is $SDDCPath"
+        } else {
  Write-Host "    ERROR: Invalid SDDC Path." -ForegroundColor Red 
-break
+ break
+ }
 } else {
                 $IncompleteSDDC=$True
                 Write-Host "    WARNING: Incomplete SDDC Capture." -ForegroundColor Yellow
                 gc (Join-Path $SDDCPath 0_CloudHealthGatherTranscript.log) -tail 10 | %{Write-Host "    $_ " -ForegroundColor Yellow}
             } 
           }
-} # if SDDCInputFolder
+ # if SDDCInputFolder
     } else {
 if (!(Test-Path -Path $SDDCInputFolder)) {
 Write-Host "    ERROR: SDDC Path does not exist. Existing" -ForegroundColor Red
 EndScript
 }
 $SDDCPath = $SDDCInputFolder
+if ((gci $SDDCPath -Recurse -Filter "DiagLogs-*" -Directory -Depth 4).count -and (gci $SDDCPath -Recurse -Filter "SDDC-*.zip").count) {
+
+}
 
 $CluChkReportLoc=Split-Path -Path $SDDCPath
+}
 }
 IF($selection -eq "4"){$Global:ProcessSDDC = "N"}
  }
@@ -999,7 +1095,7 @@ $OSVersionNodes = 'Unknown'
 # Azure Stack HCI OS versions
 If($SysInfo[0].OSName -imatch 'HCI'){
     # update Azure Local version in $SysInfo table, per node
-    $StampFiles=gci $SDDCPath -Filter "GetStampInformation.xml" -Recurse -Depth 1
+    $StampFiles=gci $SDDCPath -Filter "GetStampInformation.xml" -Recurse -Depth 1    
     ForEach ($StampFile in $StampFiles) {
       $NodeName = ($StampFile.DirectoryName | split-path -Leaf).Replace('Node_','')
       $GetStampInformation= $StampFile | Import-Clixml
@@ -1009,7 +1105,9 @@ If($SysInfo[0].OSName -imatch 'HCI'){
         }
       }
     }
-
+    If (!($StampFiles) -and ((gci $SDDCPath -Filter "DiagLogs-*" -Directory -Depth 3).count)) {
+       $SysInfo | %{$_.AzureLocalVersion="1.0.0.0"}
+    }
     #NOT APEX nodes
     IF($SysInfo[0].SysModel -notmatch "^APEX"){
         $OSVersionNodes = Switch ($SysInfo[0].OSBuildNumber) {
@@ -2852,7 +2950,8 @@ Where-Object{$_.AllocatedSize -gt 0}|Select-Object AllocatedSize).AllocatedSize|
 
         # Gathering the largest auto-Select-Object physical disk to be used to detirm if the storage pool has enough free space for repairs
 $SizeOfLargestDisk=($SDDCFiles."GetPhysicalDisk" | Where-Object {$_.usage -match 'Auto-Select-Object' -or $_.usage -match 1} | Sort-Object Size -Descending | Select-Object Size -first 1 ).size
-$InPlaceRepairFreeSpaceNeededInStoragePool=IF(($ClusterNodes|Measure-Object).count -ge 4){$SizeOfLargestDisk*4}Else{($SizeOfLargestDisk*($ClusterNodes|Measure-Object).count)}
+$InPlaceRepairFreeSpaceNeededInStoragePool=IF(($ClusterNodes|Measure-Object).count -ge 4){$SizeOfLargestDisk*4}Else{If ($SDDCFiles."GetPhysicalDisk".count -le 10) {$SizeOfLargestDisk}} else {($SizeOfLargestDisk*($ClusterNodes|Measure-Object).count)}
+
 
         $ClusterPool=$SDDCFiles."GetStoragePool" | `
         Where-Object {$_.FriendlyName -inotmatch "Primordial"}|Sort-Object HealthStatus -Descending | Select-Object PSComputerName,FriendlyName,@{Label="FaultDomainAwarenessDefault";Expression={Switch($_.FaultDomainAwarenessDefault){`
@@ -3372,54 +3471,63 @@ $htmlout+=$html
             "Dell Express Flash CD5*"            {"KCD5XLUG3T84"}
             "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
             "Dell Express Flash CD5*"            {"KCD5XLUG3T84"}
-            "Dell DC NVMe CD8 U.2 960GB"        {"KCD8XRUG960G"}
-            "Dell DC NVMe CD8 U.2 1.92TB"       {"KCD8XRUG1T92"}
-            "Dell DC NVMe CD8 U.2 3.84TB"       {"KCD8XRUG3T84"}
-            "Dell DC NVMe CD8 U.2 7.68TB"       {"KCD8XRUG7T68"}
-            "DELL NVME ISE PE8110 RI U.2 1.92TB" {"HFS1T9GEETX099N"}
-            "DELL NVME ISE PE8110 RI U.2 7.68TB" {"HFS7T6GEETX099N"}
-            "DELL NVME ISE PE8110 RI U.2 960GB"  {"HFS960GEETX099N"}
-            "Dell Ent NVMe v2 AGN RI U.2*" {"MZWLR7T6HALAAD3"}
-    "Dell Ent NVMe PM1735 SP MU 1.60TB" {"MZWLJ1T6HBJRAD3"}
-    "Dell Ent NVMe PM1735 SP MU 3.20TB" {"MZWLJ3T2HBJRAD3"}
-    "Dell Ent NVMe PM1735 SP MU 6.40TB" {"MZWLJ6T4HALAAD3"}
-    "Dell Ent NVMe PM1735 V2 MU 3.20TB" {"MZWLR3T2HBLSAD3"}
-    "Dell Ent NVMe PM1735 V2 MU 6.40TB" {"MZWLR6T4HALAAD3"}
-    "Dell Ent NVMe PM1745 MU 1.60TB" {"MZWLO1T6HCJR-00AD3"}
-    "Dell Ent NVMe PM1745 MU 3.20TB" {"MZWLO3T2HCLS-00AD3"}
-    "Dell Ent NVMe PM1745 MU 6.40TB" {"MZWLO6T4HBLA-00AD3"}
-    "Dell Ent NVMe CM6 MU 1.60TB" {"KCM6XVUL1T60"}   # Kioxia CM6 Mixed Use
-    "Dell Ent NVMe CM6 MU 3.20TB" {"KCM6XVUL3T20"}
-    "Dell Ent NVMe CM6 MU 6.40TB" {"KCM6XVUL6T40"}
-    "Dell Ent NVMe CM7 MU 1.60TB" {"KCM7XVUG1T60"}   # Kioxia CM7 Mixed Use
-    "Dell Ent NVMe CM7 MU 3.20TB" {"KCM7XVUG3T20"}
-    "Dell Ent NVMe CM7 MU 6.40TB" {"KCM7XVUG6T40"}
-    "Dell Ent NVMe CM6 RI 1.92TB" {"KCM6XRUL1T92"}
-    "Dell Ent NVMe CM6 RI 3.84TB" {"KCM6XRUL3T84"}
-    "Dell Ent NVMe CM6 RI 7.68TB" {"KCM6XRUL7T68"}
-    "Dell Ent NVMe CM6 RI 15.36TB" {"KCM6XRUL15T3"}
-    "Dell Ent NVMe CM7 RI 1.92TB" {"KCM7XRUG1T92"}
-    "Dell Ent NVMe CM7 RI 3.84TB" {"KCM7XRUG3T84"}
-    "Dell Ent NVMe CM7 RI 7.68TB" {"KCM7XRUG7T68"}
-    "Dell Ent NVMe CM7 RI 15.36TB" {"KCM7XRUG15T3"}
-    "Dell Ent NVMe PM1733 V2 RI 3.84TB" {"MZWLR3T8HBLSAD3"}   # Samsung PM1733 V2
-    "Dell Ent NVMe PM1733 V2 RI 7.68TB" {"MZWLR7T6HALAAD3"}
-    "Dell Ent NVMe PM1733a RI 1.92TB" {"MZWLR1T9HCJRAD3"}   # Samsung PM1733a
-    "Dell Ent NVMe PM1733a RI 3.84TB" {"MZWLR3T8HCLSAD3"}
-    "Dell Ent NVMe PM1733a RI 7.68TB" {"MZWLR7T6HBLAAD3"}
-    "Dell Ent NVMe PM1733a RI 15.36TB" {"MZWLR15THBLAAD3"}
-    "Dell Ent NVMe PM9A3 RI 0.96TB" {"MZQL2960HCJRAD3"}   # Samsung PM9A3
-    "Dell Ent NVMe PM9A3 RI 1.92TB" {"MZQL21T9H"}
-    "Dell Ent NVMe PM9A3 RI 3.84TB" {"MZQL23T8HCLSAD3"}
-    "Dell Ent NVMe PM9A3 RI 7.68TB" {"MZQL27T6HBLAAD3"}
-    "Dell Ent NVMe PM9D3a RI 0.96TB" {"MZWL6960HFJA-00AD3"}  # Samsung PM9D3a
-    "Dell Ent NVMe PM9D3a RI 1.92TB" {"MZVL61T9HBL1-00AD3"}
-    "Dell Ent NVMe PM9D3a RI 3.84TB" {"MZWL63T8HFLT-00AD3"}
-    "Dell Ent NVMe PM9D3a RI 7.68TB" {"MZWL67T6HBLC-00AD3"}
-    "Dell Ent NVMe PM1743 RI 1.92TB" {"MZWLO1T9HCJR-00AD3"}   # Samsung PM1743
-    "Dell Ent NVMe PM1743 RI 3.84TB" {"MZWLO3T8HCLS-00AD3"}
-    "Dell Ent NVMe PM1743 RI 7.68TB" {"MZWLO7T6HBLA-00AD3"}
-    "Dell Ent NVMe PM1743 RI 15.36TB" {"MZWLO15THBLA-00AD3"}
+            "Dell*DC*NVMe*CD8*U.2*960GB"        {"KCD8XRUG960G"}
+            "Dell*DC*NVMe*CD8*U.2*1*92*B"       {"KCD8XRUG1T92"}
+            "Dell*DC*NVMe*CD8*U.2*3*84*B"       {"KCD8XRUG3T84"}
+            "Dell*DC*NVMe*CD8*U.2*7*68*B"       {"KCD8XRUG7T68"}
+            "DELL*NVME*ISE*PE8110*RI*U.2*1*92*B" {"HFS1T9GEETX099N"}
+            "DELL*NVME*ISE*PE8110*RI*U.2*3*84*B" {"HFS3T8GEETX099N"}
+            "DELL*NVME*ISE*PE8110*RI*U.2*7*68*B" {"HFS7T6GEETX099N"}
+            "DELL*NVME*ISE*PE8110*RI*U.2*960GB"  {"HFS960GEETX099N"}
+            "Dell*Ent*NVMe*v2*AGN*RI*U.2*" {"MZWLR7T6HALAAD3"}
+    "Dell*Ent*NVMe*PM1735*SP*MU*1.60TB" {"MZWLJ1T6HBJRAD3"}
+    "Dell*Ent*NVMe*PM1735*SP*MU*3.20TB" {"MZWLJ3T2HBJRAD3"}
+    "Dell*Ent*NVMe*PM1735*SP*MU*6.40TB" {"MZWLJ6T4HALAAD3"}
+    "Dell*Ent*NVMe*PM1735*V2*MU*3.20TB" {"MZWLR3T2HBLSAD3"}
+    "Dell*Ent*NVMe*PM1735*V2*MU*6.40TB" {"MZWLR6T4HALAAD3"}
+    "Dell*Ent*NVMe*PM1745*MU*1.60TB" {"MZWLO1T6HCJR-00AD3"}
+    "Dell*Ent*NVMe*PM1745*MU*3.20TB" {"MZWLO3T2HCLS-00AD3"}
+    "Dell*Ent*NVMe*PM1745*MU*6.40TB" {"MZWLO6T4HBLA-00AD3"}
+    "Dell*Ent*NVMe*CM6*MU*1.60TB" {"KCM6XVUL1T60"}   #*Kioxia*CM6*Mixed*Use
+    "Dell*Ent*NVMe*CM6*MU*3.20TB" {"KCM6XVUL3T20"}
+    "Dell*Ent*NVMe*CM6*MU*6.40TB" {"KCM6XVUL6T40"}
+    "Dell*Ent*NVMe*CM7*MU*1.60TB" {"KCM7XVUG1T60"}   #*Kioxia*CM7*Mixed*Use
+    "Dell*Ent*NVMe*CM7*MU*3.20TB" {"KCM7XVUG3T20"}
+    "Dell*Ent*NVMe*CM7*MU*6.40TB" {"KCM7XVUG6T40"}
+    "Dell*Ent*NVMe*CM6*RI*1*92*B" {"KCM6XRUL1T92"}
+    "Dell*Ent*NVMe*CM6*RI*3*84*B" {"KCM6XRUL3T84"}
+    "Dell*Ent*NVMe*CM6*RI*7*68*B" {"KCM6XRUL7T68"}
+    "Dell*Ent*NVMe*CM6*RI*15*36*B" {"KCM6XRUL15T3"}
+    "Dell*Ent*NVMe*CM7*RI*1*92*B" {"KCM7XRUG1T92"}
+    "Dell*Ent*NVMe*CM7*RI*3*84*B" {"KCM7XRUG3T84"}
+    "Dell*Ent*NVMe*CM7*RI*7*68*B" {"KCM7XRUG7T68"}
+    "Dell*Ent*NVMe*CM7*RI*15*36*B" {"KCM7XRUG15T3"}
+    "Dell*Ent*NVMe*PM1733*V2*RI*3*84*B" {"MZWLR3T8HBLSAD3"}   #*Samsung*PM1733*V2
+    "Dell*Ent*NVMe*PM1733*V2*RI*7*68*B" {"MZWLR7T6HALAAD3"}
+    "Dell*Ent*NVMe*PM1733a*RI*1*92*B" {"MZWLR1T9HCJRAD3"}   #*Samsung*PM1733a
+    "Dell*Ent*NVMe*PM1733a*RI*3*84*B" {"MZWLR3T8HCLSAD3"}
+    "Dell*Ent*NVMe*PM1733a*RI*7*68*B" {"MZWLR7T6HBLAAD3"}
+    "Dell*Ent*NVMe*PM1733a*RI*15*36*B" {"MZWLR15THBLAAD3"}
+    "Dell*Ent*NVMe*PM9A3*RI*0.96TB" {"MZQL2960HCJRAD3"}   #*Samsung*PM9A3
+    "Dell*Ent*NVMe*PM9A3*RI*1*92*B" {"MZQL21T9H"}
+    "Dell*Ent*NVMe*PM9A3*RI*3*84*B" {"MZQL23T8HCLSAD3"}
+    "Dell*Ent*NVMe*PM9A3*RI*7*68*B" {"MZQL27T6HBLAAD3"}
+    "Dell*Ent*NVMe*PM9D3a*RI*0.96TB" {"MZWL6960HFJA-00AD3"}  #*Samsung*PM9D3a
+    "Dell*Ent*NVMe*PM9D3a*RI*1*92*B" {"MZVL61T9HBL1-00AD3"}
+    "Dell*Ent*NVMe*PM9D3a*RI*3*84*B" {"MZWL63T8HFLT-00AD3"}
+    "Dell*Ent*NVMe*PM9D3a*RI*7*68*B" {"MZWL67T6HBLC-00AD3"}
+    "Dell*Ent*NVMe*PM1743*RI*1*92*B" {"MZWLO1T9HCJR-00AD3"}   #*Samsung*PM1743
+    "Dell*Ent*NVMe*PM1743*RI*3*84*B" {"MZWLO3T8HCLS-00AD3"}
+    "Dell*Ent*NVMe*PM1743*RI*7*68*B" {"MZWLO7T6HBLA-00AD3"}
+    "Dell*Ent*NVMe*PM1743*RI*15*36*B" {"MZWLO15THBLA-00AD3"}
+    "Dell*NVMe*ISE*PS1010*RI*U.2*1*92*B" {"HFS1T9GEJVX171N"}
+    "Dell*NVMe*ISE*PS1010*RI*U.2*3*84*B" {"HFS3T8GEJVX171N"}
+    "Dell*NVMe*ISE*PS1010*RI*U.2*7*68*B" {"HFS7T6GEJVX171N"}
+    "Dell*NVMe*ISE*PS1010*RI*U.2*15*36*B" {"HFS15T3EJVX171N"}
+    "Dell*NVMe*ISE*7450*RI*U.2*960GB" {"MTFDKCC960TFR"}
+    "Dell*NVMe*ISE*7450*RI*U.2*1*92*B" {"MTFDKCC1T9TFR"}
+    "Dell*NVMe*ISE*7450*RI*U.2*3*84*B" {"MTFDKCC3T8TFR"}
+    "Dell*NVMe*ISE*7450*RI*U.2*7*68*B" {"MTFDKCC7T6TFR"}
     default {$_}
         }}},`
         @{Label='SerialNumber';Expression={
@@ -4825,7 +4933,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
            #Write-Host "    Gathering $Name..."
            $SolutionUpdates=@()
            $HealthCheckIssues=@()
-           $SolutionUpdateFiles=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -match 'GetSolutionUpdate' }| Select-Object -First 1)"
+           $SolutionUpdateFiles=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -like '*GetSolutionUpdate' }| Select-Object -First 1)"
            Foreach ($SolutionUpdateFile in $SolutionUpdateFiles) {
               If ($SolutionUpdateFile.State -gt "") {
                  $SolutionUpdates=$SolutionUpdates+=$SolutionUpdateFile | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},MinVersionRequired,MinSBEVersionRequied,ComponentVersions
@@ -5317,10 +5425,10 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
 #endregion Recommended updates and hotfixes for Windows Server
 
 #Health Check and Action Plan Failures
-If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse).count) {
+If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
         $Name="Health Check and Action Plan Failures"
         Write-Host "    Gathering $Name..."
-        $ap=Get-Content (Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse | select -first 1).fullname
+        $ap=Get-Content -ErrorAction SilentlyContinue (Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse -ErrorAction SilentlyContinue | select -first 1).fullname
         $derr=$ap | select-string -SimpleMatch 'ERROR:' -Context 10,1
 
         $resultObject=@()
@@ -5446,19 +5554,30 @@ File hash mismatch error
                 
                     }
         }
-
+        $errors=@()
+        $errors=(Get-ChildItem -Path $SDDCPath -Filter "AzStackHciEnvironmentChecker.EVTX" -Recurse -Depth 2) | %{(Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{ Path = "$($_.fullname)"; Level = 2})}
+        $errors | %{$_.Message=$_.Properties.Value}
+        $errors=$errors | Sort TimeCreated -Descending | Sort Message -Unique
+               ForEach ($thiserror in $errors) {
+                    $resultObject +=     [PSCustomObject] @{
+                        Target                  = $thiserror.MachineName
+                        TimeStamp               = (Get-Date $thiserror.TimeCreated -Format "MM/dd/yyyy HH:mm")
+                        Message                 = $thiserror.Message
+                
+                    }
+        }
         $ActionPlanErrors=$resultObject | sort TimeStamp -Descending | sort Target,Message -Unique | sort TimeStamp -Descending
         Foreach ($apfailure in $ActionPlanErrors) {
-            if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-7)) {
+            if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-4)) {
                     $apfailure.Target="RREEDD" + $apfailure.Target
-            } elseif ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-30)) {
+            } elseif ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-8)) {
                     $apfailure.Target="YYEELLLLOOWW" + $apfailure.Target
             }
         }
         If ($ActionPlanErrors) {
            #HTML Report
            $html+='<H2 id="HealthCheckandActionPlanFailures">Health Check and Action Plan Failures</H2>'
-           $html+='<H5><b>NOTE: Failures less than 7 days are marked as ERROR. Some of these may have already been corrected.</b></H5>'
+           $html+='<H5><b>NOTE: Failures less than 4 days are marked as ERROR. Some of these may have already been corrected.</b></H5>'
            $html+=$ActionPlanErrors | ConvertTo-html -Fragment
            $html=$html `
            -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
@@ -5521,6 +5640,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 
 # Network ATC
     IF($SDDCFiles.ContainsKey("GetNetIntent")){
+      if ($SDDCFiles."GetNetIntentStatus".count) {
         $Name="NetworkATC Status"
         Write-Host "    Gathering $Name..."
         $GetNetAdapterAll=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapter")) {$SDDCFiles."$key"}
@@ -5569,7 +5689,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $html=$html `
              -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
              -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
-            if (($GetNetIntentStatusXmlOut.NetworkDirect -like "RREEDD*").Count) {
+            if ($GetNetIntentStatusXmlOut.NetworkDirect -match "RREEDD" -and $SysInfo[0].AzureLocalVersion -gt "") {
                $html+='<H5><b>NOTE: Please disable NetworkDirect with blank NetworkDirectTechnology for intent: </b></H5>'
                $html+="<H5><b><pre>`$AdapOver=(Get-Netintent -Name ""$(($GetNetIntentStatusXmlOut | ? NetworkDirect -like "RREEDD*" | Select -First 1).IntentName)"").AdapterAdvancedParametersOverride`r`n"
                $html+='$AdapOver.NetworkDirect=0'+"`r`n"
@@ -5660,6 +5780,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
            $Name=""
 
         }
+      }
     }
 
 
@@ -5938,8 +6059,8 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 		# Find the Mgmt Cluster Network
 			ForEach($NetIp in $GetNetIpAddress){
 				$iDRACNetAdaptersIPs+=$idracNics | Where-Object{($_.IfIndex -eq $NetIp.IfIndex) -and ($_.PsComputername -eq $NetIp.PSComputerName )}|Select-Object *,@{L='IPv4Address';E={
-					if (($SysInfo[0].SysModel -match "^APEX") -and ($NetIp.IPv4Address -ne "169.254.0.1")) {'RREEDD'+$NetIp.IPv4Address}
-					elseif (($SysInfo[0].SysModel -notmatch "^APEX") -and (($GetNetIpAddress | where-object {$_.IPv4Address -eq $NetIp.IPv4Address} | sort -Unique).count -gt 1)) {'RREEDD'+$NetIp.IPv4Address}
+					if (($SysInfo[0].SysModel -match "^APEX") -and ($NetIp.IPv4Address -ne "169.254.0.1")) {'RREEDD'*(($GetClusterNetwork).IPv6Addresses -like "*:de11::*")+$NetIp.IPv4Address}
+					elseif (($SysInfo[0].SysModel -notmatch "^APEX") -and (($GetNetIpAddress | where-object {$_.IPv4Address -eq $NetIp.IPv4Address} | sort -Unique).count -gt 1)) {'RREEDD'*(($GetClusterNetwork).IPv6Addresses -like "*:de11::*")+$NetIp.IPv4Address}
 					else {$NetIp.IPv4Address}
 					}}
 		}
