@@ -838,7 +838,7 @@ If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthSummary.log))){
                 gc (Join-Path $SDDCPath 0_CloudHealthGatherTranscript.log) -tail 10 | %{Write-Host "    $_ " -ForegroundColor Yellow}
             } 
           }
- # if SDDCInputFolder
+ } # if SDDCInputFolder
     } else {
 if (!(Test-Path -Path $SDDCInputFolder)) {
 Write-Host "    ERROR: SDDC Path does not exist. Existing" -ForegroundColor Red
@@ -851,8 +851,9 @@ if ((gci $SDDCPath -Recurse -Filter "DiagLogs-*" -Directory -Depth 4).count -and
 
 $CluChkReportLoc=Split-Path -Path $SDDCPath
 }
-}
+
 IF($selection -eq "4"){$Global:ProcessSDDC = "N"}
+ 
  }
 #endregion SDDC Locate and Extract
 
