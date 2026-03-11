@@ -10,6 +10,10 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
+    2026/03/11:v1.77 -  1. Bug Fix: JG - Resolved the telemety errors and enabled again
+                        2. New Feature: JG - Added a Write-Indent function with number of indents and color.
+                                                Ex. Write-Indent "Telemetry recorded successfully" 1 Green
+
     2025/01/24:v1.76 -  1. Bug Fix: TP - Fixed MS latest updates by copying and converted it from CluChk
 
     2024/04/03:v1.73 -  1. New Feature: TP - Added 15g S2d BIOS settings
@@ -74,6 +78,7 @@
     See older version for previous notes
 #>
 Function Invoke-RunDriFT{
+    $uploadToAzure=$True
 # logging
 $DateTime=Get-Date -Format yyyyMMdd_HHmmss;Start-Transcript -NoClobber -Path "C:\programdata\Dell\DriFT\DriFT_$DateTime.log"
 Write-host "Starting log: C:\programdata\Dell\DriFT\DriFT_$DateTime.log"
@@ -82,7 +87,7 @@ IF(!($args)){
     Remove-Variable * -ErrorAction SilentlyContinue
 }
 [system.gc]::Collect()
-$DriFTVer="DriFT_v1.76"
+$DriFTVer="DriFT_v1.77"
 $DirFTV=$DriFTVer.Split("v")
 $DFTV=$DirFTV[1]
 
@@ -150,22 +155,7 @@ Function Get-FileName($initialDirectory)
     $OpenFileDialog.ShowDialog((New-Object System.Windows.Forms.Form -Property @{TopMost = $true })) | Out-Null
     $OpenFileDialog.filenames
 }
-<#If (-not $args) {
-        Write-Host "DriFT running in Auto CluChk mode..."
-        Write-Host "    $args"
-        $FileNameGuid=New-Guid
-        #$FileNameGuid=$args -replace '-cluchk ',""
-        Write-Host "File Name Guid:" $FileNameGuid
-        Write-Host "Processing TRS File(s)"
-        #$TSRInputFiles=@()
-        #$TSRInputFiles=(($args -split '-input')[1].trim() -split ',').trim()
-        $TSRInputFiles=Get-FileName($env:USERPROFILE)
-        $TSRLoc=$TSRInputFiles
-        $TSRLoc
-        $args=""
-        $CluChkMode="YES"
 
-}#>
 IF(!($CluChkMode)){
     If(!($args)){
         $Title=@()
@@ -181,6 +171,141 @@ IF(!($CluChkMode)){
             EndScript}
     };
 }
+
+
+# =====================================================
+#region Telemetry Information
+# =====================================================
+$uploadToAzure=$True
+IF($uploadToAzure){
+
+    Write-Host "Logging Telemetry Information..."
+
+    function Add-TableData {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory=$true)]
+            [string]$TableName,
+
+            [Parameter(Mandatory=$true)]
+            [string]$PartitionKey,
+
+            [Parameter(Mandatory=$true)]
+            [hashtable]$Data
+        )
+
+        if (-not $uploadToAzure) { return }
+
+        $RowKey = [guid]::NewGuid().Guid
+        
+        $TableSvcSasUrl = 'https://gsetools.table.core.windows.net/?sv=2024-11-04&ss=t&srt=so&sp=a&se=2028-03-11T21:32:20Z&st=2026-03-11T12:17:20Z&spr=https&sig=zYIhaiCnIiphMZLI38Uj6AcJ1WLJOKe4KRMl4WzX818%3D'
+
+        $uri = "https://gsetools.table.core.windows.net/$TableName$($TableSvcSasUrl.Substring($TableSvcSasUrl.IndexOf('?')))"
+
+        $headers = @{
+            "Accept"       = "application/json;odata=nometadata"
+            "Content-Type" = "application/json"
+            "x-ms-version" = "2019-02-02"
+        }
+
+        $Data["PartitionKey"] = $PartitionKey
+        $Data["RowKey"]       = $RowKey
+
+        $body = $Data | ConvertTo-Json -Depth 5
+
+        $maxRetries = 3
+        $attempt = 0
+        $success = $false
+
+        while (-not $success -and $attempt -lt $maxRetries) {
+
+            try {
+                Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $body | Out-Null
+                $success = $true
+                Write-Indent "Telemetry recorded successfully" 1 Green
+            }
+            catch {
+                $attempt++
+
+                if ($attempt -lt $maxRetries) {
+                    Write-Indent "Retrying telemetry upload ($attempt/$maxRetries)..." 1 Yellow
+                    Start-Sleep -Seconds 2
+                }
+                else {
+                    Write-Indent "Telemetry upload failed after $maxRetries attempts" 1 Yellow
+                }
+            }
+        }
+    }
+
+    function Write-Indent {
+        param(
+            [string]$Message,
+            [int]$Level = 1,
+            [string]$Color = "Gray"
+        )
+
+        $prefix = "  " * $Level
+        Write-Host "$prefix$Message" -ForegroundColor $Color
+    }
+
+    # Unique report id
+    $CReportID = [guid]::NewGuid().Guid
+
+
+    Write-Indent "Resolving Geo Location..."
+
+    try {
+        if (-not $global:GeoCache) {
+            $global:GeoCache = Invoke-RestMethod "https://ipwho.is/" -TimeoutSec 5
+        }
+
+        $response = $global:GeoCache
+
+        if ($response.success -eq $true) {
+
+            $country     = $response.country
+            $countryCode = $response.country_code
+            $region      = $response.region
+            $city        = $response.city
+            $latitude    = $response.latitude
+            $longitude   = $response.longitude
+            $timezone    = $response.timezone.id
+
+            Write-Indent "Country: $country" 2
+            Write-Indent "Region : $region" 2
+        }
+    }
+    catch {
+        Write-Indent "WARN: ipwho lookup failed" 2 Yellow
+    }
+
+    $data = @{
+        Region       = $region
+        DriftVersion = $DFTV
+        ReportID     = $CReportID
+        country      = $country
+        countryCode  = $countryCode
+        geoRegion    = $region
+        city         = $city
+        lat          = $latitude
+        lon          = $longitude
+        timezone     = $timezone
+        Timestamp = (Get-Date).ToUniversalTime().ToString("o")
+        HostOS = [System.Environment]::OSVersion.VersionString
+        PSVersion = $PSVersionTable.PSVersion.ToString()
+    }
+
+    # We use tool name for this value
+    $PartitionKey = "DriFT"
+
+    Add-TableData `
+        -TableName "DriftTelemetryData" `
+        -PartitionKey $PartitionKey `
+        -Data $data 
+
+}
+#endregion
 
 #Variables
 #$DellURL="https://dl.dell.com/"
@@ -276,80 +401,9 @@ $Files2Download=@()
 $IsNewS2DCatalog="YES" #Do not change this to No Jim. :)
 $SwPort2HostMapAll=@()
 
+
 Do{
-# Telemetry Information
-    #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    Write-Host "Logging Telemetry Information..."
-    function add-TableData {
-        [CmdletBinding()] 
-            param(
-                [Parameter(Mandatory = $true)]
-                [string] $tableName,
 
-                [Parameter(Mandatory = $true)]
-                [string] $PartitionKey,
-
-                [Parameter(Mandatory = $true)]
-                [string] $RowKey,
-
-                [Parameter(Mandatory = $true)]
-                [array] $data,
-                
-                [Parameter(Mandatory = $true)]
-                [array] $sasWriteToken
-            )
-            $storageAccount = "gsetools"
-            #$tableName = "DriftTelemetryData"
-
-            # Need write access 
-            #$sasWriteToken = "?sv=2017-04-17&si=Update&tn=DriftTelemetryData&sig=wrOnGPi/vI3g62CZyj4CPiJHILxopLuNLaMY/nk2idA%3D"
-
-            $resource = "$tableName(PartitionKey='$PartitionKey',RowKey='$Rowkey')"
-
-            # should use $resource, not $tableNmae
-            $tableUri = "https://$storageAccount.table.core.windows.net/$resource$sasWriteToken"
-
-            # should be headers, because you use headers in Invoke-RestMethod
-            $headers = @{
-                Accept = 'application/json;odata=nometadata'
-            }
-
-            $body = $data | ConvertTo-Json
-            #This adds and updates the table record
-            $item = Invoke-RestMethod -Method PUT -Uri $tableUri -Headers $headers -Body $body -ContentType application/json 
-    }#End function add-TableData
-    
-    # Generating a unique report id to link telemetry data to report data
-        $DReportID=""
-        $DReportID=(new-guid).guid
-
-    # Get the internet connection IP address by querying a public API
-    $internetIp = Invoke-RestMethod -Uri "https://api.ipify.org?format=json" | Select-Object -ExpandProperty ip
-
-    # Define the API endpoint URL
-    $geourl = "http://ip-api.com/json/$internetIp"
-    
-    # Invoke the API to determine Geolocation
-    $response = Invoke-RestMethod $geourl
-
-    $data = @{
-    Region=$env:UserDomain
-    DriftVersion=$DFTV
-    ReportID=$DReportID
-    country=$response.country
-    counrtyCode=$response.countryCode
-    georegion=$response.region
-    regionName=$response.regionName
-    city=$response.city
-    zip=$response.zip
-    lat=$response.lat
-    lon=$response.lon
-    timezone=$response.timezone
-}
-
-    add-TableData -TableName "DriftTelemetryData" -PartitionKey "DriFT" -RowKey (new-guid).guid -data $data -sasWriteToken '?sv=2017-04-17&si=Update&tn=DriftTelemetryData&sig=wrOnGPi/vI3g62CZyj4CPiJHILxopLuNLaMY/nk2idA%3D'
-
-    #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 $NoneSupportedDevices=@()
 $OutputType="HTML"
 #Support Assist Data Input
@@ -377,8 +431,6 @@ IF(-not($TSRInputFiles)){
         }
     }
 }
-
-
 
 #Extraction temp location
 $ExtracLoc="$env:TEMP\DriFT"
