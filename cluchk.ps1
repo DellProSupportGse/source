@@ -26,6 +26,16 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/03/12:v1.82 -  1. New Update: TP - New version 1.82 DEV
+                        2. Bug Fix: TP - JG/VF showed that Hyper-V Network Events warning was not working.
+                        3. Bug Fix: TP - Some Action Plan failures would be missed
+                        4. New Feature: TP - Give Set-NetIntentRetryState command for any failed intents.
+                        5. New Feature: TP - Put Telemtry in a Job to speed up failures.
+                        6. Bug Fix: TP - Set Disk 505 max events to 2000 to keep it from taking too long.
+                        7. Bug Fix: JG - Resolved the telemety errors and enabled again
+                        8. New Feature: JG - Added a Write-Indent function with number of indents and color.
+                                                Ex. Write-Indent "Telemetry recorded successfully" 1 Green
+
     2026/02/20:v1.81 -  1. New Update: TP - New version 1.81 DEV
                         2. Bug Fix: TP - Restricted the NetworkDirect error for Azure Local clusters only. Also made it only show the NetworkATC tables if there are intents.
                         3. New Feature: TP - Added errors from AzStackHciEnvironmentChecker.EVTX to the Health Check and etc. section.
@@ -249,11 +259,11 @@ param (
     [string]$SDDCInputFolder = '',
     [string]$TSRInputFolder = '',
 [string]$STSInputFolder = '',
-    [boolean]$uploadToAzure = $false,
+    [boolean]$uploadToAzure = $true,
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.81"
+$CluChkVer="1.82"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -537,96 +547,139 @@ switch ($runType) {
 
 Set-Variable -Name htmlout -Scope Global
 
+
+# =====================================================
 #region Telemetry Information
-Write-Host "Logging Telemetry Information..."
-function add-TableData {
-    [CmdletBinding()] 
+# =====================================================
+IF($uploadToAzure){
+
+    Write-Host "Logging Telemetry Information..."
+
+    function Add-TableData {
+        [CmdletBinding()]
         param(
-            [Parameter(Mandatory = $true)]
-            [string] $tableName,
+            [Parameter(Mandatory=$true)]
+            [string]$TableName,
 
-            [Parameter(Mandatory = $true)]
-            [string] $PartitionKey,
+            [Parameter(Mandatory=$true)]
+            [string]$PartitionKey,
 
-            [Parameter(Mandatory = $true)]
-            [string] $RowKey,
-
-            [Parameter(Mandatory = $true)]
-            [array] $data,
-            
-            [Parameter(Mandatory = $false)]
-            [array] $SasToken
+            [Parameter(Mandatory=$true)]
+            [hashtable]$Data
         )
-if ($uploadToAzure) {
-$storageAccount = "gsetools"
 
-# Allow only add and update access via the "Update" Access Policy on the CluChkTelemetryData table
-# Ref: az storage table generate-sas --connection-string 'USE YOUR KEY' -n "CluChkTelemetryData" --policy-name "Update" 
-If(-not($SasToken)){
-$sasWriteToken = "?sv=2017-04-17&si=Update&tn=CluChkTelemetryData&sig=NP2ZQnHuUhOAOyGhzd94GVbKrBqhYlIKjX%2BVrhAjFoE%3D"
-}Else{$sasWriteToken=$SasToken}
+        if (-not $uploadToAzure) { return }
 
-$resource = "$tableName(PartitionKey='$PartitionKey',RowKey='$Rowkey')"
+        $RowKey = [guid]::NewGuid().Guid
+        
+        $TableSvcSasUrl = 'https://gsetools.table.core.windows.net/?sv=2024-11-04&ss=t&srt=so&sp=a&se=2028-03-11T21:32:20Z&st=2026-03-11T12:17:20Z&spr=https&sig=zYIhaiCnIiphMZLI38Uj6AcJ1WLJOKe4KRMl4WzX818%3D'
 
-# should use $resource, not $tableNmae
-$tableUri = "https://$storageAccount.table.core.windows.net/$resource$sasWriteToken"
-# Write-Host   $tableUri 
+        $uri = "https://gsetools.table.core.windows.net/$TableName$($TableSvcSasUrl.Substring($TableSvcSasUrl.IndexOf('?')))"
 
-# should be headers, because you use headers in Invoke-RestMethod
-$headers = @{
-Accept = 'application/json;odata=nometadata'
+        $headers = @{
+            "Accept"       = "application/json;odata=nometadata"
+            "Content-Type" = "application/json"
+            "x-ms-version" = "2019-02-02"
+        }
+
+        $Data["PartitionKey"] = $PartitionKey
+        $Data["RowKey"]       = $RowKey
+
+        $body = $Data | ConvertTo-Json -Depth 5
+
+        $maxRetries = 3
+        $attempt = 0
+        $success = $false
+
+        while (-not $success -and $attempt -lt $maxRetries) {
+
+            try {
+                Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $body | Out-Null
+                $success = $true
+                Write-Indent "Telemetry recorded successfully" 1 Green
+            }
+            catch {
+                $attempt++
+
+                if ($attempt -lt $maxRetries) {
+                    Write-Indent "Retrying telemetry upload ($attempt/$maxRetries)..." 1 Yellow
+                    Start-Sleep -Seconds 2
+                }
+                else {
+                    Write-Indent "Telemetry upload failed after $maxRetries attempts" 1 Yellow
+                }
+            }
+        }
+    }
+
+    function Write-Indent {
+        param(
+            [string]$Message,
+            [int]$Level = 1,
+            [string]$Color = "Gray"
+        )
+
+        $prefix = "  " * $Level
+        Write-Host "$prefix$Message" -ForegroundColor $Color
+    }
+
+    # Unique report id
+    $CReportID = [guid]::NewGuid().Guid
+
+
+    Write-Indent "Resolving Geo Location..."
+
+    try {
+        if (-not $global:GeoCache) {
+            $global:GeoCache = Invoke-RestMethod "https://ipwho.is/" -TimeoutSec 5
+        }
+
+        $response = $global:GeoCache
+
+        if ($response.success -eq $true) {
+
+            $country     = $response.country
+            $countryCode = $response.country_code
+            $region      = $response.region
+            $city        = $response.city
+            $latitude    = $response.latitude
+            $longitude   = $response.longitude
+            $timezone    = $response.timezone.id
+
+            Write-Indent "Country: $country" 2
+            Write-Indent "Region : $region" 2
+        }
+    }
+    catch {
+        Write-Indent "WARN: ipwho lookup failed" 2 Yellow
+    }
+
+    $data = @{
+        Region       = $region
+        Version      = $CluChkVer
+        ReportID     = $CReportID
+        country      = $country
+        countryCode  = $countryCode
+        geoRegion    = $region
+        city         = $city
+        lat          = $latitude
+        lon          = $longitude
+        timezone     = $timezone
+        Timestamp = (Get-Date).ToUniversalTime().ToString("o")
+        HostOS = [System.Environment]::OSVersion.VersionString
+        PSVersion = $PSVersionTable.PSVersion.ToString()
+    }
+
+    # We use tool name for this value
+    $PartitionKey = "CluChk"
+
+    Add-TableData `
+        -TableName "CluChkTelemetryData" `
+        -PartitionKey $PartitionKey `
+        -Data $data 
+
 }
-
-$body = $data | ConvertTo-Json
-#This will write to the table
-#write-host "Invoke-RestMethod -Method PUT -Uri $tableUri -Headers $headers -Body $body -ContentType application/json"
-try {
-$item = Invoke-RestMethod -Method PUT -Uri $tableUri -Headers $headers -Body $body -ContentType application/json
-} catch {
-#write-warning ("table $tableUri")
-#write-warning ("headers $headers")
-}
-} # if upload
-}# End function add-TableData
-    
-# Generating a unique report id to link telemetry data to report data
-$CReportID=""
-$CReportID=(new-guid).guid
-# Get the internet connection IP address by querying a public API
-#$internetIp = (invoke-webrequest -uri "http://ifconfig.me/ip" -UseBasicParsing).Content 
-
-# Define the API endpoint URL
-$geourl = "http://ip-api.com/json" #$geourl = "http://ip-api.com/json/$internetIp"
-
-# Invoke the API to determine Geolocation
-$response = Invoke-RestMethod $geourl
-
-$data = @{
-    Region=$env:UserDomain
-    Version=$CluChkVer
-    ReportID=$CReportID
-    country=$response.country
-    counrtyCode=$response.countryCode
-    georegion=$response.region
-    regionName=$response.regionName
-    city=$response.city
-    zip=$response.zip
-    lat=$response.lat
-    lon=$response.lon
-    timezone=$response.timezone
-}
-
-$RowKey=(new-guid).guid
-$PartitionKey="CluChk"
-
-#Make sure we get telemetry if uploadToAzure = $False
-If($uploadToAzure -eq $false){
-    $uploadToAzure = $true
-    add-TableData -TableName "CluChkTelemetryData" -PartitionKey $PartitionKey -RowKey $RowKey -data $data
-    $uploadToAzure=$false
-}Else{add-TableData -TableName "CluChkTelemetryData" -PartitionKey $PartitionKey -RowKey $RowKey -data $data}
-
-#endregion End of Telemetry data
+#endregion
 
 # unzip files
 function Unzip {
@@ -2951,7 +3004,7 @@ Where-Object{$_.AllocatedSize -gt 0}|Select-Object AllocatedSize).AllocatedSize|
 
         # Gathering the largest auto-Select-Object physical disk to be used to detirm if the storage pool has enough free space for repairs
 $SizeOfLargestDisk=($SDDCFiles."GetPhysicalDisk" | Where-Object {$_.usage -match 'Auto-Select-Object' -or $_.usage -match 1} | Sort-Object Size -Descending | Select-Object Size -first 1 ).size
-$InPlaceRepairFreeSpaceNeededInStoragePool=IF(($ClusterNodes|Measure-Object).count -ge 4){$SizeOfLargestDisk*4}Else{If ($SDDCFiles."GetPhysicalDisk".count -le 10) {$SizeOfLargestDisk}} else {($SizeOfLargestDisk*($ClusterNodes|Measure-Object).count)}
+$InPlaceRepairFreeSpaceNeededInStoragePool=IF(($ClusterNodes|Measure-Object).count -ge 4){$SizeOfLargestDisk*4}ElseIf ($SDDCFiles."GetPhysicalDisk".count -le 10) {$SizeOfLargestDisk} else {($SizeOfLargestDisk*($ClusterNodes|Measure-Object).count)}
 
 
         $ClusterPool=$SDDCFiles."GetStoragePool" | `
@@ -3851,13 +3904,14 @@ $html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;
     #Write-Host "    Gathering $Name..."
     $Baddisks=$PhysicalDisks|Where-Object{($_.HealthStatus -ne 'Healthy'-and $_.HealthStatus -ne '0' -and $_.OperationalStatus -notmatch 'Maintenance'-and $_.OperationalStatus -ne '53270') -and $_.SerialNumber.length -gt "0"} | Sort-Object SerialNumber -Unique
     IF($Baddisks){
+        $dstart=Get-Date
         $BDSKs=@()
         $StorDiags=Get-ChildItem -Path $SDDCPath -Filter "Microsoft-Windows-Storage-ClassPnP-Operational.EVTX" -Recurse -Depth 1
         $LogPath=$StorDiags.FullName
         $LogName='Microsoft-Windows-Storage-ClassPnP/Operational'
         $LogID='505'
         Write-Host "        Checking Event Log $LogName for ID $LogID..."
-            $StorDiagEvents = Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{Path=$LogPath;LogName=$LogName;Id=$LogID}
+            $StorDiagEvents = Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{Path=$LogPath;LogName=$LogName;Id=$LogID} -MaxEvents 2000 -Oldest:$false
             If ($Null -eq $StorDiagEvents) { Write-Host "            No such EventId $LogId exists" -ForegroundColor Yellow } Else { Write-Host "            Found "($StorDiagEvents).Count" Events for ID $LogId"}
         $FoundEvents=@()
         ForEach($BadDisk in $Baddisks){
@@ -3873,10 +3927,11 @@ $html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;
             @{Label='Key';Expression={$_.SenseKey}},`
             @{Label='ASC';Expression={$_.AdditionalSenseCode}},`
             @{Label='ASCQ';Expression={$_.AdditionalSenseCodeQualifier}}}
+            Write-Host "Seconds since start is $(((Get-Date)-$dstart).Totalseconds)"
             If(!($FoundEvents)){
                 Write-Host "            None found."
                 $BDSKs+="No 505 events found for $($Baddisk.SerialNumber)<br>"
-                }}
+                }} 
         $html+='<H2 id="SCSISenseKeyInformation">SCSI Sense Key Information</H2>'
         $html+="<h5><b>&nbsp;&nbsp;&nbsp;&nbsp;Checked Event Log $LogName for ID $LogID</b></h5>"
         $html+=$FoundEvents | ConvertTo-html -Fragment 
@@ -4941,7 +4996,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
               }
            } 
            $SolutionUpdates = $SolutionUpdates | Sort ResourceId 
-           $HealthCheckIssues=$SolutionUpdateFiles | ? {$_.State -le "" -and $_.Status -ne "SUCCESS" -and $_.Severity -ne "INFORMATIONAL"}
+           $HealthCheckIssues=$SolutionUpdateFiles | ? {$_ -ne $null} | ? {$_.State -le "" -and $_.Status -ne "SUCCESS" -and $_.Severity -ne "INFORMATIONAL" }
             #Azure Table
                $AzureTableData=@()
                $AzureTableData=$SolutionUpdates | Select *,
@@ -5493,7 +5548,8 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
         Foreach ($APLMU in (Get-ChildItem -Path $SDDCPath -Filter "AzureStackFailedActionPlanInformation.json" -Recurse)) {
             $apfails=(gc $APLMU.FullName | ConvertFrom-Json).ProgressAsXml | select -Last 5
             Foreach ($apupdate in $apfails) {
-                $StopError = ([xml]$apupdate).SelectNodes("//Task") | where Status -eq "Error" | where Action -eq $null | where Exception -ne $null
+                $StopErrors = ([xml]$apupdate).SelectNodes("//Task") | where Status -eq "Error" | where Action -eq $null | where Exception -ne $null
+                Foreach ($StopError in $StopErrors) {
                 $APTime=$StopError.EndTimeUtc
                 If (!($APTime)) {$APTime=$StopError.StartTimeUtc}
                 $APTime=try {(Get-Date $APTime -Format "MM/dd/yyyy HH:mm tt")} catch {(Get-Date -Format "MM/dd/yyyy HH:mm")}
@@ -5512,6 +5568,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
                     }
                     
                 }
+              }
             }
         }
         $ECEErrors="Extra content found error
@@ -5690,6 +5747,18 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $html=$html `
              -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
              -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
+            if ($GetNetIntentStatusXmlOut.configurationstatus -match "RREEDDFailed") {
+               $html+='<H5><b>NOTE: Please fix any networking/configuration issues and then run to retry intent configuration: </b><br>'
+               Foreach ($netintentItem in ($GetNetIntentStatusXmlOut | ? configurationstatus -match "RREEDDFailed")) {
+                  if ($netIntentItem.Type -eq "Global") {
+                     $TheIntentName="-GlobalOverrides"
+                  } else {
+                     $TheIntentName="-Name ""$(($netIntentItem).IntentName)"""
+                  }
+                  $html+="<b>Set-NetIntentRetryState $TheIntentName -NodeName ""$(($netIntentItem).Host)""<br>"
+               }
+            }
+            $html+="</H5>"
             if ($GetNetIntentStatusXmlOut.NetworkDirect -match "RREEDD" -and $SysInfo[0].AzureLocalVersion -gt "") {
                $html+='<H5><b>NOTE: Please disable NetworkDirect with blank NetworkDirectTechnology for intent: </b></H5>'
                $html+="<H5><b><pre>`$AdapOver=(Get-Netintent -Name ""$(($GetNetIntentStatusXmlOut | ? NetworkDirect -like "RREEDD*" | Select -First 1).IntentName)"").AdapterAdvancedParametersOverride`r`n"
@@ -5702,14 +5771,9 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $html=""
             $Name=""
         
-        If ($OSVersionNodes -ne "23H2" -and $OSVersionNodes -ne "24H2") {
+        If ($OSVersionNodes -notmatch "2[3456789]H2") {
            $Name="NetworkATC Overrides"
            Write-Host "    Gathering $Name..."
-           #$GetNetIntentXml=""
-           #$GetNetIntentGlobalOverridesXml=""
-           #$GetNetIntentXml=Get-ChildItem -Path $SDDCPath -Filter "GetNetIntent.xml" -Recurse -Depth 1 | import-clixml
-           #$GetNetIntentGlobalOverridesXml=Get-ChildItem -Path $SDDCPath -Filter "GetNetIntentGlobalOverrides.xml" -Recurse -Depth 1 | import-clixml
-           #GlobalOverrides
            $ClusterOverrides=@()
            $ClusterOverrides=$SDDCFiles."GetNetIntentGlobalOverrides" | Select-Object IntentType,`
                 @{L="OverrideType";E={"ClusterSettings"}},
@@ -7047,7 +7111,7 @@ $LogName="System"
     $SSDDEventsOut=@()
     $SSDDEvents = Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{Path=$LogPath;Id=$LogID}
     #$SSDDEvents|Select-Object -First 1 | FL *
-    $SSDDEventsOut=$SSDDEvents|Sort-Object MachineName|Sort-Object -Descending TimeCreated | Select-Object MachineName,LogName,TimeCreated,@{L="Id";E={"YYEELLOOWW$($_.Id)"}},LevelDisplayName,Message
+    $SSDDEventsOut=$SSDDEvents|Sort-Object MachineName|Sort-Object -Descending TimeCreated | Select-Object MachineName,LogName,TimeCreated,@{L="Id";E={"YYEELLLLOOWW$($_.Id)"}},LevelDisplayName,Message
     If ($Null -eq $SSDDEvents.count) { Write-Host "            No such EventId $LogId exists" -ForegroundColor Yellow } Else { Write-Host "            Found "($SSDDEvents).Count" Events for ID $LogId"}
         #Azure Table
             $AzureTableData=@()
@@ -7127,7 +7191,8 @@ $html=""
 If($ProcessSDDC -ieq 'y'){
     Write-Host "Start to S2D validation Complete is $(((Get-Date)-$dstartSDDC).totalmilliseconds)"
     $htmlout2=""
-    While (-not $Job.IsCompleted) {Sleep -Milliseconds 200;Write-Host "." -NoNewline}
+    $xx=0
+    While (-not $Job.IsCompleted -and $xx -lt 1000) {Sleep -Milliseconds 200;Write-Host "." -NoNewline;$xx++}
     $PowerShell.EndInvoke($Job)
     $htmlout2=$Outputs
     $Runspace.Close()
