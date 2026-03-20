@@ -44,7 +44,7 @@ Function Invoke-SLIC {
 Function EndScript{  
     break
 }
-$Ver="v1.3"
+$Ver="v1.31"
 $ToolName = @"
 $Ver
   ___ _    ___ ___ 
@@ -595,6 +595,63 @@ function Save-HtmlReport {
         return $sections
         }
 
+    function Get-OS10InterfacesSections {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory, Position=0)]
+            [string]$Path
+        )
+
+        if (-not (Test-Path -LiteralPath $Path)) {
+            throw "File not found: $Path"
+        }
+
+        # Read the whole file
+        $text = Get-Content -LiteralPath $Path -Raw
+
+        # Strip ANSI/VT100 escape sequences and CRs
+        $text = [regex]::Replace($text, "\x1B\[[0-?]*[ -/]*[@-~]", "")
+        $text = $text -replace "`r",""
+
+        # Locate the "show running-configuration" section delimited by dashed headers
+        # Matches:
+        #   ----------------------------------- show interface -------------------
+        # then captures everything up to the next dashed "show ..." header or EOF.
+        $pattern = '(?is)^\s*-{3,}\s*show\s+interface\s*-{3,}\s*\n(.*?)(?=^\s*-{3,}\s*show\s+\S.*?-{3,}\s*$|\Z)'
+        $m = [regex]::Match($text, $pattern, 'IgnoreCase, Multiline, Singleline')
+        #$m | ?{$_ -imatch "hostname"} | select Filename,@{L="HostName";E={($_.lines -imatch "hostname") -replace "hostname "}}
+        if (-not $m.Success) {
+            throw "Could not locate the 'show interface' section. Check header format in the log."
+        }
+
+        $run = $m.Groups[1].Value.Trim()
+
+        # Split into sections where each section starts at a line that is just "!"
+        # (Ignore blank chunks)
+        $chunks = [regex]::Split($run,'(?:\r?\n){2,}') | Where-Object { $_ -and $_.Trim() -ne '' }
+        #$SwitchHostname=""
+        #$SwitchHostname = (((($chunks | ?{$_ -imatch "hostname"}) -split "hostname ")[-1] -split "`n")[0]).trim()
+
+        $sections = New-Object System.Collections.Generic.List[object]
+        $i = 0
+        foreach ($chunk in $chunks) {
+            $i++
+            $lines  = ($chunk -split "`n") | ForEach-Object { $_.TrimEnd() }
+            $header = ($lines | Where-Object { $_.Trim() -ne '' } | Select-Object -First 1)
+            if (-not $header) { $header = "(empty)" }
+
+            $sections.Add([pscustomobject]@{
+                FileName   = $Path.split("/\")[-1]
+                Index      = $i
+                Header     = $header.Trim()
+                Lines      = $lines
+                Text       = ($lines -join "`n")
+            })
+        }
+
+        return $sections
+        }
+
     Function Get-showversion{
         [CmdletBinding()]
         param(
@@ -799,6 +856,7 @@ function Save-HtmlReport {
             $GetNetQOSPolicyPriorities = $GetNetQOSPolicyInfo | Sort-Object PriorityValue -Unique | select PriorityValue
          $ShowRunningConfigs = $STSLOC | ForEach-Object { Get-OS10RunningConfigSections -Path $_ }
          $ShowRunningConfigs = $ShowRunningConfigs | ?{$_.hostname -ne "False"}
+         $ShowInterface = $STSLOC | ForEach-Object { Get-OS10InterfacesSections -Path $_ }
 
          #Matchup NetAdapters with lldp from the show tech   
             $SwPortToHostMap = @()
@@ -837,6 +895,7 @@ function Save-HtmlReport {
                             @{L="MacAddress";E={$NetAdapter.MacAddress}},
                             @{L="IntentType";E={$NetAdapter.IntentType}},
                             @{L="vLAN";E={$NetAdapter.vLAN}}
+
                     }
                 }
             }
@@ -1585,7 +1644,11 @@ function Save-HtmlReport {
                                                                          IF($_ -imatch ($MgmtvLans -join '|')){"RREEDD"+$_}
                                                                         }
                                                                  }}).'switchport trunk allowed vlan'
-            'MTU9216'                                          = Get-LineValue $StorageUsedInterface.Lines '9216'
+            'MTU9216'                                          = If ((Get-LineValue $StorageUsedInterface.Lines '9216').value -ne '9216') {
+                                                                    $newheader=$StorageUsedInterface.header.split(" ")[-1]
+                                                                    $newheader=$newheader.substring(0,($newheader | Select-String "\d").matches[0].index) + " " + $newheader.substring(($newheader | Select-String "\d").matches[0].index)
+                                                                    (($ShowInterface | ? Header -match $newheader).lines | Select-String "MTU\s(\d*)\sbytes").matches.Groups[1].Value
+                                                               } else {Get-LineValue $StorageUsedInterface.Lines '9216'} 
             'flowcontrol receive off'                          = Get-LineValue $StorageUsedInterface.Lines 'flowcontrol receive off'
             'flowcontrol transmit off'                         = Get-LineValue $StorageUsedInterface.Lines 'flowcontrol transmit off'
             'spanning-tree bpduguard enable'                   = Get-LineValue $StorageUsedInterface.Lines 'spanning-tree bpduguard enable'
@@ -1633,7 +1696,11 @@ function Save-HtmlReport {
                                                       if($_ -imatch ($Storagevlans -join '|')){"RREEDD"+$_}
                                                      }
                                                 }}).'switchport trunk allowed vlan'
-            'MTU9216'                         = Get-LineValue $MgmtUsedInterface.Lines '9216'
+            'MTU9216'                         = If ((Get-LineValue $MgmtUsedInterface.Lines '9216') -ne '9216') {
+                                                       $newheader=$MgmtUsedInterface.header.split(" ")[-1]
+                                                       $newheader=$newheader.substring(0,($newheader | Select-String "\d").matches[0].index) + " " + $newheader.substring(($newheader | Select-String "\d").matches[0].index)
+                                                           (($ShowInterface | ? Header -match $newheader).lines | Select-String "MTU\s(\d*)\sbytes").matches.Groups[1].Value
+                                                       } else {Get-LineValue $MgmtUsedInterface.Lines '9216'}
             'flowcontrol receive on'          = (Get-LineValue $MgmtUsedInterface.Lines 'flowcontrol receive' | select @{L="flowcontrol receive on";E={
                                                     If($_ -imatch " on"){$_}Else{"RREEDD"+$_}}}).'flowcontrol receive on'
             'flowcontrol transmit off'        = Get-LineValue $MgmtUsedInterface.Lines 'flowcontrol transmit off'
@@ -1834,7 +1901,11 @@ function Save-HtmlReport {
                         Description                                        = (Get-LineValue $VLTiUsedInterface.Lines 'description' | select @{L="Description";E={$_ -replace "description",""}}).description
                         'no shutdown'                                      = Get-LineValue $VLTiUsedInterface.Lines 'no shutdown'
                         'no switchport'                                    = Get-LineValue $VLTiUsedInterface.Lines 'no switchport'
-                        'MTU9216'                                          = Get-LineValue $VLTiUsedInterface.Lines '9216'
+                        'MTU9216'                                          = If ((Get-LineValue $VLTiUsedInterface.Lines '9216') -ne '9216') {
+                                                                                $newheader=$VLTiUsedInterface.header.split(" ")[-1]
+                                                                                $newheader=$newheader.substring(0,($newheader | Select-String "\d").matches[0].index) + " " + $newheader.substring(($newheader | Select-String "\d").matches[0].index)
+                                                                                (($ShowInterface | ? Header -match $newheader).lines | Select-String "MTU\s(\d*)\sbytes").matches.Groups[1].Value
+                                                                             } else {Get-LineValue $VLTiUsedInterface.Lines '9216'}
                         'flowcontrol receive off'                          = Get-LineValue $VLTiUsedInterface.Lines 'flowcontrol receive off'
                         'flowcontrol transmit off'                         = Get-LineValue $VLTiUsedInterface.Lines 'flowcontrol transmit off'
                         'priority-flow-control mode on'                    = Get-LineValue $VLTiUsedInterface.Lines 'priority-flow-control mode on'
@@ -1877,7 +1948,11 @@ function Save-HtmlReport {
             PortType                                           = 'vLAN'
             Description                                        = (Get-LineValue $StoragevLANUsedInterface.Lines 'description' | select @{L="Description";E={$_ -replace "description",""}}).description
             'no shutdown'                                      = Get-LineValue $StoragevLANUsedInterface.Lines 'no shutdown'
-            'MTU9216'                                          = Get-LineValue $StoragevLANUsedInterface.Lines '9216'
+            'MTU9216'                                          = If ((Get-LineValue $StoragevLANUsedInterface.Lines '9216').value -ne '9216') {
+                                                                    $newheader=$StoragevLANUsedInterface.header.split(" ")[-1]
+                                                                    $newheader=$newheader.substring(0,($newheader | Select-String "\d").matches[0].index) + " " + $newheader.substring(($newheader | Select-String "\d").matches[0].index)
+                                                                    (($ShowInterface | ? Header -match $newheader).lines | Select-String "MTU\s(\d*)\sbytes").matches.Groups[1].Value
+                                                               } else {Get-LineValue $StoragevLANUsedInterface.Lines '9216'} 
         }
         $StoragevLANUsedInterfacesOut += Set-MissingNoteProperties $StoragevLANUsedInterfacesInfo
     }
