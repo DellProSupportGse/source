@@ -26,6 +26,15 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/03/31:v1.83 -  1. New Update: TP - New version 1.83 DEV
+                        2. New Update: TP - Show warning when Vm Host setting UseAnyNetworkForMigration is False
+                        3. New Update: TP - If MigrationNetworkOrder not defined, then define the order using MS cluster logic.
+                        4. Bug Fix: TP - Ignore error for Willing and DcbxMode on nics that are neither Mellanox nor Nvidia.
+                        5. Bug Fix TP - Health check table. If SU is installationfailed, will ignore SBE content errors. Date sorts properly.
+                        6. New Feature: TP - Health check errors now try to match a TSG page.
+                        7. New Feature: TP - Added InstalledDate to the Solution and SBE updates table
+                        8. New Feature: TP - Ignore any Environmental Checks occurring the same day as a successful update.
+
     2026/03/12:v1.82 -  1. New Update: TP - New version 1.82 DEV
                         2. Bug Fix: TP - JG/VF showed that Hyper-V Network Events warning was not working.
                         3. Bug Fix: TP - Some Action Plan failures would be missed
@@ -263,7 +272,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.82"
+$CluChkVer="1.83"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -564,11 +573,18 @@ IF($uploadToAzure){
             [Parameter(Mandatory=$true)]
             [string]$PartitionKey,
 
+            [Parameter(Mandatory=$false)]
+            [string]$RowKey,
+
+            [Parameter(Mandatory=$false)]
+            [string]$SasToken,
+            
             [Parameter(Mandatory=$true)]
-            [hashtable]$Data
+            $Data
         )
 
         if (-not $uploadToAzure) { return }
+        try {$Data=[HashTable]$Data
 
         $RowKey = [guid]::NewGuid().Guid
         
@@ -590,7 +606,7 @@ IF($uploadToAzure){
         $maxRetries = 3
         $attempt = 0
         $success = $false
-
+        } catch {return}
         while (-not $success -and $attempt -lt $maxRetries) {
 
             try {
@@ -1738,7 +1754,7 @@ If($ProcessSDDC -ieq "y"){
   #(Get-Process -Id $pid).PriorityClass='Normal'
   Write-Host "    Gathering All XML file data..."
   $SDDCFiles=@{}
-  gci $SDDCPath -Filter "*.xml" | %{$SDDCFiles.Add($_.basename,(Import-Clixml -Path $_.fullname))}
+  gci $SDDCPath -Filter "*.xml" | %{$SDDCFiles.Add($_.basename,(Import-Clixml -Path $_.fullname -ErrorAction SilentlyContinue))}
   $ClusterNodes=$SDDCFiles."GetClusterNode" |`
   Sort-Object Name | Select-Object Name,Model,SerialNumber,State,StatusInformation,Id
   Foreach ($Name in ($ClusterNodes.Name)) {
@@ -4534,38 +4550,41 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
             $NetworksforLiveMigration=@()
             $NetworksforLiveMigration=($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}).Value -split ';'
             $NetworksforLiveMigration+=($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationExcludeNetworks'}).Value -split ';'
+            if ((($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}).Value -eq "") -and ($ClusterNetworkLiveMigration.count -gt 1)) {
+                $NetworksforLiveMigration=@()
+                $LMNics= ($GetClusterNetwork | ? {$_.Role -like '*Cluster'} | sort metric).id 
+                $NetworksforLiveMigration+=$LMNics | Select -Skip 1
+                $NetworksforLiveMigration+=$LMNics[0]
+                $NetworksforLiveMigration+=($GetClusterNetwork | ? {$_.Role -like '*ClusterandClient'} | sort metric).id
+                ($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}).Value = [string]($NetworksforLiveMigration -join ";")
+            }
             $LiveMigrationNetworkPriorities=@()
             $LiveMigrationNetworkPrioritiesOut=@()
                 foreach($LMN in $NetworksforLiveMigration){
                 ForEach($GCN in $GetClusterNetwork){
                     IF($LMN -eq $GCN.Id){
                         $LiveMigrationNetworkPriorities+=$GCN| Select-Object Name,@{L='LiveMigrationNetwork';E={
-                            Switch($GCN.ID){
+                            Switch -Regex ($GCN.ID){
                                 {(($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationExcludeNetworks'}|Select-Object Value) -split ';') | Where-Object{$_ -iMatch $GCN.ID}}{
-                                   
-
-
-                                   
-                                   
                                     "Excluded"
                                 }
-                                {(($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}|Select-Object Value) -split ';') | Where-Object{$_ -iMatch $GCN.ID}}{
+                                {($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}).Value -split ";" | Where-Object{$_ -iMatch $GCN.ID}}{
                                     "Included"
                                 }
-            }}},Address}}}
+            }}},Address,@{L="ID";E={$GCN.ID}}}}}
             #$LiveMigrationNetworkPriorities | FT
 # check if mgmt is last in MigrationNetworkOrder
             $IsMgmtInMigrationNetworkOrder=$LiveMigrationNetworkPriorities | Where-Object{$_.Name -imatch $MgmtClusterNetworkId.name}
-  IF($IsMgmtInMigrationNetworkOrder.LiveMigrationNetwork -eq "Included" -and -not($MgmtClusterNetworkId.ID -ieq (($ClusterNetworkLiveMigration | Where-Object{$_.Name -eq 'MigrationNetworkOrder'}|Select-Object -ExpandProperty Value) -split ';')[-1])){
+  IF($IsMgmtInMigrationNetworkOrder.LiveMigrationNetwork -eq "Included" -and -not($MgmtClusterNetworkId.ID -ieq ($LiveMigrationNetworkPriorities.ID)[-1])){
  $LiveMigrationNetworkPrioritiesOut+=$LiveMigrationNetworkPriorities | Select-Object Name,@{L='LiveMigrationNetwork';E={
  IF($_.Name -imatch $MgmtClusterNetworkId.name){
  "RREEDD"*($SysInfo[0].SysModel -notmatch "^PowerEdge")+$_.LiveMigrationNetwork } else{$_.LiveMigrationNetwork}
- }}
- }Else{$LiveMigrationNetworkPrioritiesOut=$LiveMigrationNetworkPriorities}
+ }},Address
+ }Else{$LiveMigrationNetworkPrioritiesOut=$LiveMigrationNetworkPriorities| Select-Object Name,LiveMigrationNetwork,Address}
 
   $LiveMigrationNetworkPrioritiesOut=$LiveMigrationNetworkPrioritiesOut | Select-Object Name,@{L='LiveMigrationNetwork';E={
   IF($_.Name -inotmatch $MgmtClusterNetworkId.name -and $_.LiveMigrationNetwork -eq "Excluded"){$curraddr=$_.address;If (($GetClusterNetwork | ? Address -match $curraddr).role.value -eq 'Cluster'){
-  "RREEDD"*($SysInfo[0].SysModel -notmatch "^PowerEdge")+$_.LiveMigrationNetwork } else{$_.LiveMigrationNetwork}}
+  "RREEDD"*($SysInfo[0].SysModel -notmatch "^PowerEdge")+$_.LiveMigrationNetwork } else{$_.LiveMigrationNetwork}} else{$_.LiveMigrationNetwork}
  }},Address
 
 
@@ -4992,7 +5011,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
            $SolutionUpdateFiles=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -like '*GetSolutionUpdate' }| Select-Object -First 1)"
            Foreach ($SolutionUpdateFile in $SolutionUpdateFiles) {
               If ($SolutionUpdateFile.State -gt "") {
-                 $SolutionUpdates=$SolutionUpdates+=$SolutionUpdateFile | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},MinVersionRequired,MinSBEVersionRequied,ComponentVersions
+                 $SolutionUpdates=$SolutionUpdates+=$SolutionUpdateFile | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},InstalledDate,MinVersionRequired,MinSBEVersionRequied,ComponentVersions
               }
            } 
            $SolutionUpdates = $SolutionUpdates | Sort ResourceId 
@@ -5560,11 +5579,13 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
                             $ThisError='BBOOLLDDOONNPlease run the following to resolve this error:RRREEETTTInvoke-Command -ComputerName (Get-ClusterNode).Name -ScriptBlock {Remove-Item C:\Windows\Cluster\Reports\CauReport-00000101000000.xml -Force}BBOOLLDDOOFFFF RRREEETTT RRREEETTT'+$ThisError
                         }
                     }
-                    $resultObject +=     [PSCustomObject] @{
-                        Target                  = $APLMU.Directory.Name -replace "Node_",""
-                        TimeStamp                       = (Get-Date $APTime -Format "MM/dd/yyyy HH:mm")
-                        Message                         = $ThisError
+                    If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $thiserror.Message -match 'integrity check')) {
+                        $resultObject +=     [PSCustomObject] @{
+                            Target                  = $APLMU.Directory.Name -replace "Node_",""
+                            TimeStamp                       = (Get-Date $APTime -Format "MM/dd/yyyy HH:mm")
+                            Message                         = $ThisError
                 
+                        }
                     }
                     
                 }
@@ -5579,9 +5600,8 @@ Unable to get SBE CredentialList
 No secretname assocated with SBE secret error
 Unable to lookup KV details for
 Unable to add KV info to
-File hash mismatch error
 /(?!'0') missing\/invalid files in" -split ("`r`n")
-
+        If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed')) {$ECEErrors+="File hash mismatch error"}
         Foreach ($ECE in (Get-ChildItem -Path $SDDCPath -Filter "AzureStack.ECE.etl" -Recurse -Depth 2)) {
             tracerpt.exe "$($ECE.fullname)" -of xml -o "$($ECE.Directory)\$($ECE.Basename).xml" -y | Out-Null
             [xml]$ECELog=gc "$($ECE.Directory)\$($ECE.Basename).xml"
@@ -5612,19 +5632,22 @@ File hash mismatch error
                 
                     }
         }
+        #$getSUE=$SDDCFiles.Keys -match 'getsolutionupdateenvironment' | %{$SDDCFiles."$_"} | Sort -Unique Title
         $errors=@()
         $errors=(Get-ChildItem -Path $SDDCPath -Filter "AzStackHciEnvironmentChecker.EVTX" -Recurse -Depth 2) | %{(Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{ Path = "$($_.fullname)"; Level = 2})}
         $errors | %{$_.Message=$_.Properties.Value}
         $errors=$errors | Sort TimeCreated -Descending | Sort Message -Unique
                ForEach ($thiserror in $errors) {
-                    $resultObject +=     [PSCustomObject] @{
-                        Target                  = $thiserror.MachineName
-                        TimeStamp               = (Get-Date $thiserror.TimeCreated -Format "MM/dd/yyyy HH:mm")
-                        Message                 = $thiserror.Message
+                    If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $thiserror.Message -match '(Invoke-AzStackHciSBEHealthValidation)|(integrity check)') -and !($SolutionUpdates.InstalledDate.Date -match $thiserror.TimeCreated.Date)) {
+                        $resultObject +=     [PSCustomObject] @{
+                            Target                  = $thiserror.MachineName
+                            TimeStamp               = (Get-Date $thiserror.TimeCreated -Format "MM/dd/yyyy HH:mm")
+                            Message                 = $thiserror.Message
                 
+                        }
                     }
         }
-        $ActionPlanErrors=$resultObject | sort TimeStamp -Descending | sort Target,Message -Unique | sort TimeStamp -Descending
+        $ActionPlanErrors=$resultObject | sort Target,Message -Unique | sort {Get-Date $_.TimeStamp} -Descending
         Foreach ($apfailure in $ActionPlanErrors) {
             if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-4)) {
                     $apfailure.Target="RREEDD" + $apfailure.Target
@@ -5633,10 +5656,100 @@ File hash mismatch error
             }
         }
         If ($ActionPlanErrors) {
+           Add-Type -AssemblyName System.Web
+           function Encode-GitHubPath {
+                param ($path)
+
+           return ( ($path -split '/') | ForEach-Object {
+                [System.Uri]::EscapeDataString($_)
+                } ) -join '/'
+           }
+           If ($ActionPlanErrors.Target -match "^RREEDD") {
+                Write-Host "    Gathering Azure TSGs..."
+                $repo = "AzureLocal-Supportability"
+                $url = "https://api.github.com/repos/Azure/$repo/git/trees/main?recursive=1"
+                $tree = (Invoke-RestMethod $url).tree
+
+                # Step 2: Filter files
+                $files = $tree | Where-Object {
+                $_.path -like "TSG/*" -and
+                $_.type -eq "blob" -and
+                $_.path -notlike "*README.md" -and
+                ($_.path -like "*.md" -or $_.path -like "*.txt")
+                }
+
+                # Step 3: Download raw content
+                $s=Get-Date
+                $results = foreach ($file in $files) {
+                $encodedPath = Encode-GitHubPath $file.path
+                $rawUrl = "https://raw.githubusercontent.com/Azure/$repo/refs/heads/main/$encodedPath"
+   
+                try {
+                    $content = Invoke-RestMethod $rawUrl
+
+                    [PSCustomObject]@{
+                        Path    = $file.path
+                        Content = $content
+                    }
+                }
+                catch {
+                    Write-Warning "Failed to fetch $($file.path)"
+                }
+                }
+
+                # $results now contains all file contents
+                Write-Host "    Time to gather took $([int]((Get-Date)-$s).totalseconds)"
+                Write-Host "    Analyzing Errors..."
+                $s=Get-Date
+                $commonwords=@('the','to','this','and','is','in','a','for','with','of','on','not','that','1','if','azure','or','are','be','name','2','powershell','from','you','local','an','microsoft','0','can','will','get','all','it','issue','cause','3','following','run','by','check','node','steps','where','as','validation','cluster','any','error','status','details','should','which','output','update','failure','use','host','your','4','https','example','environment','s','using','overview','deployment','when','message','has','description','have','system','below','object','nodes','configuration','no','com','mitigation','each','resource','at','new','type','10','after','verify','6','must','table','may','test','symptoms','5','troubleshooting','network','scenarios','json','one','failed','requirements','see','note','review','only','before','text','confirm','learn','ensure','information','command','management','configured','operations','set','does','running','but','these','block','c','remediation','left','applicable','was','title','source','same','during','there','eq','version','td','width','border','validator','displayname','used','need','additional','documentation','issues','fails','found','critical','bottom','severity','required','align','ip','specific','service','detail','targetresourcename','add','collapse','th','1em','margin','timestamp','tr','please','style','exception','targetresourcetype','strong','cellpadding','cellspacing','additionaldata','up','targetresourceid','180px','create','do','installed','remove','path','hci','checks','scenario','select','en','server','until','address','expected','more','us','stack','write','fail','step','other','solution','start','above','state','field','file')
+                Foreach ($ActionPlanError in ($ActionPlanErrors | ? Target -match "^RREEDD")) {
+                    $inputText=$ActionPlanError.Message
+                    $inputWords = [regex]::Matches($inputText.ToLower(), '\b[a-z0-9]+\b') | ForEach-Object { $_.Value }
+                    
+                    $inputSet = $inputWords | Where-Object { $_ -notin $commonwords } | Where-Object { $_.Length -ge 3 } | Sort-Object -Unique
+                    If ($inputSet.count -lt 3) {continue}
+                    $resultsWithScore = foreach ($doc in $results) {
+                        if (-not $doc.Content) { continue }
+
+                        # Normalize content
+                        $text = $doc.Content.ToString().ToLower()
+
+                        # Extract words
+                        $words = [regex]::Matches($text, '\b[a-z0-9]+\b') | ForEach-Object { $_.Value }
+
+                        # Unique filtered words
+                        $docSet = $words | Where-Object { $_ -notin $commonwords } | Where-Object { $_.Length -ge 3 } | Sort-Object -Unique
+
+                        # Compute intersection
+                        $matches = $inputSet | Where-Object { $_ -in $docSet }
+
+                        [PSCustomObject]@{
+                            Path        = "https://github.com/Azure/AzureLocal-Supportability/blob/main/$($doc.Path)"
+                            Score       = [int]($matches.Count/$inputset.count*100)
+                            MatchWords  = ($matches -join ', ')
+                        }
+                    }
+                    $probableTSGs=$resultsWithScore | ? Score -gt 30 | Sort-Object Score -Descending | Select-Object -First 2
+                    If ($probableTSGs) {
+                        $TSGText=""
+                        Foreach ($TSG in $probableTSGs) {
+                         
+                             If ($TSG.Score -lt 80) {
+                                $TSGText=$TSGText+"$($TSG.Score)% - <a href=""$($TSG.Path)"">$(($TSG.Path.split("/"))[-1])</a>RRREEETTT"
+                             } else {
+                                $TSGText=$TSGText+"BBOOLLDDOONN$($TSG.Score)% - <a href=""$($TSG.Path)"">$(($TSG.Path.split("/"))[-1])</a>BBOOLLDDOOFFFFRRREEETTT"
+                             }
+                        }
+                        $ActionPlanError.Message=$ActionPlanError.Message+"RRREEETTTRRREEETTTPossible Azure TSGs (Links under 80% may not relate to the problem):RRREEETTT"+$TSGText
+                    }
+               }
+               Write-Host "    Time to analyze took $([int]((Get-Date)-$s).totalseconds)"
+           }
            #HTML Report
            $html+='<H2 id="HealthCheckandActionPlanFailures">Health Check and Action Plan Failures</H2>'
            $html+='<H5><b>NOTE: Failures less than 4 days are marked as ERROR. Some of these may have already been corrected.</b></H5>'
-           $html+=$ActionPlanErrors | ConvertTo-html -Fragment
+           #$html+=$ActionPlanErrors | ConvertTo-html -Fragment | ForEach-Object { $_ -replace '(https?://\S+)', '<a href="$1">$1</a>' }
+           $html+=[System.Web.HttpUtility]::HtmlDecode(($ActionPlanErrors | ConvertTo-Html))
            $html=$html `
            -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
            -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'`
@@ -6453,11 +6566,12 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $Name="Virtual Machine Migration Performance Option"
         Write-Host "    Gathering $Name..." 
         $GetVMHost=Foreach ($key in ($SDDCFiles.keys -like "*GetVMHost")) {$SDDCFiles."$key" |`
-        Sort-Object ComputerName | Select-Object ComputerName,VirtualMachineMigrationEnabled,VirtualMachineMigrationPerformanceOption
+        Sort-Object ComputerName | Select-Object ComputerName,VirtualMachineMigrationEnabled,VirtualMachineMigrationPerformanceOption,UseAnyNetworkForMigration
         }
         $GetVMHost=$GetVMHost|Select-Object ComputerName,`
         @{Label='VirtualMachineMigrationEnabled';Expression={If($_.VirtualMachineMigrationEnabled -inotmatch 'True'){"RREEDD"+$_.VirtualMachineMigrationEnabled}Else{$_.VirtualMachineMigrationEnabled}}},`
-        @{Label='VirtualMachineMigrationPerformanceOption';Expression={If($_.VirtualMachineMigrationPerformanceOption -inotmatch 'SMB'){"RREEDD"+$_.VirtualMachineMigrationPerformanceOption}Else{$_.VirtualMachineMigrationPerformanceOption}}}
+        @{Label='VirtualMachineMigrationPerformanceOption';Expression={If($_.VirtualMachineMigrationPerformanceOption -inotmatch 'SMB'){"RREEDD"+$_.VirtualMachineMigrationPerformanceOption}Else{$_.VirtualMachineMigrationPerformanceOption}}},`
+        @{Label='UseAnyNetworkForMigration';Expression={"YYEELLLLOOWW"*($_.UseAnyNetworkForMigration -eq $false)+$_.UseAnyNetworkForMigration}}
         #$GetVMHost | FT -AutoSize
         #Azure Table
             $AzureTableData=@()
@@ -6477,6 +6591,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $GetVMHostSB+="<h5><b>Should be:</b></h5>"
         $GetVMHostSB+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-VirtualMachineMigrationEnabled=True</h5>"
         $GetVMHostSB+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-VirtualMachineMigrationPerformanceOption=SMB</h5>"
+        $GetVMHostSB+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-UseAnyNetworkForMigration=True</h5>"
         $html+=$GetVMHostSB
         #####$GetVMHost
         $html+=$GetVMHost | sort-object PSComputerName | ConvertTo-html -Fragment
@@ -6671,7 +6786,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             Sort-Object PSComputerName,Name | Select-Object PSComputerName,Name,DisplayName,DisplayValue
         }
         $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,DisplayName,`
-        @{Label='DisplayValue';Expression={$nn=$_.name;"RREEDD"*(($nn -imatch ($StorageNics.name | Sort-Object -Unique)) -and ($_.DisplayValue -inotmatch 'Enabled'))+"YYEELLLLOOWW"*($NotConverged -and (($StorageNics.name | Sort-Object -Unique) -notcontains $nn))+$_.DisplayValue}}
+        @{Label='DisplayValue';Expression={$nn=$_.name;$ifdesc=$_.InterfaceDescription;"RREEDD"*(($nn -imatch ($StorageNics.name | Sort-Object -Unique)) -and ($_.DisplayValue -inotmatch 'Enabled') -and ($ifdesc -imatch 'Mellanox|NVIDIA'))+"YYEELLLLOOWW"*($NotConverged -and (($StorageNics.name | Sort-Object -Unique) -notcontains $nn))+$_.DisplayValue}}
         #$GetNetAdapterAdvancedProperty | FT -AutoSize
         #Azure Table
             $AzureTableData=@()
@@ -6762,7 +6877,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 Sort-Object PSComputerName | Select-Object PSComputerName,Willing
             }
             $GetNetQosDcbxSetting=$GetNetQosDcbxSetting|Select-Object PSComputerName,`
-            @{Label='Willing';Expression={If($_.Willing -inotmatch 'False'){"RREEDD"+$_.Willing}Else{$_.Willing}}}
+            @{Label='Willing';Expression={If($_.Willing -inotmatch 'False' -and ($StorageNics.InterfaceDescription -imatch 'Mellanox|NVIDIA')){"RREEDD"+$_.Willing}Else{$_.Willing}}}
         }
         
         #$GetNetQosDcbxSetting | FT -AutoSize
@@ -6800,7 +6915,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 Sort-Object PSComputerName,Name | Select-Object PSComputerName,Name,DisplayName,DisplayValue
             }
             $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,DisplayName,`
-            @{Label='DisplayValue';Expression={If((($StorageNics.name | Sort-Object -Unique) -imatch $_.name ) -and ($_.DisplayValue -inotmatch 'Host In Charge')){"RREEDD"*(-not $SysInfo[0].AzureLocalVersion)+"YYEELLLLOOWW"*($SysInfo[0].AzureLocalVersion -gt "")+$_.DisplayValue}Else{$_.DisplayValue}}}
+            @{Label='DisplayValue';Expression={$nn=$_.Name;If((($StorageNics.name | Sort-Object -Unique) -imatch $nn ) -and ($_.DisplayValue -inotmatch 'Host In Charge') -and (($StorageNics | Sort Name -Unique | ? name -imatch $nn).InterfaceDescription -imatch 'Mellanox|NVIDIA')){"RREEDD"*(-not $SysInfo[0].AzureLocalVersion)+"YYEELLLLOOWW"*($SysInfo[0].AzureLocalVersion -gt "")+$_.DisplayValue}Else{$_.DisplayValue}}}
             #$GetNetAdapterAdvancedProperty | FT -AutoSize
             #Azure Table
                 $AzureTableData=@()
