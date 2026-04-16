@@ -26,6 +26,17 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/04/16:v1.84 -  1. New Update: TP - New version 1.84 DEV
+                        2. New Update: TP - In Network ATC, mark Errors as ok if last success is within 60 minutes of node's system local time.
+                        3. Optimization: TP - Sped up Analyzing TSGs by 50%-90% by using Jobs
+                        4. New Update: TP - Network ATC table shows Enable commands for any Nics in Net Intents that are not in Up status with failed intents.
+                        5. Optimization: TP - Sped up Gathering TSGs by using Async downloads.
+                        6. Bug Fix: TP - Some important AP fails from the last failed action plan were missing due to an attempt to avoid too much data.
+                        7. New Feature: TP - SBE failure due to CAURunAttempts.json over 6 now show the command to resolve.
+                        8. Bug Fix: TP - Changed the way most NVMe disk models are found in the support matrix.
+                        9. New Feature: TP - Added Dell firmware errors in Health check table. Renamed table to Action Plan, Health Check and Firmware Failures.
+                        10. Bug Fix: TP - Virtual Disk Provisioning Type was sometimes showing up as a number.
+
     2026/03/31:v1.83 -  1. New Update: TP - New version 1.83 DEV
                         2. New Update: TP - Show warning when Vm Host setting UseAnyNetworkForMigration is False
                         3. New Update: TP - If MigrationNetworkOrder not defined, then define the order using MS cluster logic.
@@ -272,7 +283,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.83"
+$CluChkVer="1.84"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -1140,6 +1151,7 @@ If ($ProcessSDDC -ieq 'y') {
                                 Bios          = $osInfo.BiosCaption
                                 SysModel      = $osInfo.CsModel
                                 LocalTime   = $osInfo.OsLocalDateTime
+                                BootTime    = $osInfo.OsLastBootUpTime
                             }
 
         }
@@ -1155,7 +1167,8 @@ If ($ProcessSDDC -ieq 'y') {
 				                AzureLocalVersion = ''
                                 Bios          = ($GetBIOSInfo | ? PSComputerName -eq $osinfo.CsName).SMBIOSBIOSVersion
                                 SysModel      = (gc -Path "$SDDCPath\Node_$($osInfo.CsName)\SystemInfo.TXT" | Select-String "System Model: ").Line.split(":")[-1].Trim()
-                                LocalTime   = $osInfo.LocalDateTime
+                                LocalTime     = $osInfo.LocalDateTime
+                                BootTime      = $osInfo.LastBootUpTime
                                 } 
             }
         }
@@ -2926,6 +2939,7 @@ $HighestVersion = ($SysInfo | sort AzureLocalVersion -desc | select -first 1).Az
 $NewestUBR=Foreach ($key in ($SDDCFiles.Keys | ? {$_ -match "GetCurrentVersion"})) {$SDDCFiles.$key.ubr}
 $NewestUBR=($NewestUBR | sort)[-1]
 ForEach($Sys in $SysInfo){
+    
     [xml]$sysinfofull=gc "$SDDCPath\Node_$($Sys.HostName)\msinfo.nfo"
     $logicalProcessors=0
     foreach ($processorLine in (($sysinfofull.msinfo.Category.data | ? InnerText -match 'Processor').innertext)) { 
@@ -2969,7 +2983,10 @@ ForEach($Sys in $SysInfo){
         }},	
         @{L="Time Zone";E={
             $allproperties | ? {$_.'Host Name' -ieq $Sys.Hostname} | %{if ($_.'Time Zone' -ne $primarytz) {"RREEDD$($_['Time Zone'])"} else {"$($_['Time Zone'])"} }
-        }}
+        }},
+        @{L="BootTime";E={$Sys.BootTime}}
+        $match=[Regex]::Match(($ClusterNodesOut | ? Name -ieq $Sys.Hostname).'Time Zone',"\(UTC-(\d{2}):(\d{2})\)")
+        $Sys.LocalTime=$Sys.LocalTime.ToUniversalTime().AddMinutes(-([int]($match.groups[1].value)*60+[int]$match.groups[2].value))
 }
 $ClusterNodesOut+=$ClusterNodes | Where-Object {!($Sysinfo.HostName -match $_.name)}
 $NewestUBR=($ClusterNodesOut | sort UBR)[-1].UBR
@@ -3243,7 +3260,7 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
           '2'{'By Policy'}`
           '5'{'Unknown'}`
         }} else {$_.DetachedReason}}},
-        FileSystem,ProvisioningType,
+        FileSystem,@{Label='ProvisioningType';Expression={if ($_.ProvisioningType -ne "Fixed" -and $_.ProvisioningType -ne "Thin") {@("","Thin","Fixed")[$_.ProvisioningType]}}},
         IsSnapshot,@{Label='Access';Expression={If ($_.Access -match "\d") {@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]} else {"RREEDD"*($_.Access -ne "Read/Write")+$_.Access}}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
         #$VirtualDisks | FT -AutoSize -Wrap
 
@@ -3541,7 +3558,7 @@ $htmlout+=$html
             "Dell Express Flash CD5*"            {"KCD5XLUG3T84"}
             "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
             "Dell Express Flash CD5*"            {"KCD5XLUG3T84"}
-            "Dell*DC*NVMe*CD8*U.2*960GB"        {"KCD8XRUG960G"}
+           <# "Dell*DC*NVMe*CD8*U.2*960GB"        {"KCD8XRUG960G"}
             "Dell*DC*NVMe*CD8*U.2*1*92*B"       {"KCD8XRUG1T92"}
             "Dell*DC*NVMe*CD8*U.2*3*84*B"       {"KCD8XRUG3T84"}
             "Dell*DC*NVMe*CD8*U.2*7*68*B"       {"KCD8XRUG7T68"}
@@ -3550,46 +3567,46 @@ $htmlout+=$html
             "DELL*NVME*ISE*PE8110*RI*U.2*7*68*B" {"HFS7T6GEETX099N"}
             "DELL*NVME*ISE*PE8110*RI*U.2*960GB"  {"HFS960GEETX099N"}
             "Dell*Ent*NVMe*v2*AGN*RI*U.2*" {"MZWLR7T6HALAAD3"}
-    "Dell*Ent*NVMe*PM1735*SP*MU*1.60TB" {"MZWLJ1T6HBJRAD3"}
-    "Dell*Ent*NVMe*PM1735*SP*MU*3.20TB" {"MZWLJ3T2HBJRAD3"}
-    "Dell*Ent*NVMe*PM1735*SP*MU*6.40TB" {"MZWLJ6T4HALAAD3"}
-    "Dell*Ent*NVMe*PM1735*V2*MU*3.20TB" {"MZWLR3T2HBLSAD3"}
-    "Dell*Ent*NVMe*PM1735*V2*MU*6.40TB" {"MZWLR6T4HALAAD3"}
-    "Dell*Ent*NVMe*PM1745*MU*1.60TB" {"MZWLO1T6HCJR-00AD3"}
-    "Dell*Ent*NVMe*PM1745*MU*3.20TB" {"MZWLO3T2HCLS-00AD3"}
-    "Dell*Ent*NVMe*PM1745*MU*6.40TB" {"MZWLO6T4HBLA-00AD3"}
-    "Dell*Ent*NVMe*CM6*MU*1.60TB" {"KCM6XVUL1T60"}   #*Kioxia*CM6*Mixed*Use
-    "Dell*Ent*NVMe*CM6*MU*3.20TB" {"KCM6XVUL3T20"}
-    "Dell*Ent*NVMe*CM6*MU*6.40TB" {"KCM6XVUL6T40"}
-    "Dell*Ent*NVMe*CM7*MU*1.60TB" {"KCM7XVUG1T60"}   #*Kioxia*CM7*Mixed*Use
-    "Dell*Ent*NVMe*CM7*MU*3.20TB" {"KCM7XVUG3T20"}
-    "Dell*Ent*NVMe*CM7*MU*6.40TB" {"KCM7XVUG6T40"}
-    "Dell*Ent*NVMe*CM6*RI*1*92*B" {"KCM6XRUL1T92"}
-    "Dell*Ent*NVMe*CM6*RI*3*84*B" {"KCM6XRUL3T84"}
-    "Dell*Ent*NVMe*CM6*RI*7*68*B" {"KCM6XRUL7T68"}
-    "Dell*Ent*NVMe*CM6*RI*15*36*B" {"KCM6XRUL15T3"}
-    "Dell*Ent*NVMe*CM7*RI*1*92*B" {"KCM7XRUG1T92"}
-    "Dell*Ent*NVMe*CM7*RI*3*84*B" {"KCM7XRUG3T84"}
-    "Dell*Ent*NVMe*CM7*RI*7*68*B" {"KCM7XRUG7T68"}
-    "Dell*Ent*NVMe*CM7*RI*15*36*B" {"KCM7XRUG15T3"}
-    "Dell*Ent*NVMe*PM1733*V2*RI*3*84*B" {"MZWLR3T8HBLSAD3"}   #*Samsung*PM1733*V2
-    "Dell*Ent*NVMe*PM1733*V2*RI*7*68*B" {"MZWLR7T6HALAAD3"}
-    "Dell*Ent*NVMe*PM1733a*RI*1*92*B" {"MZWLR1T9HCJRAD3"}   #*Samsung*PM1733a
-    "Dell*Ent*NVMe*PM1733a*RI*3*84*B" {"MZWLR3T8HCLSAD3"}
-    "Dell*Ent*NVMe*PM1733a*RI*7*68*B" {"MZWLR7T6HBLAAD3"}
-    "Dell*Ent*NVMe*PM1733a*RI*15*36*B" {"MZWLR15THBLAAD3"}
-    "Dell*Ent*NVMe*PM9A3*RI*0.96TB" {"MZQL2960HCJRAD3"}   #*Samsung*PM9A3
-    "Dell*Ent*NVMe*PM9A3*RI*1*92*B" {"MZQL21T9H"}
-    "Dell*Ent*NVMe*PM9A3*RI*3*84*B" {"MZQL23T8HCLSAD3"}
-    "Dell*Ent*NVMe*PM9A3*RI*7*68*B" {"MZQL27T6HBLAAD3"}
-    "Dell*Ent*NVMe*PM9D3a*RI*0.96TB" {"MZWL6960HFJA-00AD3"}  #*Samsung*PM9D3a
-    "Dell*Ent*NVMe*PM9D3a*RI*1*92*B" {"MZVL61T9HBL1-00AD3"}
-    "Dell*Ent*NVMe*PM9D3a*RI*3*84*B" {"MZWL63T8HFLT-00AD3"}
-    "Dell*Ent*NVMe*PM9D3a*RI*7*68*B" {"MZWL67T6HBLC-00AD3"}
-    "Dell*Ent*NVMe*PM1743*RI*1*92*B" {"MZWLO1T9HCJR-00AD3"}   #*Samsung*PM1743
-    "Dell*Ent*NVMe*PM1743*RI*3*84*B" {"MZWLO3T8HCLS-00AD3"}
-    "Dell*Ent*NVMe*PM1743*RI*7*68*B" {"MZWLO7T6HBLA-00AD3"}
-    "Dell*Ent*NVMe*PM1743*RI*15*36*B" {"MZWLO15THBLA-00AD3"}
+    "Dell*NVMe*PM1735*SP*MU*1.60TB" {"MZWLJ1T6HBJRAD3"}
+    "Dell*NVMe*PM1735*SP*MU*3.20TB" {"MZWLJ3T2HBJRAD3"}
+    "Dell*NVMe*PM1735*SP*MU*6.40TB" {"MZWLJ6T4HALAAD3"}
+    "Dell*NVMe*PM1735*V2*MU*3.20TB" {"MZWLR3T2HBLSAD3"}
+    "Dell*NVMe*PM1735*V2*MU*6.40TB" {"MZWLR6T4HALAAD3"}
+    "Dell*NVMe*PM1745*MU*1.60TB" {"MZWLO1T6HCJR-00AD3"}
+    "Dell*NVMe*PM1745*MU*3.20TB" {"MZWLO3T2HCLS-00AD3"}
+    "Dell*NVMe*PM1745*MU*6.40TB" {"MZWLO6T4HBLA-00AD3"}
+    "Dell*NVMe*CM6*MU*1.60TB" {"KCM6XVUL1T60"}   #*Kioxia*CM6*Mixed*Use
+    "Dell*NVMe*CM6*MU*3.20TB" {"KCM6XVUL3T20"}
+    "Dell*NVMe*CM6*MU*6.40TB" {"KCM6XVUL6T40"}
+    "Dell*NVMe*CM7*MU*1.60TB" {"KCM7XVUG1T60"}   #*Kioxia*CM7*Mixed*Use
+    "Dell*NVMe*CM7*MU*3.20TB" {"KCM7XVUG3T20"}
+    "Dell*NVMe*CM7*MU*6.40TB" {"KCM7XVUG6T40"}
+    "Dell*NVMe*CM6*RI*1*92*B" {"KCM6XRUL1T92"}
+    "Dell*NVMe*CM6*RI*3*84*B" {"KCM6XRUL3T84"}
+    "Dell*NVMe*CM6*RI*7*68*B" {"KCM6XRUL7T68"}
+    "Dell*NVMe*CM6*RI*15*36*B" {"KCM6XRUL15T3"}
+    "Dell*NVMe*CM7*RI*1*92*B" {"KCM7XRUG1T92"}
+    "Dell*NVMe*CM7*RI*3*84*B" {"KCM7XRUG3T84"}
+    "Dell*NVMe*CM7*RI*7*68*B" {"KCM7XRUG7T68"}
+    "Dell*NVMe*CM7*RI*15*36*B" {"KCM7XRUG15T3"}
+    "Dell*NVMe*PM1733*V2*RI*3*84*B" {"MZWLR3T8HBLSAD3"}   #*Samsung*PM1733*V2
+    "Dell*NVMe*PM1733*V2*RI*7*68*B" {"MZWLR7T6HALAAD3"}
+    "Dell*NVMe*PM1733a*RI*1*92*B" {"MZWLR1T9HCJRAD3"}   #*Samsung*PM1733a
+    "Dell*NVMe*PM1733a*RI*3*84*B" {"MZWLR3T8HCLSAD3"}
+    "Dell*NVMe*PM1733a*RI*7*68*B" {"MZWLR7T6HBLAAD3"}
+    "Dell*NVMe*PM1733a*RI*15*36*B" {"MZWLR15THBLAAD3"}
+    "Dell*DC*NVMe*PM9A3*RI*960GB" {"MZQL2960HCJRAD3"}   #*Samsung*PM9A3
+    "Dell*DC*NVMe*PM9A3*RI*1*92*B" {"MZQL21T9H"}
+    "Dell*DC*NVMe*PM9A3*RI*3*84*B" {"MZQL23T8HCLSAD3"}
+    "Dell*DC*NVMe*PM9A3*RI*7*68*B" {"MZQL27T6HBLAAD3"}
+    "Dell*NVMe*PM9D3a*RI*960GB" {"MZWL6960HFJA-00AD3"}  #*Samsung*PM9D3a
+    "Dell*NVMe*PM9D3a*RI*1*92*B" {"MZVL61T9HBL1-00AD3"}
+    "Dell*NVMe*PM9D3a*RI*3*84*B" {"MZWL63T8HFLT-00AD3"}
+    "Dell*NVMe*PM9D3a*RI*7*68*B" {"MZWL67T6HBLC-00AD3"}
+    "Dell*NVMe*PM1743*RI*1*92*B" {"MZWLO1T9HCJR-00AD3"}   #*Samsung*PM1743
+    "Dell*NVMe*PM1743*RI*3*84*B" {"MZWLO3T8HCLS-00AD3"}
+    "Dell*NVMe*PM1743*RI*7*68*B" {"MZWLO7T6HBLA-00AD3"}
+    "Dell*NVMe*PM1743*RI*15*36*B" {"MZWLO15THBLA-00AD3"}
     "Dell*NVMe*ISE*PS1010*RI*U.2*1*92*B" {"HFS1T9GEJVX171N"}
     "Dell*NVMe*ISE*PS1010*RI*U.2*3*84*B" {"HFS3T8GEJVX171N"}
     "Dell*NVMe*ISE*PS1010*RI*U.2*7*68*B" {"HFS7T6GEJVX171N"}
@@ -3597,7 +3614,7 @@ $htmlout+=$html
     "Dell*NVMe*ISE*7450*RI*U.2*960GB" {"MTFDKCC960TFR"}
     "Dell*NVMe*ISE*7450*RI*U.2*1*92*B" {"MTFDKCC1T9TFR"}
     "Dell*NVMe*ISE*7450*RI*U.2*3*84*B" {"MTFDKCC3T8TFR"}
-    "Dell*NVMe*ISE*7450*RI*U.2*7*68*B" {"MTFDKCC7T6TFR"}
+    "Dell*NVMe*ISE*7450*RI*U.2*7*68*B" {"MTFDKCC7T6TFR"}#>
     default {$_}
         }}},`
         @{Label='SerialNumber';Expression={
@@ -3646,7 +3663,9 @@ $htmlout+=$html
         ForEach ($diskmdl in $diskmdls) {
         try {
             $SMDrive=$null
-            $SMDrive= $SupportMatrixtableData.Values.Values | ForEach-Object {$_ | Where-Object { $_.Model -match $diskmdl }}
+            $SMDrive= $SupportMatrixtableData.Values.Values | Where-Object {$_.Capacity -gt ""} | ForEach-Object {$_ | Where-Object { $_.Model -match $diskmdl }}
+            If (!($SMDrive)) {$SMDrive=$SupportMatrixtableData.Values.Values | Where-Object {$_.Capacity -gt ""} | ForEach-Object {$_ | Where-Object { $diskmdl -like "*$($_.Series)*$("RI"*($_.Endurance -eq "Read Intensive"))$("MU"*($_.Endurance -eq "Mixed Use"))*$(($_.Capacity.replace(' ','').replace('.','*').replace('T','*').replace('G','*')))*"}}}
+            If (!($SMDrive)) {$SMDrive=$SupportMatrixtableData.Values.Values | Where-Object {$_.Capacity -gt ""} | ForEach-Object {$_ | Where-Object { $diskmdl -like "*$($_.Series)*$(($_.Capacity.replace(' ','').replace('.','*').replace('T','*').replace('G','*')))*"}}}
 
             $SMDrive=$SMDrive | Sort $MSV -Descending | Select -First 1
                     #Create a customer object
@@ -5501,7 +5520,7 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
 
 #Health Check and Action Plan Failures
 If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
-        $Name="Health Check and Action Plan Failures"
+        $Name="Action Plan Health Check and Firmware Failures"
         Write-Host "    Gathering $Name..."
         $ap=Get-Content -ErrorAction SilentlyContinue (Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse -ErrorAction SilentlyContinue | select -first 1).fullname
         $derr=$ap | select-string -SimpleMatch 'ERROR:' -Context 10,1
@@ -5565,9 +5584,10 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
         
         }
         Foreach ($APLMU in (Get-ChildItem -Path $SDDCPath -Filter "AzureStackFailedActionPlanInformation.json" -Recurse)) {
-            $apfails=(gc $APLMU.FullName | ConvertFrom-Json).ProgressAsXml | select -Last 5
+            $apfails=(gc $APLMU.FullName | ConvertFrom-Json).ProgressAsXml
             Foreach ($apupdate in $apfails) {
-                $StopErrors = ([xml]$apupdate).SelectNodes("//Task") | where Status -eq "Error" | where Action -eq $null | where Exception -ne $null
+                $StopErrors=@()
+                $StopErrors += ([xml]$apupdate).SelectNodes("//Task") | where Status -eq "Error" | where Action -eq $null | where Exception -ne $null
                 Foreach ($StopError in $StopErrors) {
                 $APTime=$StopError.EndTimeUtc
                 If (!($APTime)) {$APTime=$StopError.StartTimeUtc}
@@ -5578,6 +5598,9 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
                         if ((gci $SDDCPath -Filter "CauReport-00000101000000.xml" -Recurse).count) {
                             $ThisError='BBOOLLDDOONNPlease run the following to resolve this error:RRREEETTTInvoke-Command -ComputerName (Get-ClusterNode).Name -ScriptBlock {Remove-Item C:\Windows\Cluster\Reports\CauReport-00000101000000.xml -Force}BBOOLLDDOOFFFF RRREEETTT RRREEETTT'+$ThisError
                         }
+                    }
+                    if ($ThisError -like "*Invoke-CauRun block failed with resultCode*ERROR-THROWN*Invoke-Command failed for Invoke-CauRun*CAU Run PriorAttempt Information is invalid as Overall Attempt Count*is greater than Max Allowed Retries*" -or $ThisError -like "*Type *SBEPartnerInvokeCAURun*of Role*SBE*raised an exception*CAU Run PriorAttempt Information is invalid as Overall Attempt Count*is greater than Max Allowed Retries *") {
+                        $ThisError='BBOOLLDDOONNPlease run the following to resolve this error (One-Liner Command):RRREEETTTRename-Item -Path C:\ClusterStorage\Infrastructure_1\Shares\SU1_Infrastructure_1\CloudMedia\SBE\staged\metadata\CAURunAttempts.json -NewName "CAURunAttempts_$(Get-Date -UFormat "%Y-%m-%d_%H-%M-%S").json"BBOOLLDDOOFFFF RRREEETTT RRREEETTT'+$ThisError
                     }
                     If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $thiserror.Message -match 'integrity check')) {
                         $resultObject +=     [PSCustomObject] @{
@@ -5647,7 +5670,35 @@ Unable to add KV info to
                         }
                     }
         }
-        $ActionPlanErrors=$resultObject | sort Target,Message -Unique | sort {Get-Date $_.TimeStamp} -Descending
+        #<#
+        $FWlogs=gci $SDDCPath -Filter "Dell-FwUpgrade*.log" -Recurse -ErrorAction SilentlyContinue
+        $errors=@()
+        $errors+=foreach ($logPath in ($FWlogs.fullname)) {
+            Get-Content $logPath |
+            Where-Object { $_ -cmatch '\bERROR\b' -and $_ -cnotmatch "Just wait for next try" } |
+            ForEach-Object {
+
+                # Capture timestamp to seconds
+                if ($_ -match '^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
+                    $dmessage=$_
+                    $timestamp = [datetime]$matches.ts
+                    $node=([regex]"\\Node_(.*?)\\").Match($logpath).groups[1].value
+                    $message=$_.split(']')[-1].Trim()
+                    IF ($message -notlike 'Error detail:' -and $message -notlike 'Meet error when create firmware upgrade list, detail:' -and $message -notlike 'Redfish side returns error http code, it is InternalServerError, check environment for detail') {
+                        [PSCustomObject]@{
+                            Target    = $node
+                            Timestamp = (Get-Date $timestamp -Format "MM/dd/yyyy HH:mm")
+                            Message   = "DELLFMWR-$message"
+                        }
+                    }
+                }
+            }
+        }
+
+        $errors=$errors | sort Timestamp -Descending | sort Target,Message -Unique | sort Timestamp -Descending | select -First 10
+        $resultObject += $errors
+        #>
+        $ActionPlanErrors=$resultObject | sort {Get-Date $_.TimeStamp} -Descending | sort Target,Message -Unique | sort {Get-Date $_.TimeStamp} -Descending
         Foreach ($apfailure in $ActionPlanErrors) {
             if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-4)) {
                     $apfailure.Target="RREEDD" + $apfailure.Target
@@ -5657,15 +5708,15 @@ Unable to add KV info to
         }
         If ($ActionPlanErrors) {
            Add-Type -AssemblyName System.Web
-           function Encode-GitHubPath {
-                param ($path)
-
-           return ( ($path -split '/') | ForEach-Object {
-                [System.Uri]::EscapeDataString($_)
-                } ) -join '/'
-           }
            If ($ActionPlanErrors.Target -match "^RREEDD") {
                 Write-Host "    Gathering Azure TSGs..."
+                 function Encode-GitHubPath {
+                    param ($path)
+
+                    return ( ($path -split '/') | ForEach-Object {
+                    [System.Uri]::EscapeDataString($_)
+                    } ) -join '/'
+                }
                 $repo = "AzureLocal-Supportability"
                 $url = "https://api.github.com/repos/Azure/$repo/git/trees/main?recursive=1"
                 $tree = (Invoke-RestMethod $url).tree
@@ -5677,38 +5728,41 @@ Unable to add KV info to
                 $_.path -notlike "*README.md" -and
                 ($_.path -like "*.md" -or $_.path -like "*.txt")
                 }
+                Add-Type -AssemblyName System.Net.Http
+                $webClient=[System.Net.Http.HttpClient]::new()
 
                 # Step 3: Download raw content
                 $s=Get-Date
-                $results = foreach ($file in $files) {
-                $encodedPath = Encode-GitHubPath $file.path
-                $rawUrl = "https://raw.githubusercontent.com/Azure/$repo/refs/heads/main/$encodedPath"
-   
-                try {
-                    $content = Invoke-RestMethod $rawUrl
-
-                    [PSCustomObject]@{
+                $results=@()
+                $tasks=@()
+                foreach ($file in $files) {
+                    $encodedPath = Encode-GitHubPath $file.path
+                    $rawUrl = "https://raw.githubusercontent.com/Azure/$repo/refs/heads/main/$encodedPath"
+                    $results+=""
+                    $tasks+=""
+                    $tasks[-1]=$webclient.GetStringAsync($rawUrl).GetAwaiter()
+                    $results[-1]=[PSCustomObject]@{
                         Path    = $file.path
-                        Content = $content
+                        Content = ($tasks[-1].GetResult())
                     }
                 }
-                catch {
-                    Write-Warning "Failed to fetch $($file.path)"
-                }
-                }
-
+                while ($tasks.IsCompleted -match $false) {Sleep -Milliseconds 100}
+                
                 # $results now contains all file contents
                 Write-Host "    Time to gather took $([int]((Get-Date)-$s).totalseconds)"
                 Write-Host "    Analyzing Errors..."
                 $s=Get-Date
                 $commonwords=@('the','to','this','and','is','in','a','for','with','of','on','not','that','1','if','azure','or','are','be','name','2','powershell','from','you','local','an','microsoft','0','can','will','get','all','it','issue','cause','3','following','run','by','check','node','steps','where','as','validation','cluster','any','error','status','details','should','which','output','update','failure','use','host','your','4','https','example','environment','s','using','overview','deployment','when','message','has','description','have','system','below','object','nodes','configuration','no','com','mitigation','each','resource','at','new','type','10','after','verify','6','must','table','may','test','symptoms','5','troubleshooting','network','scenarios','json','one','failed','requirements','see','note','review','only','before','text','confirm','learn','ensure','information','command','management','configured','operations','set','does','running','but','these','block','c','remediation','left','applicable','was','title','source','same','during','there','eq','version','td','width','border','validator','displayname','used','need','additional','documentation','issues','fails','found','critical','bottom','severity','required','align','ip','specific','service','detail','targetresourcename','add','collapse','th','1em','margin','timestamp','tr','please','style','exception','targetresourcetype','strong','cellpadding','cellspacing','additionaldata','up','targetresourceid','180px','create','do','installed','remove','path','hci','checks','scenario','select','en','server','until','address','expected','more','us','stack','write','fail','step','other','solution','start','above','state','field','file')
-                Foreach ($ActionPlanError in ($ActionPlanErrors | ? Target -match "^RREEDD")) {
-                    $inputText=$ActionPlanError.Message
+                $xx=0
+                Foreach ($ActionPlanError in ($ActionPlanErrors | ? Target -match "^RREEDD" | ? Message -notlike "DELLFMWR-*")) {
+                $xx++
+                Start-Job -Name "APTSG$xx" -ScriptBlock { 
+                    $inputText=($using:ActionPlanError).Message
                     $inputWords = [regex]::Matches($inputText.ToLower(), '\b[a-z0-9]+\b') | ForEach-Object { $_.Value }
                     
-                    $inputSet = $inputWords | Where-Object { $_ -notin $commonwords } | Where-Object { $_.Length -ge 3 } | Sort-Object -Unique
+                    $inputSet = $inputWords | Where-Object { $_ -notin $using:commonwords } | Where-Object { $_.Length -ge 3 } | Sort-Object -Unique
                     If ($inputSet.count -lt 3) {continue}
-                    $resultsWithScore = foreach ($doc in $results) {
+                    $resultsWithScore = foreach ($doc in $using:results) {
                         if (-not $doc.Content) { continue }
 
                         # Normalize content
@@ -5718,7 +5772,7 @@ Unable to add KV info to
                         $words = [regex]::Matches($text, '\b[a-z0-9]+\b') | ForEach-Object { $_.Value }
 
                         # Unique filtered words
-                        $docSet = $words | Where-Object { $_ -notin $commonwords } | Where-Object { $_.Length -ge 3 } | Sort-Object -Unique
+                        $docSet = $words | Where-Object { $_ -notin $using:commonwords } | Where-Object { $_.Length -ge 3 } | Sort-Object -Unique
 
                         # Compute intersection
                         $matches = $inputSet | Where-Object { $_ -in $docSet }
@@ -5729,7 +5783,14 @@ Unable to add KV info to
                             MatchWords  = ($matches -join ', ')
                         }
                     }
-                    $probableTSGs=$resultsWithScore | ? Score -gt 30 | Sort-Object Score -Descending | Select-Object -First 2
+                    $resultsWithScore
+                    } | Out-Null
+                    }
+                    $xx=0
+                    Foreach ($ActionPlanError in ($ActionPlanErrors | ? Target -match "^RREEDD" | ? Message -notlike "DELLFMWR-*")) {
+                    $xx++
+                    While (Get-Job -Name "APTSG$xx" | ? State -eq Running) {Sleep -Milliseconds 100}
+                    $probableTSGs=Receive-Job -Name "APTSG$xx" | ? Score -gt 30 | Sort-Object Score -Descending | Select-Object -First 2
                     If ($probableTSGs) {
                         $TSGText=""
                         Foreach ($TSG in $probableTSGs) {
@@ -5745,8 +5806,10 @@ Unable to add KV info to
                }
                Write-Host "    Time to analyze took $([int]((Get-Date)-$s).totalseconds)"
            }
+           }
+           Get-Job | Remove-Job
            #HTML Report
-           $html+='<H2 id="HealthCheckandActionPlanFailures">Health Check and Action Plan Failures</H2>'
+           $html+='<H2 id="ActionPlanHealthCheckandFirmwareFailures">Action Plan, Health Check and Firmware Failures</H2>'
            $html+='<H5><b>NOTE: Failures less than 4 days are marked as ERROR. Some of these may have already been corrected.</b></H5>'
            #$html+=$ActionPlanErrors | ConvertTo-html -Fragment | ForEach-Object { $_ -replace '(https?://\S+)', '<a href="$1">$1</a>' }
            $html+=[System.Web.HttpUtility]::HtmlDecode(($ActionPlanErrors | ConvertTo-Html))
@@ -5762,7 +5825,6 @@ Unable to add KV info to
            $html=""
            $Name=""
         }
-}
 
 #end region Latest action Plan Failure
 
@@ -5828,8 +5890,8 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 $number2 = [int]$numbers[1].Value
             # Check if the numbers are equal
                 if ($number1 -ne $number2) {"RREEDD"+$_.progress} else {$_.progress}}},
-        @{L="ConfigurationStatus";E={IF($_.ConfigurationStatus -inotmatch "Success"){"RREEDD"+$_.ConfigurationStatus} else {$_.ConfigurationStatus}}},
-        @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){"RREEDD"+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}},
+        @{L="ConfigurationStatus";E={IF($_.ConfigurationStatus -inotmatch "Success"){$dhost=$_.Host;$ls=Get-Date $_.LastSuccess;$slt=($SysInfo | ? HostName -ieq $dhost).LocalTime;"RREEDD"*(($slt-$ls).totalminutes+60*($ls -gt $slt) -gt 60)+$_.ConfigurationStatus} else {$_.ConfigurationStatus}}},
+        @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){$dhost=$_.Host;$ls=Get-Date $_.LastSuccess;$slt=($SysInfo | ? HostName -ieq $dhost).LocalTime;"RREEDD"*(($slt-$ls).totalminutes+60*($ls -gt $slt) -gt 60)+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}},
         IsComputeIntentSet,IsManagementIntentSet,IsStorageIntentSet,IsStretchIntentSet,
         @{L="Type";E={$m=@("Compute"*[int]($_.IsComputeIntentSet -eq $true);"Mgmt"*[int]($_.IsManagementIntentSet -eq $true);"Storage"*[int]($_.IsStorageIntentSet -eq $true);"Stretch"*[int]($_.IsStretchIntentSet -eq $true)) | ? {$_ -gt ""};$m -Join ","}},
         @{L="NetworkDirect";E={$in=$_.IntentName;@("Disabled","Enabled")[($GetNetIntent | ? {$_.IntentName -eq $in}).AdapterAdvancedParametersOverride.networkdirect]}},
@@ -5847,8 +5909,8 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 $number2 = [int]$numbers[1].Value
             # Check if the numbers are equal
                 if ($number1 -ne $number2) {"RREEDD"+$_.progress} else {$_.progress}}},
-        @{L="ConfigurationStatus";E={IF($_.ConfigurationStatus -inotmatch "Success"){"RREEDD"+$_.ConfigurationStatus} else {$_.ConfigurationStatus}}},
-        @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){"RREEDD"+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}},
+        @{L="ConfigurationStatus";E={IF($_.ConfigurationStatus -inotmatch "Success"){$dhost=$_.Host;$ls=Get-Date $_.LastSuccess;$slt=($SysInfo | ? HostName -ieq $dhost).LocalTime;"RREEDD"*(($slt-$ls).totalminutes+60*($ls -gt $slt) -gt 60)+$_.ConfigurationStatus} else {$_.ConfigurationStatus}}},
+        @{L="ProvisioningStatus";E={IF($_.ProvisioningStatus -inotmatch "Completed"){$dhost=$_.Host;$ls=Get-Date $_.LastSuccess;$slt=($SysInfo | ? HostName -ieq $dhost).LocalTime;"RREEDD"*(($slt-$ls).totalminutes+60*($ls -gt $slt) -gt 60)+$_.ProvisioningStatus} else {$_.ProvisioningStatus}}},
         @{L="Type";E={"Global"}}
         
         $GetNetIntentStatusXmlOut = $GetNetIntentStatusXmlOut | Where-Object{$_.host -ne $null} | Sort-Object IntentName,Host
@@ -5860,6 +5922,13 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $html=$html `
              -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
              -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
+            if ($GetNetIntentStatusXmlOut.configurationstatus -match "RREEDDFailed" -and ($GetNetAdapterAll | ? {($GetNetIntent.NetAdapterNamesAsList) -match $_.name}).status -notmatch "Up" ) {
+               $html+='<H5><b>NOTE: Please plug in or enable adapters used for Net Intents: </b><br>'
+               Foreach ($dNetAdapter in ($GetNetAdapterAll | ? {($GetNetIntent.NetAdapterNamesAsList) -match $_.name -and $_.status -ne "Up"})) {
+                  $html+="<b>Invoke-Command -ComputerName ""$(($dNetAdapter).PSComputerName)"" -ScriptBlock {Enable-NetAdapter -ifAlias ""$($dNetAdapter.Name)""}<br>"
+               }
+               $html+="<br>"
+            }
             if ($GetNetIntentStatusXmlOut.configurationstatus -match "RREEDDFailed") {
                $html+='<H5><b>NOTE: Please fix any networking/configuration issues and then run to retry intent configuration: </b><br>'
                Foreach ($netintentItem in ($GetNetIntentStatusXmlOut | ? configurationstatus -match "RREEDDFailed")) {
@@ -5870,6 +5939,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                   }
                   $html+="<b>Set-NetIntentRetryState $TheIntentName -NodeName ""$(($netIntentItem).Host)""<br>"
                }
+               $html+="<br>"
             }
             $html+="</H5>"
             if ($GetNetIntentStatusXmlOut.NetworkDirect -match "RREEDD" -and $SysInfo[0].AzureLocalVersion -gt "") {
@@ -6635,14 +6705,14 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $Name="QoS Policy configuration"
         Write-Host "    Gathering $Name..." 
         $GetNetQosPolicy=Foreach ($key in ($SDDCFiles.keys -like "*GetNetQosPolicy")) {$SDDCFiles."$key"}
-        $GetNetQosPolicySMB=$GetNetQosPolicy| Where-Object{$_.Name -imatch "SMB"} |`
+        $GetNetQosPolicySMB=@($GetNetQosPolicy| Where-Object{$_.Name -imatch "SMB"} |`
             Select-Object PSComputerName,Name,`
                 @{Label='NetDirectPortMatchCondition';Expression={If($_.NetDirectPortMatchCondition -inotmatch '445'){"RREEDD"+$_.NetDirectPortMatchCondition}Else{$_.NetDirectPortMatchCondition}}},`
-                @{Label='PriorityValue8021Action';Expression={If($_.PriorityValue8021Action -inotmatch '3'){"RREEDD"+$_.PriorityValue8021Action}Else{$_.PriorityValue8021Action}}}
-        $GetNetQosPolicyCluster=$GetNetQosPolicy| Where-Object{$_.Name -eq "Cluster"} |`
+                @{Label='PriorityValue8021Action';Expression={If($_.PriorityValue8021Action -inotmatch '3'){"RREEDD"+$_.PriorityValue8021Action}Else{$_.PriorityValue8021Action}}})
+        $GetNetQosPolicyCluster=@($GetNetQosPolicy| Where-Object{$_.Name -eq "Cluster"} |`
             Select-Object PSComputerName,Name,`
                 @{Label='NetDirectPortMatchCondition';Expression={$_.NetDirectPortMatchCondition}},`
-                @{Label='PriorityValue8021Action';Expression={If($_.PriorityValue8021Action -inotmatch '5' -and $_.PriorityValue8021Action -inotmatch '7'){"RREEDD"+$_.PriorityValue8021Action}Else{$_.PriorityValue8021Action}}}
+                @{Label='PriorityValue8021Action';Expression={If($_.PriorityValue8021Action -inotmatch '5' -and $_.PriorityValue8021Action -inotmatch '7'){"RREEDD"+$_.PriorityValue8021Action}Else{$_.PriorityValue8021Action}}})
         
         $GetNetQosPolicyOut=$GetNetQosPolicySMB+$GetNetQosPolicyCluster
         #$GetNetQosPolicyOut | Format-Table -AutoSize
@@ -6679,11 +6749,11 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $Name="Net Qos Traffic Class"
         Write-Host "    Gathering $Name..." 
         $GetNetQosTrafficClass=Foreach ($key in ($SDDCFiles.keys -like "*GetNetQosTrafficClass")) {$SDDCFiles."$key" | Select *,@{L='ComputerName';E={$key -replace "GetNetQosTrafficClass","" }}}
-        $GetNetQosTrafficClassSMB=$GetNetQosTrafficClass| Where-Object{$_.Name -eq "SMB"}| Select-Object ComputerName,Name,`
+        $GetNetQosTrafficClassSMB=@($GetNetQosTrafficClass| Where-Object{$_.Name -eq "SMB"}| Select-Object ComputerName,Name,`
             @{Label='Priority';Expression={If($_.Priority -inotmatch '3'){"RREEDD"+$_.Priority}Else{$_.Priority}}},`
             @{Label='BandwidthPercentage';Expression={If($_.BandwidthPercentage -ne '50'){"RREEDD"+$_.BandwidthPercentage}Else{$_.BandwidthPercentage}}},`
-            @{Label='Algorithm';Expression={If($_.Algorithm -inotmatch '2' -and $_.Algorithm -inotmatch 'ETS'){"RREEDD"+$_.Algorithm}Else{$_.Algorithm}}}
-        $GetNetQosTrafficClassCluster=$GetNetQosTrafficClass| Where-Object{$_.Name -eq "Cluster"}| Select-Object ComputerName,Name,`
+            @{Label='Algorithm';Expression={If($_.Algorithm -inotmatch '2' -and $_.Algorithm -inotmatch 'ETS'){"RREEDD"+$_.Algorithm}Else{$_.Algorithm}}})
+        $GetNetQosTrafficClassCluster=@($GetNetQosTrafficClass| Where-Object{$_.Name -eq "Cluster"}| Select-Object ComputerName,Name,`
             @{Label='Priority';Expression={If($_.Priority -inotmatch '5' -and $_.Priority -inotmatch '7'){"RREEDD"+$_.Priority}Else{$_.Priority}}},`
 @{Label='BandwidthPercentage';Expression={
                 $StorageNicsLinkSpeed = ([regex]::Matches($StorageNics[0].linkspeed,'\d+')).value
@@ -6691,8 +6761,8 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                     IF($_.BandwidthPercentage -lt '2'){"RREEDD"+$_.BandwidthPercentage}}
                 ElseIf($StorageNicsLinkSpeed -ge "25"){
                     IF($_.BandwidthPercentage -lt '1'){"RREEDD"+$_.BandwidthPercentage}Else{$_.BandwidthPercentage}}}},`
-            @{Label='Algorithm';Expression={If($_.Algorithm -inotmatch '2' -and $_.Algorithm -inotmatch 'ETS'){"RREEDD"+$_.Algorithm}Else{$_.Algorithm}}}
-        $GetNetQosTrafficClassRest=$GetNetQosTrafficClass| Where-Object{$_.Name -ne "SMB" -and $_.Name -ne "Cluster"}| Select-Object ComputerName,Name,@{Label='Priority';Expression={$_.Priority}},BandwidthPercentage,Algorithm
+            @{Label='Algorithm';Expression={If($_.Algorithm -inotmatch '2' -and $_.Algorithm -inotmatch 'ETS'){"RREEDD"+$_.Algorithm}Else{$_.Algorithm}}})
+        $GetNetQosTrafficClassRest=@($GetNetQosTrafficClass| Where-Object{$_.Name -ne "SMB" -and $_.Name -ne "Cluster"}| Select-Object ComputerName,Name,@{Label='Priority';Expression={$_.Priority}},BandwidthPercentage,Algorithm)
 
         $GetNetQosTrafficClassOut=$GetNetQosTrafficClassSMB+$GetNetQosTrafficClassCluster+$GetNetQosTrafficClassRest
         #$GetNetQosTrafficClassOut | FT -AutoSize
@@ -7643,3 +7713,4 @@ $GetVMProcCount=Foreach ($key in ($SDDCFiles.keys -like "*GetVM" )) {
 
 }
 }
+
