@@ -26,6 +26,13 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/05/14:v1.85 -  1. New Update: TP - New version 1.85 DEV
+                        2. New Update: TP - If FLTMC driver company is Unknown, tries to find it on the MS altitudes page.
+                        3. Bug Fix: TP - Dell firmware failures were sorting incorrectly
+                        4. Bug Fix: TP - NetworkATC status enable nic message was getting false positives.
+                        5. Bug Fix: TP - AzStackHciEnvironmentChecker events were sorting incorrectly.
+                        6. New Feature: TP - Remove duplicate MSI@50342 error messages using regex.
+
     2026/04/16:v1.84 -  1. New Update: TP - New version 1.84 DEV
                         2. New Update: TP - In Network ATC, mark Errors as ok if last success is within 60 minutes of node's system local time.
                         3. Optimization: TP - Sped up Analyzing TSGs by 50%-90% by using Jobs
@@ -283,7 +290,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.84"
+$CluChkVer="1.85"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -4176,6 +4183,8 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
     $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md' target='_blank'>Ref: https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md</a></h5>"
     $URL="https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md"
     
+    $fltalt=(Invoke-RestMethod https://raw.githubusercontent.com/MicrosoftDocs/windows-driver-docs/staging/windows-driver-docs-pr/ifs/allocated-altitudes.md) -split ("`n") | Select-String -SimpleMatch '|'
+    $fltaltdr=$fltalt | %{$flt=$_ -split("\|");[PSCustomObject] @{Name=$flt[1];Company=$flt[3]}}
     # Added to process FLTMCXml files
     $FLTMCXmlLogs=@()
     $FLTMCXmlLogsFiles=Get-ChildItem -Path $SDDCPath -Filter "FLTMC.XML" -Recurse -Depth 1
@@ -4249,8 +4258,14 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
 
         $FilterDataOut = foreach ($item in $FLTMCXmlLogs) {
             
-            if ($item.company -eq "Unknown") {
-                $item.company = "YYEELLLLOOWWN" + $item.company
+            if ($item.company -match "Unknown") {
+                if (($fltaltdr.name -replace "\.x64","") -match $item.WindowsDriver) {
+                    $item.company=$fltaltdr | %{if ($_.Name -replace "\.x64","" -match "$($item.WindowsDriver)"){$_.Company}}
+                    If ($item.company.count -gt 1) {$item.company=$item.company[-1]}
+                    $item.company = "RREEDD" + $item.company
+                } else {
+                    $item.company = "YYEELLLLOOWW" + $item.company
+                }
             } elseif ($item.company -inotmatch "Microsoft") {
                 $item.company = "RREEDD" + $item.company
             }
@@ -5066,7 +5081,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
         $OSVersion=$OSVersionNodes
         $ReadySUs=$SolutionUpdates | ? State -notmatch "Installed|Obsolete"
         If ($SysInfo[0].AzureLocalVersion -gt "") {
-           $SupportedDate=Get-Date (Get-Date).AddMonths(-6) -Format "yyMM"
+           $SupportedDate=Get-Date (Get-Date).AddMonths(-7) -Format "yyMM"
            Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -ErrorAction Stop -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
            $SUVersions=(([xml](Get-Content $env:temp\outfile.xml)).ASZSolutionBundleUpdates.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} 
            if (([version]$SysInfo[0].AzureLocalVersion).major -ne '12' -and (Get-Date) -lt (Get-Date "10/10/2025")) {$SUVersions=$SUVersions | ? {([version]$_.Version).major -ne '12'}}
@@ -5659,7 +5674,8 @@ Unable to add KV info to
         $errors=@()
         $errors=(Get-ChildItem -Path $SDDCPath -Filter "AzStackHciEnvironmentChecker.EVTX" -Recurse -Depth 2) | %{(Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{ Path = "$($_.fullname)"; Level = 2})}
         $errors | %{$_.Message=$_.Properties.Value}
-        $errors=$errors | Sort TimeCreated -Descending | Sort Message -Unique
+        $errors=$errors | Select-Object MachineName,TimeCreated,Id,Message | Sort Timecreated
+        foreach ($err in $errors) {$err.Message=$err.Message -replace "ArcIntegration\\.*?\.",""} 
                ForEach ($thiserror in $errors) {
                     If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $thiserror.Message -match '(Invoke-AzStackHciSBEHealthValidation)|(integrity check)') -and !($SolutionUpdates.InstalledDate.Date -match $thiserror.TimeCreated.Date)) {
                         $resultObject +=     [PSCustomObject] @{
@@ -5695,14 +5711,14 @@ Unable to add KV info to
             }
         }
 
-        $errors=$errors | sort Timestamp -Descending | sort Target,Message -Unique | sort Timestamp -Descending | select -First 10
+        $errors=$errors | sort {Get-Date $_.TimeStamp} -Descending | sort Target,Message -Unique | sort {Get-Date $_.TimeStamp} -Descending | select -First 10
         $resultObject += $errors
         #>
-        $ActionPlanErrors=$resultObject | sort {Get-Date $_.TimeStamp} -Descending | sort Target,Message -Unique | sort {Get-Date $_.TimeStamp} -Descending
+        $ActionPlanErrors=$resultObject | Group-Object -Property Target,Message | %{$_.Group | sort {Get-Date $_.TimeStamp} -Descending | Select -First 1} | sort {Get-Date $_.TimeStamp} -Descending
         Foreach ($apfailure in $ActionPlanErrors) {
-            if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-4)) {
+            if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).Date.AddDays(-4)) {
                     $apfailure.Target="RREEDD" + $apfailure.Target
-            } elseif ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-8)) {
+            } elseif ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).Date.AddDays(-8)) {
                     $apfailure.Target="YYEELLLLOOWW" + $apfailure.Target
             }
         }
@@ -5877,6 +5893,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $Name="NetworkATC Status"
         Write-Host "    Gathering $Name..."
         $GetNetAdapterAll=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapter")) {$SDDCFiles."$key"}
+        $GetNetAdapterAll=$GetNetAdapterAll | select PSComputername,LinkSpeed,AdminStatus,InterfaceDescription,Name,@{L="Status";E={If ($_.status){$_.Status}else{$_.ifOperStatus}}},InterfaceIndex,VlanID
         $GetNetIntent=$SDDCFiles.GetNetIntent
         #$GetNetIntentStatusXml=""
         #$GetNetIntentStatusXml=$SDDCFiles."GetNetIntentStatus"
