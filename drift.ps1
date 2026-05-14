@@ -10,6 +10,7 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
+    2026/05/14:v1.78 -  1. Bug Fix: JG - Resolved the telemety errors and enabled again
     2026/03/11:v1.77 -  1. Bug Fix: JG - Resolved the telemety errors and enabled again
                         2. New Feature: JG - Added a Write-Indent function with number of indents and color.
                                                 Ex. Write-Indent "Telemetry recorded successfully" 1 Green
@@ -87,7 +88,7 @@ IF(!($args)){
     Remove-Variable * -ErrorAction SilentlyContinue
 }
 [system.gc]::Collect()
-$DriFTVer="DriFT_v1.77"
+$DriFTVer="DriFT_v1.78"
 $DirFTV=$DriFTVer.Split("v")
 $DFTV=$DirFTV[1]
 
@@ -2482,13 +2483,13 @@ $KBDLUriSource = [GetKBDLLink]::GetDownloadLink($KBLatest.KBNumber,$OSType)
      $allArray=@()
 }
 
-# Upload report data to Azure
+<# Upload report data to Azure
 ForEach($row in $allArrayout){
     $RowData=$row|Select-Object @{Label="ReportID";Expression={"$DReportID"}},PowerEdge,OS,Type,Category,Name,InstalledVersion,AvailableVersion,CatalogInfo,Criticality,ReleaseDate,URL,Details
     
     add-TableData -TableName "DriFTReportData" -PartitionKey "DriFT" -RowKey (new-guid).guid -data $RowData -sasWriteToken '?SECRET REMOVED'
     }
-
+#>
 
 $DateTime=Get-date
 $DTString=Get-Date -Format "yyyyMMdd_HHmmss_"
