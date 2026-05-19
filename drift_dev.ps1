@@ -10,11 +10,8 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
-    2026/05/19:v1.79 -  1. New Feature: JG - Added 15G support    
+    2026/05/14:v1.79DEV -  1. New Feature: JG - Added 17G support    
     2026/05/14:v1.78 -  1. Bug Fix: JG - Resolved the telemety errors and enabled again
-    2026/03/11:v1.77 -  1. Bug Fix: JG - Resolved the telemety errors and enabled again
-                        2. New Feature: JG - Added a Write-Indent function with number of indents and color.
-                                                Ex. Write-Indent "Telemetry recorded successfully" 1 Green
     
     See older version for previous notes
 #>
@@ -47,7 +44,7 @@ Function EndScript{
     break
 }
 $WhatsNew=@"
-    
+    1. Bug Fix: TP - Fixed MS latest updates by copying and converting it from CluChk
 "@
 
 If(!($args)){Clear-Host}
@@ -302,10 +299,22 @@ If($LocCabSize -eq "1"){
 }
 
 #Check/Create temp DIR 
-# Use a short, unique workspace. 17G Redfish paths are deep and Windows PowerShell 5.1 can hit MAX_PATH under %TEMP%\DriFT.
-$DriFTRunRoot = Join-Path $env:SystemDrive ("DriFT_" + ([guid]::NewGuid().Guid.Substring(0,8)))
+# Clean build workspace. All temporary/extracted files stay under %TEMP%\DriFT.
+$DriFTTempRoot = Join-Path $env:TEMP "DriFT"
+$DriFTExtractRoot = Join-Path $DriFTTempRoot "Extract"
+$DriFTRedfishRoot = Join-Path $DriFTTempRoot "Redfish"
+$DriFTCatalogRoot = Join-Path $DriFTTempRoot "Catalog"
+$DriFTWorkRoot = Join-Path $DriFTTempRoot "Work"
+
+foreach ($DriFTPath in @($DriFTTempRoot,$DriFTExtractRoot,$DriFTRedfishRoot,$DriFTCatalogRoot,$DriFTWorkRoot)) {
+    if (-not (Test-Path $DriFTPath -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $DriFTPath | Out-Null
+    }
+}
+
+$DriFTRunRoot = Join-Path $DriFTExtractRoot ("Run_" + ([guid]::NewGuid().Guid.Substring(0,8)))
 $ExtracLoc = $DriFTRunRoot
-if (!(Test-Path $ExtracLoc -PathType Container)) {New-Item -ItemType Directory -Force -Path $ExtracLoc}
+if (!(Test-Path $ExtracLoc -PathType Container)) {New-Item -ItemType Directory -Force -Path $ExtracLoc | Out-Null}
 
 #Extract the cab
 Write-host "Extracting Catalog.xml from CAB...."
@@ -370,51 +379,13 @@ Function Export-DriFT17GDebug {
         [AllowNull()][object]$InputObject
     )
 
-    $DebugOutPath = Join-Path $env:TEMP "DriFT_17G_Debug"
-    if (-not (Test-Path $DebugOutPath -PathType Container)) {
-        New-Item -ItemType Directory -Force -Path $DebugOutPath | Out-Null
+    # Debug exports are disabled in the clean build.
+    # Keep this function as a no-op so any remaining calls do not fail.
+    $DriFTTempRoot = Join-Path $env:TEMP "DriFT"
+    if (-not (Test-Path $DriFTTempRoot -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $DriFTTempRoot | Out-Null
     }
-
-    $OutFile = Join-Path $DebugOutPath $Name
-
-    function Write-DriFT17GDebugFile {
-        param(
-            [Parameter(Mandatory=$true)][string]$Path,
-            [AllowNull()][object]$Data,
-            [Parameter(Mandatory=$true)][string]$OriginalName
-        )
-
-        if ($null -eq $Data) {
-            "No data / null object" | Out-File -FilePath $Path -Force
-        }
-        elseif ($OriginalName -match '\.csv$') {
-            @($Data) | Export-Csv -Path $Path -NoTypeInformation -Force
-        }
-        else {
-            @($Data) | Out-File -FilePath $Path -Force
-        }
-    }
-
-    try {
-        Write-DriFT17GDebugFile -Path $OutFile -Data $InputObject -OriginalName $Name
-    }
-    catch {
-        # If the previous debug CSV is open in Excel or locked by another run, write a unique copy instead of failing.
-        $BaseName = [System.IO.Path]::GetFileNameWithoutExtension($Name)
-        $Ext = [System.IO.Path]::GetExtension($Name)
-        $UniqueName = "{0}_{1:yyyyMMdd_HHmmss}_{2}{3}" -f $BaseName, (Get-Date), ([guid]::NewGuid().Guid.Substring(0,6)), $Ext
-        $UniqueOutFile = Join-Path $DebugOutPath $UniqueName
-
-        try {
-            Write-DriFT17GDebugFile -Path $UniqueOutFile -Data $InputObject -OriginalName $Name
-            Write-Host "    WARNING: Debug file was locked, wrote unique debug file instead: $UniqueOutFile" -ForegroundColor Yellow
-        }
-        catch {
-            Write-Host "    WARNING: Failed to write 17G debug file $OutFile : $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-
-    return $DebugOutPath
+    return $DriFTTempRoot
 }
 
 Function Get-DriFTComparableText {
@@ -688,7 +659,7 @@ Function Expand-DriFT17GRedfishWalk {
     # Extract the Redfish walk outside the TSR tree and use a very short folder name.
     # The Redfish archive contains deeply nested paths; extracting under the TSR folder
     # can push Windows PowerShell 5.1 over MAX_PATH during later recursive searches.
-    $ShortRoot = Join-Path $env:SystemDrive "DF17G"
+    $ShortRoot = Join-Path (Join-Path $env:TEMP "DriFT") "Redfish"
     if (-not (Test-Path $ShortRoot -PathType Container)) { New-Item -ItemType Directory -Force -Path $ShortRoot | Out-Null }
     $RedfishExtractRoot = Join-Path $ShortRoot (([guid]::NewGuid().Guid).Substring(0,8))
     New-Item -ItemType Directory -Force -Path $RedfishExtractRoot | Out-Null
@@ -1249,7 +1220,7 @@ Function Import-DriFT17GRedfishRoot {
     Export-DriFT17GDebug -Name "DriFT_17G_PCI_Correlation_Debug.csv" -InputObject $PciCorrelationDebug | Out-Null
     Export-DriFT17GDebug -Name "DriFT_17G_InstalledHardwareUnique_Debug.csv" -InputObject $FirmwareRows | Out-Null
 
-    Write-Host "    17G debug export path: $DebugPath"
+    
 
     [PSCustomObject]@{
         ExtractedPath = $RedfishRoot
@@ -1266,7 +1237,7 @@ Function Expand-DriFT17GViewerHtmlRedfishWalk {
         [Parameter(Mandatory=$true)][string]$ViewerHtmlPath
     )
 
-    $ShortRoot = Join-Path $env:SystemDrive "DF17G"
+    $ShortRoot = Join-Path (Join-Path $env:TEMP "DriFT") "Redfish"
     if (-not (Test-Path $ShortRoot -PathType Container)) { New-Item -ItemType Directory -Force -Path $ShortRoot | Out-Null }
     $RedfishExtractRoot = Join-Path $ShortRoot (([guid]::NewGuid().Guid).Substring(0,8))
     New-Item -ItemType Directory -Force -Path $RedfishExtractRoot | Out-Null
@@ -1732,18 +1703,21 @@ IF(-not($TSRInputFiles)){
 }
 
 #Extraction temp location
-# Keep using the short per-run workspace created above. Do not reuse %TEMP%\DriFT,
-# because stale extracted 17G Redfish folders can exceed MAX_PATH during cleanup/scans.
-if (-not $DriFTRunRoot) { $DriFTRunRoot = Join-Path $env:SystemDrive ("DriFT_" + ([guid]::NewGuid().Guid.Substring(0,8))) }
-$ExtracLoc = $DriFTRunRoot
-if (Test-Path $ExtracLoc -PathType Container){
-    try { Remove-Item $ExtracLoc -Recurse -Force -ErrorAction Stop | Out-Null }
-    catch {
-        Write-Host "    WARNING: Failed to clean DriFT workspace $ExtracLoc. Creating a new short workspace." -ForegroundColor Yellow
-        $DriFTRunRoot = Join-Path $env:SystemDrive ("DriFT_" + ([guid]::NewGuid().Guid.Substring(0,8)))
-        $ExtracLoc = $DriFTRunRoot
+# Clean workspace under %TEMP%\DriFT for each run.
+$DriFTTempRoot = Join-Path $env:TEMP "DriFT"
+$DriFTExtractRoot = Join-Path $DriFTTempRoot "Extract"
+$DriFTRedfishRoot = Join-Path $DriFTTempRoot "Redfish"
+$DriFTCatalogRoot = Join-Path $DriFTTempRoot "Catalog"
+$DriFTWorkRoot = Join-Path $DriFTTempRoot "Work"
+
+foreach ($DriFTPath in @($DriFTTempRoot,$DriFTExtractRoot,$DriFTRedfishRoot,$DriFTCatalogRoot,$DriFTWorkRoot)) {
+    if (-not (Test-Path $DriFTPath -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $DriFTPath | Out-Null
     }
 }
+
+$DriFTRunRoot = Join-Path $DriFTExtractRoot ("Run_" + ([guid]::NewGuid().Guid.Substring(0,8)))
+$ExtracLoc = $DriFTRunRoot
 if (!(Test-Path $ExtracLoc -PathType Container)) {New-Item -ItemType Directory -Force -Path $ExtracLoc | Out-Null }
 
 #TSR unzip files
@@ -3872,7 +3846,7 @@ IF(Test-Path $ExtracLoc){
     try { Remove-Item $ExtracLoc -Recurse -Force -ErrorAction Stop }
     catch { Write-Host "    WARNING: Failed to remove temp workspace $ExtracLoc. It can be deleted manually." -ForegroundColor Yellow }
 }
-IF(Test-Path (Join-Path $env:SystemDrive "DF17G")){
-    try { Remove-Item (Join-Path $env:SystemDrive "DF17G") -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+IF(Test-Path (Join-Path (Join-Path $env:TEMP "DriFT") "Redfish")){
+    try { Remove-Item (Join-Path (Join-Path $env:TEMP "DriFT") "Redfish") -Recurse -Force -ErrorAction SilentlyContinue } catch {}
 }
 }
