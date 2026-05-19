@@ -10,7 +10,7 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
-    2026/05/14:v1.79DEV -  1. New Feature: JG - Added 17G support    
+    2026/05/19:v1.79DEV -  1. New Feature: JG - Added 17G support    
     2026/05/14:v1.78 -  1. Bug Fix: JG - Resolved the telemety errors and enabled again
     
     See older version for previous notes
@@ -44,6 +44,7 @@ Function EndScript{
     break
 }
 $WhatsNew=@"
+
 "@
 
 If(!($args)){Clear-Host}
