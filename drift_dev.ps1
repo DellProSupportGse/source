@@ -44,7 +44,6 @@ Function EndScript{
     break
 }
 $WhatsNew=@"
-    1. Bug Fix: TP - Fixed MS latest updates by copying and converting it from CluChk
 "@
 
 If(!($args)){Clear-Host}
