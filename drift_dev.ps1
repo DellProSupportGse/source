@@ -4219,6 +4219,7 @@ function Write-DriFTHtmlReport {
       <div class="drift-meta-row"><span>Service Tag(s)</span><strong>$reportTags</strong></div>
       <div class="drift-meta-row"><span>Version</span><strong>$($Context.Version)</strong></div>
       <div class="drift-meta-row"><span>Platform</span><strong>$($Context.Platform.Type)</strong></div>
+      <div class="drift-meta-row"><span>Model</span><strong>$($System.PowerEdge)</strong></div>
     </div>
   </section>
 
