@@ -4191,6 +4191,17 @@ function Write-DriFTHtmlReport {
     $reportTags = (@(@($Context.ServiceTags)) | Sort-Object -Unique) -join ', '
     if ([string]::IsNullOrWhiteSpace($reportTags)) { $reportTags = 'Not Available' }
 
+    $reportOs = Get-DriFTFirstNonEmpty `
+        ($Rows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.OS) } | Select-Object -First 1 -ExpandProperty OS) `
+        $OperatingSystem.DisplayName `
+        $OperatingSystem.RawName `
+        'Not Available'
+
+    $reportOsVersion = Get-DriFTFirstNonEmpty $OperatingSystem.Version
+    if (-not [string]::IsNullOrWhiteSpace($reportOsVersion) -and $reportOs -notmatch [regex]::Escape($reportOsVersion)) {
+        $reportOs = "$reportOs $reportOsVersion".Trim()
+    }
+
     $pre = @"
 <div class="drift-shell">
   <header class="drift-topbar">
@@ -4220,6 +4231,7 @@ function Write-DriFTHtmlReport {
       <div class="drift-meta-row"><span>Version</span><strong>$($Context.Version)</strong></div>
       <div class="drift-meta-row"><span>Platform</span><strong>$($Context.Platform.Type)</strong></div>
       <div class="drift-meta-row"><span>Model</span><strong>$($System.PowerEdge)</strong></div>
+      <div class="drift-meta-row"><span>Operating System</span><strong>$reportOs</strong></div>
     </div>
   </section>
 
@@ -4253,7 +4265,7 @@ function Write-DriFTHtmlReport {
     else {
         $htmlRows = $Rows |
             Sort-Object ServiceTag,PowerEdge,Type,Category |
-            Select-Object ServiceTag,PowerEdge,OS,Type,Category,Name,InstalledVersion,AvailableVersion,CatalogInfo,Criticality,ReleaseDate,
+            Select-Object Type,Category,Name,InstalledVersion,AvailableVersion,CatalogInfo,Criticality,ReleaseDate,
                 @{Label='Documentation';Expression={ New-DriFTHtmlLink -Url $_.Details -Text 'Link' }},
                 @{Label='Download Link';Expression={ New-DriFTHtmlLink -Url $_.URL -Text $_.URL }}
     }
@@ -4484,6 +4496,8 @@ table {
 }
 
 th {
+    cursor: pointer;
+    user-select: none;
     position: sticky;
     top: 0;
     z-index: 2;
@@ -4496,6 +4510,23 @@ th {
     font-weight: 700;
     text-transform: none;
     white-space: nowrap;
+}
+
+th::after {
+    content: " ⇅";
+    color: #8a8a8a;
+    font-size: 10px;
+    font-weight: 400;
+}
+
+th.sort-asc::after {
+    content: " ▲";
+    color: var(--dell-blue);
+}
+
+th.sort-desc::after {
+    content: " ▼";
+    color: var(--dell-blue);
 }
 
 td {
@@ -4622,6 +4653,128 @@ body > br:last-of-type {
     }
 }
 </style>
+
+<script type="text/javascript">
+document.addEventListener("DOMContentLoaded", function () {
+    const table = document.querySelector("table");
+    if (!table) { return; }
+
+    const headers = Array.from(table.querySelectorAll("th"));
+
+    function normalizeText(value) {
+        return (value || "").replace(/\s+/g, " ").trim();
+    }
+
+    function criticalityRank(value) {
+        const v = normalizeText(value).toLowerCase();
+        if (v.includes("urgent")) { return 1; }
+        if (v.includes("recommended")) { return 2; }
+        if (v.includes("optional")) { return 3; }
+        if (v.includes("not available") || v.includes("no data")) { return 4; }
+        return 5;
+    }
+
+    function parseVersion(value) {
+        const text = normalizeText(value);
+        const matches = text.match(/\d+|[a-zA-Z]+/g);
+        if (!matches) { return null; }
+
+        return matches.map(part => {
+            const n = Number(part);
+            return Number.isNaN(n) ? part.toLowerCase() : n;
+        });
+    }
+
+    function compareVersionLike(a, b) {
+        const av = parseVersion(a);
+        const bv = parseVersion(b);
+        if (!av || !bv) { return null; }
+
+        const max = Math.max(av.length, bv.length);
+        for (let i = 0; i < max; i++) {
+            const x = av[i] ?? 0;
+            const y = bv[i] ?? 0;
+
+            if (typeof x === "number" && typeof y === "number") {
+                if (x !== y) { return x - y; }
+            }
+            else {
+                const sx = String(x);
+                const sy = String(y);
+                if (sx !== sy) { return sx.localeCompare(sy); }
+            }
+        }
+
+        return 0;
+    }
+
+    function getCellValue(row, index) {
+        const cell = row.children[index];
+        return cell ? normalizeText(cell.innerText || cell.textContent) : "";
+    }
+
+    function sortTable(index, direction) {
+        const tbody = table.tBodies[0] || table;
+        const rows = Array.from(tbody.querySelectorAll("tr")).filter(row => row.querySelectorAll("td").length > 0);
+        const headerText = normalizeText(headers[index].innerText).toLowerCase();
+
+        rows.sort((rowA, rowB) => {
+            const a = getCellValue(rowA, index);
+            const b = getCellValue(rowB, index);
+
+            let result = 0;
+
+            if (headerText === "criticality") {
+                result = criticalityRank(a) - criticalityRank(b);
+            }
+            else if (headerText.includes("date")) {
+                const da = Date.parse(a);
+                const db = Date.parse(b);
+                if (!Number.isNaN(da) && !Number.isNaN(db)) {
+                    result = da - db;
+                }
+                else {
+                    result = a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+                }
+            }
+            else if (headerText.includes("version")) {
+                const versionCompare = compareVersionLike(a, b);
+                result = versionCompare === null ? a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }) : versionCompare;
+            }
+            else {
+                result = a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+            }
+
+            return direction === "asc" ? result : -result;
+        });
+
+        headers.forEach(h => h.classList.remove("sort-asc", "sort-desc"));
+        headers[index].classList.add(direction === "asc" ? "sort-asc" : "sort-desc");
+
+        rows.forEach(row => tbody.appendChild(row));
+    }
+
+    headers.forEach((header, index) => {
+        header.setAttribute("title", "Click to sort");
+        header.addEventListener("click", function () {
+            const current = header.getAttribute("data-sort-direction") || "none";
+            const next = current === "asc" ? "desc" : "asc";
+
+            headers.forEach(h => h.removeAttribute("data-sort-direction"));
+            header.setAttribute("data-sort-direction", next);
+
+            sortTable(index, next);
+        });
+    });
+
+    const criticalityIndex = headers.findIndex(h => normalizeText(h.innerText).toLowerCase() === "criticality");
+    if (criticalityIndex >= 0) {
+        headers[criticalityIndex].setAttribute("data-sort-direction", "asc");
+        sortTable(criticalityIndex, "asc");
+    }
+});
+</script>
+
 <title>DriFT v2.00DEV Report</title>
 "@
 }
