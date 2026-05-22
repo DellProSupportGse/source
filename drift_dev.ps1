@@ -1,28 +1,43 @@
 <#
 .SYNOPSIS
-    DriFT - Driver and Firmware Tool rewrite foundation.
+    DriFT 2.0 - Driver and Firmware Tool.
 
 .DESCRIPTION
-    This rewrite keeps the public Invoke-RunDriFT entry point so the tool can still be
-    launched directly from GitHub one-liners, but restructures the internals into
-    documented functions.
+    DriFT 2.0 analyzes Dell support collections and compares installed firmware,
+    drivers, BIOS, operating system updates, and platform-specific compatibility data
+    against the appropriate Dell catalog source.
 
-    Phase 1 goals:
-      - Preserve Invoke-RunDriFT.
-      - Keep support paths for legacy 16G and older TSR XML, SAE XML, and 17G Redfish.
-      - Normalize all inventory sources into one object shape.
-      - Isolate catalog, parser, matching, reporting, telemetry, and cleanup logic.
-      - Make troubleshooting easier with stage-based debug exports.
+    The public Invoke-RunDriFT entry point is preserved so DriFT can still be launched
+    directly from GitHub one-liners, while the internal engine is organized into
+    documented functions for extraction, platform detection, inventory normalization,
+    catalog loading, matching, reporting, telemetry, debug export, and cleanup.
+
+    Supported collection and platform paths include:
+      - 17G SupportAssist / TSR collections using Redfish inventory data.
+      - Legacy 16G and older TSR collections using DCIM SoftwareIdentity XML.
+      - DSET collections that predate TSR, including password-protected DSET ZIPs.
+      - PowerEdge server catalog matching through Dell Catalog.xml.
+      - AX / Azure Stack HCI systems using ASHCI-Catalog.xml first, with Catalog.xml fallback.
+      - VMware ESXi and vSAN systems with Broadcom Compatibility Guide driver links.
+      - Precision workstation first-pass support through Precision-aware platform detection.
+      - Cluster comparison reporting with one installed-version column per node.
+
+    DriFT 2.0 normalizes every inventory source into a common object model before
+    matching so report generation is consistent across generations and collection
+    formats.
 
 .NOTES
-    This is a rewrite foundation. The legacy extraction/matching bodies should be ported
-    from the current production script function-by-function, validating report output
-    after each port.
-#>
+    Temporary working files, extracted collections, catalog files, logs, and debug
+    exports are stored under %TEMP%\DriFT by default.
 
-# Set-StrictMode is intentionally disabled during parser rewrite.
-# 17G Redfish and metadata.json objects have optional fields, and StrictMode
-# turns harmless missing properties into terminating parser errors.
+    Use -ExportDebugData to export stage-level CSV files such as normalized inventory,
+    catalog matches, PCI identity data, and VMware/Broadcom compatibility lookup input.
+
+    Set-StrictMode is intentionally not enabled because TSR, DSET, Redfish, catalog,
+    and metadata objects all contain optional or generation-specific fields. Treating
+    missing optional properties as terminating errors would make parser behavior less
+    reliable across mixed Dell collection formats.
+#>
 Set-StrictMode -Off
 
 #region Constants / Types
@@ -357,11 +372,11 @@ function Write-DriFTBanner {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Context)
 
-$text = @"
-v$($Context.DisplayVer)
+$VerLine = "|v$($Context.DisplayVer)"+" "*(43-$($Context.DisplayVer).length)+"|"
 
+$text = @"
 +--------------------------------------------+
-|                                            |
+$VerLine 
 |          __   __     ___ ___               |
 |         |  \ |__) | |__   |                |
 |         |__/ |  \ | |     |                |
@@ -4208,7 +4223,7 @@ function Write-DriFTHtmlReport {
     <div class="drift-brand">
       <div class="drift-logo">DriFT</div>
       <div>
-        <div class="drift-title">DriFT v$($Context.DisplayVer)</div>
+        <div class="drift-title">v$($Context.DisplayVer)</div>
         <div class="drift-subtitle">Driver & Firmware Tool</div>
       </div>
     </div>
@@ -4221,14 +4236,13 @@ function Write-DriFTHtmlReport {
 
   <section class="drift-hero">
     <div>
-      <div class="drift-eyebrow">Dell Support Style Report</div>
+      <div class="drift-eyebrow">Dell Support Report</div>
       <h1>Driver and firmware drift summary</h1>
       <p>Review applicable firmware, driver, catalog, and OS update recommendations for the selected SupportAssist collection.</p>
     </div>
     <div class="drift-meta-card">
       <div class="drift-meta-row"><span>Generated</span><strong>$generatedAt</strong></div>
       <div class="drift-meta-row"><span>Service Tag(s)</span><strong>$reportTags</strong></div>
-      <div class="drift-meta-row"><span>Version</span><strong>$($Context.Version)</strong></div>
       <div class="drift-meta-row"><span>Platform</span><strong>$($Context.Platform.Type)</strong></div>
       <div class="drift-meta-row"><span>Model</span><strong>$($System.PowerEdge)</strong></div>
       <div class="drift-meta-row"><span>Operating System</span><strong>$reportOs</strong></div>
@@ -4775,7 +4789,7 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 
-<title>DriFT v2.00DEV Report</title>
+<title>DriFT Report</title>
 "@
 }
 
