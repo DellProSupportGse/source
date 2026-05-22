@@ -191,6 +191,14 @@ function Invoke-RunDriFT {
 
             foreach ($row in @($reportRows)) { if ($null -ne $row) { $allReportRows += @($row) } }
 
+            $unmatchedPciRows = New-DriFTUnmatchedPciReportRows `
+                -Matches $matches `
+                -System $system `
+                -OperatingSystem $os `
+                -Context $ctx
+
+            foreach ($row in @($unmatchedPciRows)) { if ($null -ne $row) { $allReportRows += @($row) } }
+
             if ($os.Family -eq 'Windows') {
                 $driverRows = Add-DriFTWindowsDriverRows `
                     -Inventory $inventory `
@@ -2125,14 +2133,7 @@ function Get-DriFT17GSystemIdentity {
 }
 
 function Get-DriFT17GOperatingSystem {
-<#
-.SYNOPSIS
-    Gets 17G operating system data.
 
-.DESCRIPTION
-    Uses metadata.json first, then Redfish System object fallback. If no OS is present,
-    DriFT preserves legacy behavior of assuming Windows 64-bit for firmware/driver cataloging.
-#>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Collection,
@@ -2140,8 +2141,38 @@ function Get-DriFT17GOperatingSystem {
     )
 
     $metadata = Get-DriFTMetadataJson -Root $Collection.Root
-    $osName = Get-DriFTFirstNonEmpty (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'OSName') (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'OperatingSystem')
-    return ConvertTo-DriFTOperatingSystemInfo -OSName $osName -OSVersion ''
+
+    $osName = Get-DriFTFirstNonEmpty `
+        (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'OSName') `
+        (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'OperatingSystem')
+
+    #
+    # IMPORTANT:
+    # If 17G metadata.json does not contain OS information,
+    # suppress all OS-dependent matching (drivers, VMware, Microsoft Update).
+    #
+    if ([string]::IsNullOrWhiteSpace($osName)) {
+
+        Write-DriFTLog `
+            -Context $Context `
+            -Message '17G metadata.json did not contain OS information. Driver and OS update matching will be skipped.' `
+            -Level Warn `
+            -Indent 1
+
+        return New-DriFTOperatingSystemInfo `
+            -RawName '' `
+            -Family '' `
+            -DisplayName 'NO OS Detected in TSR Data' `
+            -Version '' `
+            -CatalogPackageType 'LW64' `
+            -MajorVersion 0 `
+            -MinorVersion 0 `
+            -DriverSupport $false
+    }
+
+    return ConvertTo-DriFTOperatingSystemInfo `
+        -OSName $osName `
+        -OSVersion ''
 }
 
 function Expand-DriFT17GRedfishWalk {
@@ -2409,10 +2440,28 @@ function Get-DriFT17GPciIdentityRows {
         $odataType = [string]$json.'@odata.type'
         $pathText = [string]$jsonFile.FullName
 
-        $vendorId = Get-DriFTFirstNonEmpty $json.VendorId $json.VendorID $json.PciVendorId $json.PCIVendorID $json.Oem.Dell.VendorId $json.Oem.Dell.VendorID
-        $deviceId = Get-DriFTFirstNonEmpty $json.DeviceId $json.DeviceID $json.PciDeviceId $json.PCIDeviceID $json.Oem.Dell.DeviceId $json.Oem.Dell.DeviceID
-        $subVendorId = Get-DriFTFirstNonEmpty $json.SubsystemVendorId $json.SubsystemVendorID $json.SubVendorId $json.SubVendorID $json.PciSubVendorId $json.PCISubVendorID $json.Oem.Dell.SubsystemVendorId $json.Oem.Dell.SubsystemVendorID $json.Oem.Dell.SubVendorID
-        $subDeviceId = Get-DriFTFirstNonEmpty $json.SubsystemId $json.SubsystemID $json.SubsystemDeviceId $json.SubsystemDeviceID $json.SubDeviceId $json.SubDeviceID $json.PciSubDeviceId $json.PCISubDeviceID $json.Oem.Dell.SubsystemId $json.Oem.Dell.SubsystemID $json.Oem.Dell.SubDeviceID
+        $dellNic = $json.Oem.Dell.DellNIC
+        $dellPcieFunction = $json.Oem.Dell.DellPCIeFunction
+
+        $vendorId = Get-DriFTFirstNonEmpty `
+            $json.VendorId $json.VendorID $json.PciVendorId $json.PCIVendorID $json.PCIVendorId $json.PCIVendorID `
+            $json.Oem.Dell.VendorId $json.Oem.Dell.VendorID $json.Oem.Dell.PCIVendorID $json.Oem.Dell.PCIVendorId `
+            $dellNic.PCIVendorID $dellNic.PCIVendorId $dellPcieFunction.PCIVendorID $dellPcieFunction.PCIVendorId
+
+        $deviceId = Get-DriFTFirstNonEmpty `
+            $json.DeviceId $json.DeviceID $json.PciDeviceId $json.PCIDeviceID $json.PCIDeviceId $json.PCIDeviceID `
+            $json.Oem.Dell.DeviceId $json.Oem.Dell.DeviceID $json.Oem.Dell.PCIDeviceID $json.Oem.Dell.PCIDeviceId `
+            $dellNic.PCIDeviceID $dellNic.PCIDeviceId $dellPcieFunction.PCIDeviceID $dellPcieFunction.PCIDeviceId
+
+        $subVendorId = Get-DriFTFirstNonEmpty `
+            $json.SubsystemVendorId $json.SubsystemVendorID $json.SubVendorId $json.SubVendorID $json.PciSubVendorId $json.PCISubVendorID $json.PCISubVendorId $json.PCISubVendorID `
+            $json.Oem.Dell.SubsystemVendorId $json.Oem.Dell.SubsystemVendorID $json.Oem.Dell.SubVendorID $json.Oem.Dell.PCISubVendorID $json.Oem.Dell.PCISubVendorId `
+            $dellNic.PCISubVendorID $dellNic.PCISubVendorId $dellPcieFunction.PCISubVendorID $dellPcieFunction.PCISubVendorId
+
+        $subDeviceId = Get-DriFTFirstNonEmpty `
+            $json.SubsystemId $json.SubsystemID $json.SubsystemDeviceId $json.SubsystemDeviceID $json.SubDeviceId $json.SubDeviceID $json.PciSubDeviceId $json.PCISubDeviceID $json.PCISubDeviceId $json.PCISubDeviceID `
+            $json.Oem.Dell.SubsystemId $json.Oem.Dell.SubsystemID $json.Oem.Dell.SubDeviceID $json.Oem.Dell.PCISubDeviceID $json.Oem.Dell.PCISubDeviceId `
+            $dellNic.PCISubDeviceID $dellNic.PCISubDeviceId $dellPcieFunction.PCISubDeviceID $dellPcieFunction.PCISubDeviceId
 
         $identityMatchFound = $false
         if ($json.IdentityInfoType -and $json.IdentityInfoValue) {
@@ -2459,6 +2508,29 @@ function Get-DriFT17GPciIdentityRows {
             OdataId     = [string]$json.'@odata.id'
             Id          = [string]$json.Id
             Name        = [string]$json.Name
+            Description = [string](Get-DriFTFirstNonEmpty `
+                $json.ElementName `
+                $json.Description `
+                $json.DeviceDescription `
+                $json.Model `
+                $json.ProductName `
+                $json.Oem.Dell.ElementName `
+                $json.Oem.Dell.Description `
+                $json.Oem.Dell.DeviceDescription `
+                $json.Oem.Dell.ProductName `
+                $json.Name)
+            IdentityInfoValue = [string](@($json.IdentityInfoValue | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -First 1))
+            PartNumber  = [string](Get-DriFTFirstNonEmpty `
+                $json.PartNumber `
+                $json.PartNumberString `
+                $json.SparePartNumber `
+                $json.Oem.Dell.PartNumber `
+                $json.Oem.Dell.SparePartNumber `
+                $json.Oem.Dell.MMPartNumber `
+                $json.Oem.Dell.ManufacturerPartNumber)
+            SerialNumber = [string](Get-DriFTFirstNonEmpty `
+                $json.SerialNumber `
+                $json.Oem.Dell.SerialNumber)
             FQDD        = [string]$fqdd
             SoftwareId  = [string]$json.SoftwareId
             OdataType   = $odataType
@@ -2510,7 +2582,7 @@ function Add-DriFT17GPciIdentityToFirmwareRows {
             $source = 'RedfishFirmwareInventory+PCI'
         }
 
-        $rows += @((New-DriFTInventoryItem `
+        $item = New-DriFTInventoryItem `
             -SourceGeneration '17G' `
             -ComponentType $fw.ComponentType `
             -ComponentID $fw.ComponentID `
@@ -2522,7 +2594,26 @@ function Add-DriFT17GPciIdentityToFirmwareRows {
             -Display $fw.Display `
             -ElementName $fw.ElementName `
             -RelatedItem $fw.RelatedItem `
-            -Source $source))
+            -Source $source
+
+        if ($pci) {
+            foreach ($extra in @(
+                @{ Name = 'OriginalElementName'; Value = (Get-DriFTFirstNonEmpty $pci.Description $pci.Name) },
+                @{ Name = 'OriginalId';          Value = $pci.Id },
+                @{ Name = 'IdentityInfoValue';   Value = $pci.IdentityInfoValue },
+                @{ Name = 'Description';         Value = (Get-DriFTFirstNonEmpty $pci.Description $pci.Name) },
+                @{ Name = 'PartNumber';          Value = $pci.PartNumber },
+                @{ Name = 'SerialNumber';        Value = $pci.SerialNumber },
+                @{ Name = 'FQDD';                Value = $pci.FQDD },
+                @{ Name = 'PciSourceFile';       Value = $pci.SourceFile }
+            )) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$extra.Value)) {
+                    $item | Add-Member -MemberType NoteProperty -Name $extra.Name -Value ([string]$extra.Value) -Force
+                }
+            }
+        }
+
+        $rows += @($item)
     }
 
     return @($rows)
@@ -2570,7 +2661,7 @@ function Find-DriFT17GPciRecordForFirmware {
                 ($_.VendorID -or $_.DeviceID -or $_.SubVendorID -or $_.SubDeviceID) -and
                 (
                     ($_.FQDD -imatch "^$escapedBase(?:-|$)") -or
-                    ($_.Id -imatch "DCIM_CURRENT.*$escapedBase(?:-|$)") -or
+                    ($_.Id -imatch "DCIM[:_](CURRENT|INSTALLED).*$escapedBase(?:-|$)") -or
                     ($_.KeyText -imatch "(^|\|)$escapedBase(?:-|\||$)")
                 )
             } | Sort-Object FQDD | Select-Object -First 1
@@ -4079,6 +4170,140 @@ function New-DriFTReportRows {
 }
 
 
+
+function New-DriFTUnmatchedPciReportRows {
+<#
+.SYNOPSIS
+    Creates manual-check rows for installed PCI devices not found in the catalog.
+
+.DESCRIPTION
+    Some 17G Redfish/viewer.html collections expose valid PCI identity data for a
+    device, but the filtered Dell catalog may not contain a matching SoftwareComponent
+    or PCIInfo entry. Rather than silently dropping those devices, this adds an INFO
+    row to the report so the PCI identity and all useful discovered device details
+    can be manually checked against Dell Catalog.xml, ASHCI-Catalog.xml, BCG, or
+    other sources.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][AllowEmptyCollection()][object[]]$Matches,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $rows = @()
+    $seen = @{}
+
+    foreach ($match in @($Matches | Where-Object { $null -ne $_ })) {
+        if ($match.Matched) { continue }
+
+        $device = $match.Device
+        if ($null -eq $device) { continue }
+
+        $pciKey = New-DriFTPciKey `
+            -VendorID $device.VendorID `
+            -DeviceID $device.DeviceID `
+            -SubVendorID $device.SubVendorID `
+            -SubDeviceID $device.SubDeviceID
+
+        if ([string]::IsNullOrWhiteSpace($pciKey)) { continue }
+
+        $vendorId    = Convert-DriFTHexId $device.VendorID
+        $deviceId    = Convert-DriFTHexId $device.DeviceID
+        $subVendorId = Convert-DriFTHexId $device.SubVendorID
+        $subDeviceId = Convert-DriFTHexId $device.SubDeviceID
+
+        $deviceName = Get-DriFTFirstNonEmpty `
+            $device.ElementName `
+            $device.Display `
+            $device.RelatedItem `
+            $device.Name `
+            'Unknown PCI Device'
+
+        $partNumber = Get-DriFTFirstNonEmpty `
+            $device.PartNumber `
+            $device.PartNumberString `
+            $device.DevicePartNumber `
+            $device.SparePartNumber `
+            $device.MMPartNumber `
+            $device.PartID `
+            $device.ComponentID `
+            'Not Available'
+
+        $description = Get-DriFTFirstNonEmpty `
+            $device.Description `
+            $device.DeviceDescription `
+            $device.LongDescription `
+            $device.ProductName `
+            $device.Model `
+            $device.Caption `
+            $device.ElementName `
+            $device.Display `
+            'Not Available'
+
+        $dedupeKey = (@($System.ServiceTag, $vendorId, $deviceId, $subVendorId, $subDeviceId, $deviceName, $partNumber) -join '|').ToLowerInvariant()
+        if ($seen.ContainsKey($dedupeKey)) { continue }
+        $seen[$dedupeKey] = $true
+
+        $pciText = "VID=$vendorId; DID=$deviceId; SVID=$subVendorId; SSID=$subDeviceId"
+
+        # Preserve the original DellSoftwareInventory fields when they were carried
+        # from the PCI identity source. Do not let normalized placeholders like
+        # ElementName=NIC.Slot or ComponentID=0 replace the useful source values.
+        $originalElementName = Get-DriFTFirstNonEmpty $device.OriginalElementName $device.Description
+        $originalId = Get-DriFTFirstNonEmpty $device.OriginalId
+        $identityInfoValue = Get-DriFTFirstNonEmpty $device.IdentityInfoValue ("DCIM:firmware:{0}:{1}:{2}:{3}" -f $vendorId,$deviceId,$subVendorId,$subDeviceId)
+
+        $detailPairs = [ordered]@{
+            'Reason' = (Get-DriFTFirstNonEmpty $match.UnmatchedReason 'PCI identity was present but no matching catalog row was found')
+
+            'ElementName' = (Get-DriFTFirstNonEmpty `
+                $originalElementName `
+                $device.ElementName `
+                $device.Display `
+                'Not Available')
+
+            'Id' = (Get-DriFTFirstNonEmpty `
+                $originalId `
+                $device.Id `
+                'Not Available')
+
+            'IdentityInfoValue' = $identityInfoValue
+        }
+
+        $catalogInfo = @(
+            'PCI info could not be found in catalog(s). Manual check needed.'
+            ($detailPairs.GetEnumerator() | ForEach-Object { '"{0}":"{1}"' -f $_.Key, $_.Value })
+        ) -join ','
+
+        $row = New-DriFTReportRow `
+            -ServiceTag $System.ServiceTag `
+            -PowerEdge $System.PowerEdge `
+            -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
+            -Type 'INFO' `
+            -Category 'PCI Manual Check' `
+            -Name "$deviceName - PCI device not found in catalog(s)" `
+            -InstalledVersion (Get-DriFTFirstNonEmpty $device.Version 'Not Available') `
+            -AvailableVersion 'No Catalog Match' `
+            -CatalogInfo $catalogInfo `
+            -Criticality 'Manual Check' `
+            -ReleaseDate '' `
+            -URL '' `
+            -Details '' `
+            -SourceType $System.SourceType
+
+        if ($row) { $rows += @($row) }
+    }
+
+    if (@($rows).Count -gt 0) {
+        Write-DriFTLog -Context $Context -Message "Unmatched PCI manual-check rows added: $(@($rows).Count)" -Level Warn -Indent 1
+    }
+
+    return @($rows | Sort-Object Category,Name)
+}
+
+
 function ConvertTo-DriFTClusterReportRows {
 <#
 .SYNOPSIS
@@ -4210,7 +4435,7 @@ function Write-DriFTHtmlReport {
         ($Rows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.OS) } | Select-Object -First 1 -ExpandProperty OS) `
         $OperatingSystem.DisplayName `
         $OperatingSystem.RawName `
-        'Not Available'
+        'NO OS Detected in TSR Data'
 
     $reportOsVersion = Get-DriFTFirstNonEmpty $OperatingSystem.Version
     if (-not [string]::IsNullOrWhiteSpace($reportOsVersion) -and $reportOs -notmatch [regex]::Escape($reportOsVersion)) {
@@ -4228,9 +4453,6 @@ function Write-DriFTHtmlReport {
       </div>
     </div>
     <div class="drift-toplinks">
-      <span>Support Report</span>
-      <span>Catalog Validation</span>
-      <span>Firmware & Drivers</span>
     </div>
   </header>
 
@@ -4501,8 +4723,10 @@ body {
 .drift-status-dot.drift-blue { background: var(--dell-blue); }
 
 table {
-    width: calc(100% - 56px);
-    margin: 0 28px 30px 28px;
+    margin-left: 0 !important;
+    width: 100%;
+    width: 100%;
+    margin: 0 0 30px 0;
     border-collapse: collapse;
     background: var(--dell-card);
     border: 1px solid var(--dell-border);
@@ -4666,6 +4890,26 @@ body > br:last-of-type {
         overflow-x: auto;
     }
 }
+
+.report-table,
+.report-table-container,
+.table-responsive,
+.drift-table-wrapper,
+.drift-table-container {
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+    width: 100% !important;
+    box-sizing: border-box;
+}
+
+.report-table table,
+.table-responsive table,
+.drift-table-wrapper table,
+.drift-table-container table {
+    margin-left: 0 !important;
+    width: 100% !important;
+}
+
 </style>
 
 <script type="text/javascript">
@@ -5076,20 +5320,295 @@ function New-DriFTReportRowFromCatalog {
         -SourceType $SourceType
 }
 
+function Add-DriFTKbDownloadLinkType {
+<#
+.SYNOPSIS
+    Adds the GetKBDLLink C# helper used to resolve Microsoft Catalog download URLs.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    if ('GetKBDLLink' -as [type]) { return }
+
+    try {
+        Add-Type @"
+using System.Net;
+using System.IO;
+using System.Text.RegularExpressions;
+
+public static class GetKBDLLink
+{
+    public static string GetDownloadLink(string KBNumber, string Product)
+    {
+        string kbGUID = "";
+        string kbDLUriSource = "";
+
+        var webRequest = WebRequest.Create("https://www.catalog.update.microsoft.com/Search.aspx?q=" + KBNumber);
+        webRequest.Method = "GET";
+        var webResponse = webRequest.GetResponse();
+        var responseStream = webResponse.GetResponseStream();
+        var streamReader = new StreamReader(responseStream);
+        string responseContent = streamReader.ReadToEnd();
+
+        var kbMatches = Regex.Matches(responseContent, @"id=(?:""|')(.*?)(?=_link)([^\/]*)");
+
+        foreach (Match ItemMatch in kbMatches)
+        {
+            if (ItemMatch.Groups[2].Value.ToLower().Contains(Product.ToLower()))
+            {
+                kbGUID = ItemMatch.Groups[1].Value;
+                break;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(kbGUID))
+        {
+            return "";
+        }
+
+        string post1 = "https://www.catalog.update.microsoft.com/DownloadDialog.aspx?updateIDs=[{%22size%22%3A0%2C%22languages%22%3A%22%22%2C%22uidInfo%22%3A%22";
+        string post2 = "%22%2C%22updateID%22%3A%22";
+        string post3 = "%22}]&updateIDsBlockedForImport=&wsusApiPresent=&contentImport=&sku=&serverName=&ssl=&portNumber=&version=";
+
+        string postText = post1 + kbGUID + post2 + kbGUID + post3;
+
+        webRequest = WebRequest.Create(postText);
+        webRequest.Method = "GET";
+        webResponse = webRequest.GetResponse();
+        responseStream = webResponse.GetResponseStream();
+        streamReader = new StreamReader(responseStream);
+        responseContent = streamReader.ReadToEnd();
+
+        kbDLUriSource = Regex.Match(responseContent, @"(?<=downloadInformation\[0\].files\[0\].url = '|"")(.*?)(?='|"";)").Groups[1].Value;
+
+        return kbDLUriSource;
+    }
+}
+"@ -ErrorAction Stop
+    }
+    catch {
+        Write-DriFTLog -Context $Context -Message "Unable to load KB download link helper: $($_.Exception.Message)" -Level Warn -Indent 1
+    }
+}
+
+function Get-DriFTMicrosoftCatalogProductFilter {
+<#
+.SYNOPSIS
+    Returns the Microsoft Update Catalog product string used to choose a KB package.
+
+.DESCRIPTION
+    The catalog search can return multiple products for the same KB. The old DriFT
+    logic used "server operating system" for Windows Server. Keep that as the
+    default while allowing future special cases.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$OsText)
+
+    $text = [string]$OsText
+
+    if ($text -imatch 'Azure Stack HCI|Azure Local|23H2|22H2|21H2|20H2') {
+        return 'server operating system'
+    }
+
+    if ($text -imatch 'Windows Server|Server|2016|2019|2022|2025|2012|2008') {
+        return 'server operating system'
+    }
+
+    return 'server operating system'
+}
+
+function Get-DriFTKbDownloadLink {
+<#
+.SYNOPSIS
+    Resolves a direct Microsoft Update Catalog download URL for a KB.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$KBNumber,
+        [Parameter(Mandatory)][string]$Product,
+        [Parameter(Mandatory)]$Context
+    )
+
+    if ([string]::IsNullOrWhiteSpace($KBNumber)) { return '' }
+
+    try {
+        Add-DriFTKbDownloadLinkType -Context $Context
+
+        if (-not ('GetKBDLLink' -as [type])) { return '' }
+
+        $download = [GetKBDLLink]::GetDownloadLink($KBNumber, $Product)
+
+        if ([string]::IsNullOrWhiteSpace($download)) { return '' }
+
+        return $download.Replace('&amp;', '&')
+    }
+    catch {
+        Write-DriFTLog -Context $Context -Message "Microsoft Catalog download link lookup failed for ${KBNumber}: $($_.Exception.Message)" -Level Warn -Indent 1
+        return ''
+    }
+}
+
+
+function Get-DriFTWindowsUpdateHistoryUrl {
+<#
+.SYNOPSIS
+    Maps detected Windows / Azure Local OS text to the Microsoft update history page.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$OsText)
+
+    $text = [string]$OsText
+
+    if ($text -imatch '2025|26100')       { return 'https://support.microsoft.com/en-us/help/5047442' }
+    if ($text -imatch '2022|20348')       { return 'https://support.microsoft.com/en-us/help/5005454' }
+    if ($text -imatch '2019|17763')       { return 'https://support.microsoft.com/en-us/help/4464619' }
+    if ($text -imatch '2016|14393')       { return 'https://support.microsoft.com/en-us/help/4000825' }
+    if ($text -imatch '2012\s*R2|9600')   { return 'https://support.microsoft.com/en-us/help/4009470' }
+    if ($text -imatch '2008\s*R2|7601')   { return 'https://support.microsoft.com/en-us/help/4009469' }
+
+    if ($text -imatch '23H2|25398')       { return 'https://support.microsoft.com/en-us/help/5031680' }
+    if ($text -imatch '22H2')             { return 'https://support.microsoft.com/en-us/help/5018894' }
+    if ($text -imatch '21H2')             { return 'https://support.microsoft.com/en-us/help/5004047' }
+    if ($text -imatch '20H2')             { return 'https://support.microsoft.com/en-us/help/4595086' }
+
+    return $null
+}
+
+function Get-DriFTWindowsUpdateBuildToken {
+<#
+.SYNOPSIS
+    Returns the OS build token used to filter Microsoft update history links.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$OsText)
+
+    $text = [string]$OsText
+
+    if ($text -imatch '26100') { return '26100' }
+    if ($text -imatch '25398') { return '25398' }
+    if ($text -imatch '20348') { return '20348' }
+    if ($text -imatch '17763') { return '17763' }
+    if ($text -imatch '14393') { return '14393' }
+    if ($text -imatch '9600')  { return '9600' }
+    if ($text -imatch '7601')  { return '7601' }
+
+    if ($text -imatch '2025')        { return '26100' }
+    if ($text -imatch '23H2')        { return '25398' }
+    if ($text -imatch '2022|21H2')   { return '20348' }
+    if ($text -imatch '2019')        { return '17763' }
+    if ($text -imatch '2016')        { return '14393' }
+    if ($text -imatch '2012\s*R2')   { return '9600' }
+    if ($text -imatch '2008\s*R2')   { return '7601' }
+
+    return ''
+}
+
+function Get-DriFTLatestWindowsUpdateFromMicrosoft {
+<#
+.SYNOPSIS
+    Scrapes the Microsoft update history page for the latest non-preview KB.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [AllowNull()][string]$BuildToken,
+        [int]$KBItemsToShow = 1,
+        [Parameter(Mandatory)]$Context
+    )
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+        $htmlpage = $webClient.DownloadString($Url)
+
+        if ([string]::IsNullOrWhiteSpace($htmlpage)) { return @() }
+
+        $safeBuild = if ([string]::IsNullOrWhiteSpace($BuildToken)) { '\d{4,5}' } else { [regex]::Escape($BuildToken) }
+
+        # Legacy DriFT-style pattern from 1.79.
+        $legacyPattern = 'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)' + $safeBuild + '.*?)(?:\)|<)'
+        $links = [regex]::Matches(
+            $htmlpage,
+            $legacyPattern,
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline
+        )
+
+        # Broader fallback for Microsoft page markup changes.
+        if (@($links).Count -eq 0) {
+            $fallbackPattern = '<a[^>]+href=\"(?<href>[^"]+)\"[^>]*>\s*(?<text>(?:(?!Preview).)*?(?<kb>KB\d{7})(?:(?!Preview).)*?' + $safeBuild + '.*?)</a>'
+            $links = [regex]::Matches(
+                $htmlpage,
+                $fallbackPattern,
+                [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline
+            )
+        }
+
+        $rows = @()
+
+        foreach ($link in @($links)) {
+            $rawText = ''
+            $kb = ''
+            $href = ''
+            $buildText = ''
+
+            if ($link.Groups['kb'] -and $link.Groups['kb'].Success) {
+                $kb = $link.Groups['kb'].Value
+                $rawText = $link.Groups['text'].Value
+                $href = $link.Groups['href'].Value
+                $buildText = $rawText
+            }
+            else {
+                $kb = $link.Groups[3].Value
+                $rawText = $link.Groups[2].Value
+                $buildText = $link.Groups[4].Value
+                $href = (($link.Groups[1].Value -split 'href="')[-1] -split '"')[0]
+            }
+
+            if ([string]::IsNullOrWhiteSpace($kb)) { continue }
+            if ($rawText -imatch 'Preview' -or $buildText -imatch 'Preview') { continue }
+
+            $dateText = (($rawText -replace '&#x2014;', ' ') -replace '<.*?>',' ' -replace '\s+',' ').Trim()
+            $buildClean = (($buildText -replace '<.*?>',' ') -replace '\s+',' ').Trim()
+            $desc = (($dateText + ' ' + $kb + ' ' + $buildClean) -replace '\s+',' ').Trim()
+
+            if ($href -notmatch '^https?://') {
+                if ($href.StartsWith('/')) {
+                    $href = "https://support.microsoft.com$href"
+                }
+                else {
+                    $href = "https://support.microsoft.com/$href"
+                }
+            }
+
+            $rows += @([PSCustomObject]@{
+                KBNumber     = $kb
+                Date         = $dateText
+                Description  = $desc
+                BuildText    = $buildClean
+                InfoLink     = $href
+                DownloadLink = ''
+            })
+        }
+
+        return @($rows | Select-Object -First $KBItemsToShow)
+    }
+    catch {
+        Write-DriFTLog -Context $Context -Message "Microsoft update history lookup failed: $($_.Exception.Message)" -Level Warn -Indent 1
+        return @()
+    }
+}
+
 function Add-DriFTWindowsUpdateRows {
 <#
 .SYNOPSIS
     Adds latest Windows cumulative update row.
 
 .DESCRIPTION
-    Adds a Microsoft Update row for Windows Server / Azure Local builds detected
-    from the SupportAssist collection. This is intentionally isolated as a
-    supplemental row because Microsoft update data is not part of Dell Catalog.xml.
-
-    NOTE:
-    This is a compatibility implementation for the rewrite phase. The old DriFT
-    web-scrape/update-history logic should be ported here later so KB data remains
-    dynamic instead of hardcoded.
+    Dynamically scrapes the correct Microsoft update history page for the detected
+    Windows Server / Azure Local / Azure Stack HCI OS and adds the latest non-preview
+    KB row to the report.
 #>
     [CmdletBinding()]
     param(
@@ -5111,31 +5630,24 @@ function Add-DriFTWindowsUpdateRows {
 
     $osText = [string]$osText
 
-    # Windows Server 2022 / Azure Stack HCI 21H2/22H2 family uses build 20348.
-    if ($osText -imatch '2022|20348|21H2') {
-        return @(
-            New-DriFTReportRow `
-                -ServiceTag $System.ServiceTag `
-                -PowerEdge $System.PowerEdge `
-                -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
-                -Type 'OS' `
-                -Category 'Microsoft Update' `
-                -Name 'May 12, 2026 KB5087545 20348.5139' `
-                -InstalledVersion 'NA' `
-                -AvailableVersion 'KB5087545' `
-                -CatalogInfo 'catalog.update.microsoft.com' `
-                -Criticality 'Not Available' `
-                -ReleaseDate '2026-05-12' `
-                -URL '' `
-                -Details 'https://support.microsoft.com/en-us/help/5087545' `
-                -SourceType $System.SourceType
-        )
+    $url = Get-DriFTWindowsUpdateHistoryUrl -OsText $osText
+    if ([string]::IsNullOrWhiteSpace($url)) {
+        Write-DriFTLog -Context $Context -Message "No Microsoft update history URL mapping found for OS: $osText" -Level Warn -Indent 1
+        return @()
     }
 
-    # Windows Server 2025 / Azure Local 23H2/24H2 style systems commonly report
-    # 25398 or 26100-series builds. Keep this as a placeholder until dynamic
-    # update-history lookup is fully ported.
-    if ($osText -imatch '2025|25398|26100|23H2|24H2') {
+    $buildToken = Get-DriFTWindowsUpdateBuildToken -OsText $osText
+    $catalogProduct = Get-DriFTMicrosoftCatalogProductFilter -OsText $osText
+
+    Write-DriFTLog -Context $Context -Message "Checking Microsoft update history: $url" -Level Info -Indent 1
+
+    $kbRows = @(Get-DriFTLatestWindowsUpdateFromMicrosoft `
+        -Url $url `
+        -BuildToken $buildToken `
+        -KBItemsToShow 1 `
+        -Context $Context)
+
+    if (@($kbRows).Count -eq 0) {
         return @(
             New-DriFTReportRow `
                 -ServiceTag $System.ServiceTag `
@@ -5143,19 +5655,50 @@ function Add-DriFTWindowsUpdateRows {
                 -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
                 -Type 'OS' `
                 -Category 'Microsoft Update' `
-                -Name 'Latest Microsoft cumulative update lookup not yet ported for this OS build' `
+                -Name "Microsoft update history lookup returned no non-preview KB for $osText" `
                 -InstalledVersion 'NA' `
                 -AvailableVersion 'Not Available' `
-                -CatalogInfo 'catalog.update.microsoft.com' `
+                -CatalogInfo 'support.microsoft.com' `
                 -Criticality 'Not Available' `
                 -ReleaseDate '' `
-                -URL 'https://www.catalog.update.microsoft.com/' `
-                -Details 'https://www.catalog.update.microsoft.com/' `
+                -URL $url `
+                -Details $url `
                 -SourceType $System.SourceType
         )
     }
 
-    return @()
+    $rows = @()
+
+    foreach ($kb in $kbRows) {
+        $downloadLink = Get-DriFTFirstNonEmpty $kb.DownloadLink
+
+        if ([string]::IsNullOrWhiteSpace($downloadLink)) {
+            $downloadLink = Get-DriFTKbDownloadLink `
+                -KBNumber $kb.KBNumber `
+                -Product $catalogProduct `
+                -Context $Context
+        }
+
+        $rows += @(
+            New-DriFTReportRow `
+                -ServiceTag $System.ServiceTag `
+                -PowerEdge $System.PowerEdge `
+                -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
+                -Type 'OS' `
+                -Category 'Microsoft Update' `
+                -Name $kb.Description `
+                -InstalledVersion 'NA' `
+                -AvailableVersion $kb.KBNumber `
+                -CatalogInfo 'support.microsoft.com / catalog.update.microsoft.com' `
+                -Criticality 'Not Available' `
+                -ReleaseDate $kb.Date `
+                -URL (Get-DriFTFirstNonEmpty $downloadLink $kb.InfoLink) `
+                -Details $kb.InfoLink `
+                -SourceType $System.SourceType
+        )
+    }
+
+    return @($rows)
 }
 
 
@@ -6290,6 +6833,13 @@ function Get-DriFT17GFqddVariants {
 
     if ($clean) { [void]$variants.Add($clean) }
 
+    # DellSoftwareInventory IDs often look like:
+    #   DCIM:INSTALLED_0x23_701__NIC.Slot.5-1-1
+    # After the DCIM prefix is removed, strip the numeric inventory class prefix
+    # so correlation can find the actual FQDD.
+    $cleanFqdd = $clean -replace '^\d+__', ''
+    if ($cleanFqdd -and $cleanFqdd -ne $clean) { [void]$variants.Add($cleanFqdd) }
+
     if ($clean -match '/') {
         [void]$variants.Add(($clean.TrimEnd('/') -split '/')[-1])
     }
@@ -6325,7 +6875,16 @@ function Get-DriFT17GObjectKeys {
         $JsonObject.DeviceId,
         $JsonObject.DeviceID,
         $JsonObject.FunctionId,
-        $JsonObject.FunctionID
+        $JsonObject.FunctionID,
+        $JsonObject.Oem.Dell.DellNIC.FQDD,
+        $JsonObject.Oem.Dell.DellNIC.Id,
+        $JsonObject.Oem.Dell.DellNIC.InstanceID,
+        $JsonObject.Oem.Dell.DellNIC.ProductName,
+        $JsonObject.Oem.Dell.DellNIC.DeviceDescription,
+        $JsonObject.Oem.Dell.DellPCIeFunction.FQDD,
+        $JsonObject.Oem.Dell.DellPCIeFunction.Id,
+        $JsonObject.Oem.Dell.DellPCIeFunction.InstanceID,
+        $JsonObject.Oem.Dell.DellPCIeFunction.DeviceDescription
     )) {
         if ($candidate) { [void]$keys.Add(([string]$candidate).Trim()) }
     }
@@ -6369,7 +6928,14 @@ function Get-DriFT17GPreferredFqdd {
         } catch {}
     }
 
-    $all = @($JsonObject.FQDD, $JsonObject.Oem.Dell.FQDD) + $idVariants + $folderVariants
+    $all = @(
+        $JsonObject.FQDD,
+        $JsonObject.Oem.Dell.FQDD,
+        $JsonObject.Oem.Dell.DellNIC.FQDD,
+        $JsonObject.Oem.Dell.DellNIC.Id,
+        $JsonObject.Oem.Dell.DellPCIeFunction.FQDD,
+        $JsonObject.Oem.Dell.DellPCIeFunction.Id
+    ) + $idVariants + $folderVariants
 
     $preferred = @($all | Where-Object {
         $_ -match '^(NIC\.Slot\.\d+(?:-\d+-\d+)?)$' -or
