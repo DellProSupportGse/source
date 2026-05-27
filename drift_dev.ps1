@@ -128,9 +128,13 @@ function Invoke-RunDriFT {
             Write-DriFTTelemetry -Context $ctx
         }
 
-        $catalogSet = Initialize-DriFTCatalogSet -Context $ctx
-
         $collections = Import-DriFTSupportAssistCollections -Context $ctx
+
+        if ($ctx.Cancelled -or -not $collections -or @($collections).Count -eq 0) {
+            return $null
+        }
+
+        $catalogSet = Initialize-DriFTCatalogSet -Context $ctx
 
         $allReportRows = @()
         $allBiosConfigRows = @()
@@ -365,6 +369,7 @@ function Initialize-DriFTRunContext {
         ExportDebugDataRoot = $debugRoot
         LogPath       = $logPath
         OutputRoot    = $null
+        Cancelled     = $false
         ServiceTags   = New-Object System.Collections.Generic.List[string]
     }
 }
@@ -395,7 +400,7 @@ $VerLine
 +--------------------------------------------+
 
 "@
-
+    Clear-Host
     Write-Host $text
     Write-DriFTLog -Context $Context -Message "Starting log: $($Context.LogPath)" -Level Info
 }
@@ -969,7 +974,9 @@ function Import-DriFTSupportAssistCollections {
 
     $inputFiles = Resolve-DriFTInputPath -Context $Context
     if (-not $inputFiles -or @($inputFiles).Count -eq 0) {
-        throw 'No SupportAssist input file was selected or provided.'
+        Write-DriFTLog -Context $Context -Message "No TSR selected. Exiting." -Level Warn
+        $Context.Cancelled = $true
+        return @()
     }
 
     $collections = @()
