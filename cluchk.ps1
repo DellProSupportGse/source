@@ -26,6 +26,14 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/06/05:v1.86 -  1. New Update: TP - New version 1.86 DEV
+                        2. Bug Fix: TP - Fixed running cluchk agaist the alternate sddc collection method for customers that cannot use unsigned scripts.
+                        3. New feature: TP - If dedup is running but disabled, shows which volumes still have compressed files in the Cluster Shared Volumes section
+                        4. New feature: TP - Added non-S2D Powerflex configuration to several sections.
+                        5. Bug Fix: TP - Find all available ECE zip files
+                        6. Bug Fix: TP - Fixed Cluster Shared Volume fault state shows red when 0 (NoFaults) due to a change in the SDDC log collection
+                        7. Bug Fix: TP - Show Unknown Error State for Physical Disk status that cannot be determined
+
     2026/05/14:v1.85 -  1. New Update: TP - New version 1.85 DEV
                         2. New Update: TP - If FLTMC driver company is Unknown, tries to find it on the MS altitudes page.
                         3. Bug Fix: TP - Dell firmware failures were sorting incorrectly
@@ -290,7 +298,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.85"
+$CluChkVer="1.86"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -799,9 +807,14 @@ If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthSummary.log))){
                    Write-Host "Extracting SDDC logs from Send-Diags..."
         mkdir "$SDDCPath\SDDCLogs" 2> $null
         $SDDCFILES=gci $SDDCPath -Recurse -Filter "Azure_Stack_HCI*.zip" -Depth 2
-        if ($SDDCFILES.count -eq 0) {$SDDCFILES=gci $SDDCPath -Recurse -Filter "DiagLogs-*" -Directory -Depth 4
+        if ($SDDCFILES.count -eq 0) {$SDDCFILES=Split-Path (gci $SDDCPath -Recurse -Filter "DiagLogs-*" -Directory -Depth 4).fullname -Parent
+          $dname=1
           $SDDCFILES | %{
-            Unzip $_.fullname "$SDDCPath\SDDCLogs"
+            gci $_ -filter "SDDC*.zip" -Recurse | %{
+                mkdir "$SDDCPath\SDDCLogs\Node$dname" 2> $null
+                Unzip $_.fullname "$SDDCPath\SDDCLogs\Node$dname"
+                $dname++
+            }
           }
         } else {
             $SDDCFILES | %{
@@ -827,7 +840,7 @@ If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthSummary.log))){
         }
         $GetClusterNode | Export-Clixml -Path "$Hdir\GetClusterNode.xml" -Force -Confirm:$false
         gci "$SDDCPath" -Filter "DiagLogs-*" -Recurse -Directory | %{
-            $destpath="$Hdir\Node_$($_.Name -replace 'DiagLogs-\d*-','')"
+            $destpath="$Hdir\Node_$($_.Name -replace 'DiagLogs-\d*-','')\$($_.name)"
             Copy-Item $_.fullname $destpath -Recurse
 
         }
@@ -1125,6 +1138,7 @@ Add-Type -Path (Get-ChildItem -Path "C:\ProgramData\Dell\htmlagilitypack" -Recur
 # $webClient.DownloadFile($URL, $OutFile)}
 #>
 If ($ProcessSDDC -ieq 'y') {
+        $isS2d=$false
         $msinfo=@()
         gci $SDDCPath  -Recurse -Depth 1 -Filter "msinfo.nfo" | %{$msinfo+=[xml](gc $_.fullname)}
         $SysEnvVars=$msinfo | %{$pscn=$_.msinfo.Category.data.value[4].'#cdata-section';(($_.msinfo.Category.Category.category | ? Name -eq "Environment Variables").data | ?{$_.'User_Name' -match "system"} | Select-Object Variable,Value,@{L="PSComputerName";E={$pscn}})}
@@ -1179,11 +1193,13 @@ If ($ProcessSDDC -ieq 'y') {
                                 } 
             }
         }
-
+    $PowerFlex=(($SysInfo.SysModel -like  "*PowerFlex*").count -gt 0)
+    $isS2d=(($SysInfo.SysModel -like "*HCI*" -or $SysInfo.SysModel -like "*Ready Node*").count -gt 0)
 # determine os version, used later on
 $OSVersionNodes = 'Unknown'
 # Azure Stack HCI OS versions
 If($SysInfo[0].OSName -imatch 'HCI'){
+    $IsS2d=$true
     # update Azure Local version in $SysInfo table, per node
     $StampFiles=gci $SDDCPath -Filter "GetStampInformation.xml" -Recurse -Depth 1    
     ForEach ($StampFile in $StampFiles) {
@@ -1778,9 +1794,10 @@ If($ProcessSDDC -ieq "y"){
   $ClusterNodes=$SDDCFiles."GetClusterNode" |`
   Sort-Object Name | Select-Object Name,Model,SerialNumber,State,StatusInformation,Id
   Foreach ($Name in ($ClusterNodes.Name)) {
-      gci "$SDDCPath\Node_$Name" -Filter "*.xml" | %{$SDDCFiles.Add("$Name$($_.basename)",(Import-Clixml -Path $_.fullname))}
+      gci "$SDDCPath\Node_$Name" -Filter "*.xml" | %{if ($_.Name -ne "AzureStack.ECE.xml") {$SDDCFiles.Add("$Name$($_.basename)",(Import-Clixml -ErrorAction SilentlyContinue -Path $_.fullname))}}
   }
  #<#
+ $isNetworkATC=($SDDCFiles.ContainsKey("GetNetIntent"))
  Write-Host "Creating Recent Cluster Events runspace"
  $Inputs3  = New-Object 'System.Management.Automation.PSDataCollection[PSObject]'
  $Outputs3 = New-Object 'System.Management.Automation.PSDataCollection[PSObject]'
@@ -1869,7 +1886,9 @@ IF($SDDCPerf -imatch "YES"){
  $PowerShell2.Runspace = $Runspace2
  $Runspace2.Open()
  $Runspace2.SessionStateProxy.SetVariable('ClusterNodes',$ClusterNodes)
+ $Runspace2.SessionStateProxy.SetVariable('Powerflex',$PowerFlex)
  $Runspace2.SessionStateProxy.SetVariable('SysInfo',$SysInfo)
+ $Runspace2.SessionStateProxy.SetVariable('IsS2d',$isS2d)
  $Runspace2.SessionStateProxy.SetVariable('OSVersionNodes',$OSVersionNodes)
  #$Runspace2.SessionStateProxy.SetVariable('SupportMatrixtableData',$SupportMatrixtableData)
  $Runspace2.SessionStateProxy.SetVariable('CluChkReportLoc',$CluChkReportLoc)
@@ -2571,6 +2590,8 @@ If($RunClusSum -ne "No"){
  $Runspace.Open()
  $Runspace.SessionStateProxy.SetVariable('ClusterNodes',$ClusterNodes)
  $Runspace.SessionStateProxy.SetVariable('SysInfo',$SysInfo)
+ $Runspace.SessionStateProxy.SetVariable('IsS2d',$isS2d)
+ $Runspace.SessionStateProxy.SetVariable('Powerflex',$PowerFlex)
  $Runspace.SessionStateProxy.SetVariable('OSVersionNodes',$OSVersionNodes)
  $Runspace.SessionStateProxy.SetVariable('AzureLocalVersion',$AzureLocalVersion)
  $Runspace.SessionStateProxy.SetVariable('SupportMatrixtableData',$SupportMatrixtableData)
@@ -3030,6 +3051,7 @@ $NewestUBR=($ClusterNodesOut | sort UBR)[-1].UBR
 
 
 #Storage Pool
+        If ($isS2d) {
         $Name="Storage Pool"
         #Write-Host "    Gathering $Name..."
         # Getting the total foot print on pool to use to calc free space in the pool
@@ -3149,8 +3171,10 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
     $htmlout+=$html
             $html=""
             $Name=""
+        }
 
 #Storage Tiers
+        If ($isS2d) {
         $Name="Storage Tiers"
         #Write-Host "    Gathering $Name..."
         $StorageTiers=$SDDCFiles."GetStorageTier" |`
@@ -3213,8 +3237,10 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
     $htmlout+=$html
             $html=""
             $Name=""
+            }
 
 #Virtual Disks
+        If ($isS2d) {
         $Name="Virtual Disks"
         #Write-Host "    Gathering $Name..." 
         #$DeDupTasks=foreach ($key in ($SDDCFiles.keys -like "*GetScheduledTask")) { $SDDCFiles."$key" | Where {$_.TaskName -match "^DeDup_.*Optimization" -and $_.NextRunTime}}
@@ -3268,7 +3294,8 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
           '5'{'Unknown'}`
         }} else {$_.DetachedReason}}},
         FileSystem,@{Label='ProvisioningType';Expression={if ($_.ProvisioningType -ne "Fixed" -and $_.ProvisioningType -ne "Thin") {@("","Thin","Fixed")[$_.ProvisioningType]}}},
-        IsSnapshot,@{Label='Access';Expression={If ($_.Access -match "\d") {@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]} else {"RREEDD"*($_.Access -ne "Read/Write")+$_.Access}}},@{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
+        IsSnapshot,@{Label='Access';Expression={If ($_.Access -match "\d") {@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]} else {"RREEDD"*($_.Access -ne "Read/Write")+$_.Access}}},
+        @{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
         #$VirtualDisks | FT -AutoSize -Wrap
 
          #Azure Table
@@ -3310,8 +3337,10 @@ $ResultsSummary+=Set-ResultsSummary -name $name -html $html
 $htmlout+=$html
         $html=""
         $Name=""
+        }
 
 #Virtual Disk Resiliency
+        If ($isS2d) {
         $Name="Virtual Disk Resiliency"
         #Write-Host "    Gathering $Name..."
         $html+='<H2 id="VirtualDiskResiliency">Virtual Disk Resiliency</H2>'
@@ -3521,20 +3550,27 @@ $htmlout+=$html
             $htmlout+=$html 
             $html=""
             $Name=""
+            }
 
 #ClusterSharedVolume - JF
         $Name="Cluster Shared Volumes"
         Write-Host "    Gathering $Name..."
-        $ClusterSharedVolume=$SDDCFiles.GetClusterSharedVolume   
+        $ClusterSharedVolume=$SDDCFiles.GetClusterSharedVolume
+        foreach ($CSV in $ClusterSharedVolume) {if ($CSV.SharedVolumeInfo.FaultState -match "\d") {$CSV.SharedVolumeInfo.FaultState=@("NoFaults","Unhealthy","Unhealthy","Unhealthy","Online(Maintenance)")[$CSV.SharedVolumeInfo.FaultState] } }
+        $getDedupVolume=$SDDCFiles."GetDedupVolume" 
 
         $CSVOutPut = $ClusterSharedVolume |`
         Select-Object Name, State,
             @{L='MountPath';E={$_.SharedVolumeInfo.FriendlyVolumeName}},
-            @{L='FaultState';E={If($_.SharedVolumeInfo.FaultState -ine "NoFaults"){"RREEDD"+$_.SharedVolumeInfo.FaultState}Else{$_.SharedVolumeInfo.FaultState}}},
+            @{L='FaultState';E={If($_.SharedVolumeInfo.FaultState -ine "NoFaults" -and $_.SharedVolumeInfo.FaultState -ne 0){"RREEDD"+$_.SharedVolumeInfo.FaultState}Else{$_.SharedVolumeInfo.FaultState}}},
             @{L='MaintenanceMode';E={$_.SharedVolumeInfo.MaintenanceMode}},
-            #@{L='FileSystem';E={$sv=$_.Name;$ftype=($GetVolumes | ? {$sv -match $_.FileSystemLabel}).FileSystemType;if ($ftype -eq $null) {$ftype=2};@("CSVFS_NTFS","CSVFS_REFS",,,"FAT","FAT16","FAT32","NTFS4","NTFS5",,,"EXT2","EXT3","ReiserFS","NTFS","REFS")[$ftype -band 15]}},
+            @{L='DedupVolume';E={$volName=($_ | Select -ExpandProperty SharedVolumeInfo).FriendlyVolumeName;If($getDedupVolume | ? Volume -eq $volName) {"RREEDD"*($DedupDisabled -eq $True) + "True"} else {"False"}}},
             @{L='RedirectedAccess';E={If($_.SharedVolumeInfo.RedirectedAccess -inotmatch "False"){"YYEELLLLOOWW"+$_.SharedVolumeInfo.RedirectedAccess}Else{$_.SharedVolumeInfo.RedirectedAccess}}},
             @{Label='Note';Expression={IF($_.SharedVolumeInfo.RedirectedAccess -inotmatch "False"){"CSV in Redirected Mode might be caused by a Filter Driver."}}}
+
+        Foreach ($CSVOut in $CSVOutPut) {
+            If ($CSVOut.DedupVolume -match "RREEDD") {$CSVOut.Note="Dedup is disabled but volume still has compressed files"}
+        }
 
         #HTML Report
         $html+='<H2 id="ClusterSharedVolumes">Cluster Shared Volumes (CSV)</H2>'
@@ -3550,6 +3586,7 @@ $htmlout+=$html
         $Name="" 
          
 #Physical Disks
+        If ($isS2d) {
         $dstop=Get-Date
         $Name="Physical Disks"
         #Write-Host "    Gathering $Name..."
@@ -3639,8 +3676,8 @@ $htmlout+=$html
             @('','','','HDD','SSD','SCM')[$_.MediaType]
         }},@{Label='DriveCount';Expression={""}},CanPool,`
         @{Label='OperationalStatus';Expression={`
-        IF ($_.OperationalStatus -eq '53270') {'In Maintenance Mode'} elseif ($_.OperationalStatus -eq '53285') {'Threshold Exceeded'}
-        else {
+        IF ($_.OperationalStatus -eq '53270') {'In Maintenance Mode'} elseif ($_.OperationalStatus -eq '53285') {'Threshold Exceeded'} elseif ([int]$_.OperationalStatus -gt 18) {'Unknown Error State'
+        } else {
              @('Unknown','Other','OK','Degraded','Stressed','Predictive Failure','Error','Non-Recoverable Error','Stopping',`
              'Stopping','Stopped','In Service','No Contact','Lost Communication','Aborted','Dormant',`
              'Supporting Entity in Error','Completed','Power Mode')[$_.OperationalStatus]
@@ -3864,8 +3901,9 @@ If($PhysicalDisks.count -eq 0){$html+='<h5><span style="color: #ffffff; backgrou
 $htmlout+=$html 
         $html=""
         $Name=""
-
+        }
 #Storage Enclosure
+        If ($isS2d) {
         $Name="Storage Enclosure"
         #Write-Host "    Gathering $Name..."
         $StorageEnclosure=$SDDCFiles."GetStorageEnclosure" |`
@@ -3940,7 +3978,7 @@ $html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;
     $htmlout+=$html 
             $html=""
             $Name=""        
-
+            }
 # Check for SCSI Sense Keys
     $Name="SCSI Sense Key Information"
     #Write-Host "    Gathering $Name..."
@@ -3988,6 +4026,7 @@ $htmlout+=$html
     $Name=""
 
 #Storage Jobs
+        If ($isS2d) {
         $Name="Storage Jobs"
         #Write-Host "    Gathering $Name..."
         $StorageJobs=$SDDCFiles."GetStorageJob" |`
@@ -4033,8 +4072,10 @@ $ResultsSummary+=Set-ResultsSummary -name $name -html $html
 $htmlout+=$html
         $html=""
         $Name=""
+        }
 
 #DebugStorageSubsystem
+        If ($isS2d) {
         $Name="Debug Storage Subsystem"
         #Write-Host "    Gathering $Name..."
         $DebugStorageSubsystem=$SDDCFiles."DebugStorageSubsystem" |`
@@ -4080,6 +4121,7 @@ $ResultsSummary+=Set-ResultsSummary -name $name -html $html
 $htmlout+=$html 
         $html=""
         $Name=""
+        }
 
 #Networks
         $Name="Cluster Networks"
@@ -5534,7 +5576,7 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
 #endregion Recommended updates and hotfixes for Windows Server
 
 #Health Check and Action Plan Failures
-If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
+If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse).count) {
         $Name="Action Plan Health Check and Firmware Failures"
         Write-Host "    Gathering $Name..."
         $ap=Get-Content -ErrorAction SilentlyContinue (Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse -ErrorAction SilentlyContinue | select -first 1).fullname
@@ -5583,7 +5625,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE.zip" -Recurse).count) {
         $APLMU=$null
         $apupdate=$null
         $StopError=$null
-        $ECEzip=(gci $SDDCPath -Filter "ECE.zip" -Recurse).fullname
+        $ECEzip=(gci $SDDCPath -Filter "ECE??.zip" -Recurse).fullname
         If ($ECEzip) {
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             Foreach ($ECE in $ECEzip) {
@@ -5888,7 +5930,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 
 
 # Network ATC
-    IF($SDDCFiles.ContainsKey("GetNetIntent")){
+    IF($isNetworkATC){
       if ($SDDCFiles."GetNetIntentStatus".count) {
         $Name="NetworkATC Status"
         Write-Host "    Gathering $Name..."
@@ -6022,8 +6064,8 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                             default {$sAAPOND}
                         }
                 }},
-                @{L="BandwidthPercentage_Cluster";E={$sAAPOND=$_.QosPolicyOverride.BandwidthPercentage_Cluster;IF($sAAPOND -inotmatch '2' -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$sAAPOND}Else{$sAAPOND}}},
-                @{L="PriorityValue8021Action_Cluster";E={$sAAPOND=$_.QosPolicyOverride.PriorityValue8021Action_Cluster;IF($sAAPOND -inotmatch '5' -and $sAAPOND -inotmatch '7'){"RREEDD"+$sAAPOND}Else{$sAAPOND}}},
+                @{L="BandwidthPercentage_Cluster";E={$sAAPOND=$_.QosPolicyOverride.BandwidthPercentage_Cluster;IF($sAAPOND -inotmatch '2' -and $SysInfo[0].SysModel -notmatch "^APEX" -and $PowerFlex -eq $false){"RREEDD"+$sAAPOND}Else{$sAAPOND}}},
+                @{L="PriorityValue8021Action_Cluster";E={$sAAPOND=$_.QosPolicyOverride.PriorityValue8021Action_Cluster;IF($sAAPOND -inotmatch '5' -and $sAAPOND -inotmatch '7' -and $PowerFlex -eq $false){"RREEDD"+$sAAPOND}Else{$sAAPOND}}},
                 @{L="EnableAutomaticIPGeneration";E={$SEAIG=$_.IPOverride.EnableAutomaticIPGeneration;IF($SEAIG -inotmatch 'False' -and $SysInfo[0].SysModel -notmatch "^APEX"){"RREEDD"+$SEAIG}Else{$SEAIG}}}
 
            # HTML Report
@@ -6214,7 +6256,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         Write-Host "    Gathering $Name..."
         $ConfigureHostManagementVLANOut=@()
         #Used for NetworkATC implementations 
-        IF($SDDCFiles.ContainsKey("GetNetIntent")){
+        IF($isNetworkATC){
             $GetVMNetworkAdapterIsolation=Foreach ($key in ($SDDCFiles.keys -like "*GetVMNetworkAdapterIsolation")) {$SDDCFiles."$key" | Where-Object{$_.IsolationMode -imatch "Vlan"}|`
             Sort-Object ComputerName,AdapterName | Select-Object @{L="PSComputerName";E={$_.ComputerName}},@{L="AdapterName";E={$_.ParentAdapter -replace 'VMInternalNetworkAdapter, Name = ' -replace "\'"}},@{L="vLANID";E={$_.DefaultIsolationID}}
             }
@@ -6910,7 +6952,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         Write-Host "    Gathering $Name..." 
         $GetNetQosDcbxSetting=""
         #Used for NetworkATC implementations 
-        IF($SDDCFiles.ContainsKey("GetNetIntent")){
+        IF($isNetworkATC){
             $GetNetQosDcbxSettingOut=@()
             # Initialize an array to store the parsed results
                 $results = @()
@@ -7040,7 +7082,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         Write-Host "    Gathering $Name..." 
         $GetSmbClientConfiguration=Foreach ($key in ($SDDCFiles.keys -like "*GetSmbClientConfiguration")) {$SDDCFiles."$key"}
         $DisableSMBSigningGetSmbClientConfiguration = $GetSmbClientConfiguration | Sort-Object PSComputerName | Select-Object PSComputerName,`
-        @{L='ClientEnableSecuritySignature';E={$CEnableSecuritySignature=$_.EnableSecuritySignature;IF($CEnableSecuritySignature -eq 0){"RREEDD$CEnableSecuritySignature"}Else{$CEnableSecuritySignature}}},`
+        @{L='ClientEnableSecuritySignature';E={$CEnableSecuritySignature=$_.EnableSecuritySignature;IF($CEnableSecuritySignature -eq 0 -and $PowerFlex -eq $false){"RREEDD$CEnableSecuritySignature"}Else{$CEnableSecuritySignature}}},`
         @{L='ClientRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "23H2" -and $OSVersionNodes -ne "24H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}},`
         @{L='ServerEnableSecuritySignature';E={}},`
         @{L='ServerEncryptData';E={}},`
@@ -7098,38 +7140,39 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $Name=""
 
     #Update hardware timeout for Spaces port
-        #Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Services\spaceport\Parameters -Name HwTimeout -Value 0x00002710 " Verbose
-        $Name="Update hardware timeout for Spaces port"
-        Write-Host "    Gathering $Name..." 
-        #$GetItemProperty=Get-ChildItem -Path $SDDCPath -Filter "GetItemProperty.xml" -Recurse -Depth 1 | import-clixml  -ErrorAction Continue
-        $GetItemProperty=Foreach ($ThisHost in (Get-ChildItem -Path $SDDCPath -Filter "GetRegSpacePortParameters.xml" -Recurse -Depth 1)) {import-clixml -Path $ThisHost.fullname -ErrorAction Continue | Select-Object @{L="ComputerName";E={$ThisHost.Directory.Name -replace "Node_",""}},*}
-        $GetItemPropertyOut =$GetItemProperty|Where-Object{$_.HwTimeout -ne $Null} | Select-Object ComputerName,@{L='HwTimeout';E={$HwTimeout=$_.HwTimeout;IF($HwTimeout -lt 10000){"RREEDD"}ElseIF($HwTimeout -gt 10000){"YYEELLLLOOWW$HwTimeout"}Else{$HwTimeout}}} | Sort-Object ComputerName
-        #$GetItemPropertyOut | FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetItemPropertyOut|Select-Object -Property `
-                @{L='ComputerName';E={[string]$_.ComputerName}},
-                @{L='HwTimeout';E={[string]$_.HwTimeout}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
+        If ($PowerFlex -eq $false) {
+            #Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Services\spaceport\Parameters -Name HwTimeout -Value 0x00002710 " Verbose
+            $Name="Update hardware timeout for Spaces port"
+            Write-Host "    Gathering $Name..." 
+            #$GetItemProperty=Get-ChildItem -Path $SDDCPath -Filter "GetItemProperty.xml" -Recurse -Depth 1 | import-clixml  -ErrorAction Continue
+            $GetItemProperty=Foreach ($ThisHost in (Get-ChildItem -Path $SDDCPath -Filter "GetRegSpacePortParameters.xml" -Recurse -Depth 1)) {import-clixml -Path $ThisHost.fullname -ErrorAction Continue | Select-Object @{L="ComputerName";E={$ThisHost.Directory.Name -replace "Node_",""}},*}
+            $GetItemPropertyOut =$GetItemProperty|Where-Object{$_.HwTimeout -ne $Null} | Select-Object ComputerName,@{L='HwTimeout';E={$HwTimeout=$_.HwTimeout;IF($HwTimeout -lt 10000){"RREEDD"}ElseIF($HwTimeout -gt 10000){"YYEELLLLOOWW$HwTimeout"}Else{$HwTimeout}}} | Sort-Object ComputerName
+            #$GetItemPropertyOut | FT -AutoSize
+            #Azure Table
+                $AzureTableData=@()
+                $AzureTableData=$GetItemPropertyOut|Select-Object -Property `
+                    @{L='ComputerName';E={[string]$_.ComputerName}},
+                    @{L='HwTimeout';E={[string]$_.HwTimeout}},
+                    @{L='ReportID';E={$CReportID}}
+                $PartitionKey=$Name -replace '\s'
+                $TableName="CluChk$($PartitionKey)"
+                $SasToken='?SECRET REMOVED'
+                $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
 
-        # HTML Report
-        $html+='<H2 id="UpdatehardwaretimeoutforSpacesport">Update hardware timeout for Spaces port</H2>'
-        $html+=""
-        $html+="<h5><b>Should be:</b></h5>"
-        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-HwTimeout=0x00002710(10000)</h5>"
-        $html+=$GetItemPropertyOut | ConvertTo-html -Fragment
-        $html=$html `
-         -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
-         -replace '<td>YYEELLLLOoWW','<td style="background-color: #ffff00">'
-        $ResultsSummary+=Set-ResultsSummary -name $name -html $html
-        $htmlout+=$html
-        $html=""
-        $Name=""
-
+            # HTML Report
+            $html+='<H2 id="UpdatehardwaretimeoutforSpacesport">Update hardware timeout for Spaces port</H2>'
+            $html+=""
+            $html+="<h5><b>Should be:</b></h5>"
+            $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-HwTimeout=0x00002710(10000)</h5>"
+            $html+=$GetItemPropertyOut | ConvertTo-html -Fragment
+            $html=$html `
+             -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
+             -replace '<td>YYEELLLLOoWW','<td style="background-color: #ffff00">'
+            $ResultsSummary+=Set-ResultsSummary -name $name -html $html
+            $htmlout+=$html
+            $html=""
+            $Name=""
+        }
     #OEM Information Support Provider
         # Only check for this is Azure Stack HCI OS 20H2 or 21H2, check on first node OS
 If($SystemInfoContent[2] -imatch 'HCI'){
@@ -7349,10 +7392,11 @@ $html=""
 
 
     # System Page File - Add by JG on 12/16/2022
-    $Name="System Page File"
-    Write-Host "    Gathering $Name..."
-    #$GetComputerInfo=Foreach ($key in ($SDDCFiles.keys -like "*GetComputerInfo")) {$SDDCFiles."$key"}
-    #Check if GetComputerInfo exisits
+    If ($PowerFlex -eq $false) {
+        $Name="System Page File"
+        Write-Host "    Gathering $Name..."
+        #$GetComputerInfo=Foreach ($key in ($SDDCFiles.keys -like "*GetComputerInfo")) {$SDDCFiles."$key"}
+        #Check if GetComputerInfo exisits
         IF($GetComputerInfo){
             $ClusterName=$SDDCFiles."GetCluster" | Select-Object Name,BlockCacheSize
             $PageFileInfoOut=""
@@ -7373,8 +7417,8 @@ $html=""
                   }Else{$PFS}
 		}},`
                 @{L="BlockCacheSize";E={$ClusterName.BlockCacheSize}}
-         }
-      # HTML Report
+        }
+        # HTML Report
         $html+='<H2 id="SystemPageFile">System Page File</H2>'
         $html+="<h5><b>Should be:</b></h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;51200MB + BlockCacheSize</h5>"
@@ -7385,10 +7429,10 @@ $html=""
                 -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
                 -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">' 
         $ResultsSummary+=Set-ResultsSummary -name $name -html $html
-    $htmlout+=$html
-    $html=""
+        $htmlout+=$html
+        $html=""
         $Name=""
-    
+    }
 }
 If($ProcessSDDC -ieq 'y'){
     Write-Host "Start to S2D validation Complete is $(((Get-Date)-$dstartSDDC).totalmilliseconds)"
