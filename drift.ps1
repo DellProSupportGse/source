@@ -1,2023 +1,5347 @@
 <#
-.Synopsis
-   DRIFT - Driver and Firmware Tool
-   Script to check for the latest Firmware and Drivers
+.SYNOPSIS
+    DriFT 2.0 - Driver and Firmware Tool.
+
 .DESCRIPTION
-   This tool compares RAW Teseract export with
-   the Dell catalog to easily show drivers and
-   firmware DriFt from currently available
-   versions on downloads.dell.com
-.CREATEDBY
-    Jim Gandy
-.UPDATES
-    2026/05/14:v1.78 -  1. Bug Fix: JG - Resolved the telemety errors and enabled again
-    2026/03/11:v1.77 -  1. Bug Fix: JG - Resolved the telemety errors and enabled again
-                        2. New Feature: JG - Added a Write-Indent function with number of indents and color.
-                                                Ex. Write-Indent "Telemetry recorded successfully" 1 Green
+    DriFT 2.0 analyzes Dell support collections and compares installed firmware,
+    drivers, BIOS, operating system updates, and platform-specific compatibility data
+    against the appropriate Dell catalog source.
 
-    2025/01/24:v1.76 -  1. Bug Fix: TP - Fixed MS latest updates by copying and converted it from CluChk
+    The public Invoke-RunDriFT entry point is preserved so DriFT can still be launched
+    directly from GitHub one-liners, while the internal engine is organized into
+    documented functions for extraction, platform detection, inventory normalization,
+    catalog loading, matching, reporting, telemetry, debug export, and cleanup.
 
-    2024/04/03:v1.73 -  1. New Feature: TP - Added 15g S2d BIOS settings
-			            2. New Feature: JG - Moved to GitHub
-                        3. New Feature: JG - Added Function Invoke-RunDriFT 
+    Supported collection and platform paths include:
+      - 17G SupportAssist / TSR collections using Redfish inventory data.
+      - Legacy 16G and older TSR collections using DCIM SoftwareIdentity XML.
+      - DSET collections that predate TSR, including password-protected DSET ZIPs.
+      - PowerEdge server catalog matching through Dell Catalog.xml.
+      - AX / Azure Stack HCI systems using ASHCI-Catalog.xml first, with Catalog.xml fallback.
+      - VMware ESXi and vSAN systems with Broadcom Compatibility Guide driver links.
+      - Precision workstation first-pass support through Precision-aware platform detection.
+      - Cluster comparison reporting with one installed-version column per node.
 
-    2022/06/27:v1.72 -  1. Bug Fix: JG - Resolved missing VMWare drivers when we have 7.0.X as .X does not matter.
-                        2. Bug Fix: JG - Added a check if SEL does not exsist then display message SEL not found.
+    DriFT 2.0 normalizes every inventory source into a common object model before
+    matching so report generation is consistent across generations and collection
+    formats.
 
-    2022/06/26:v1.71 -  1. Bug Fix: JG - Fixed issue displaying updated driver information on Azure Stack HCI-less Windows Servers.
+.NOTES
+    Temporary working files, extracted collections, catalog files, logs, and debug
+    exports are stored under %TEMP%\DriFT by default.
 
-    2022/05/01:v1.70 -  1. New Featrue: JG - Added expanded telemetry data
+    Use -ExportDebugData to export stage-level CSV files such as normalized inventory,
+    catalog matches, PCI identity data, and VMware/Broadcom compatibility lookup input.
 
-    2022/02/25:v1.69 -  1. Bug Fix: Resolved AZHCI Catalog vs Catalog Supported OS conflict
-
-    2022/02/xx:v1.68 -  1. Bug Fix: Resolved wrong Documentation link for CPLD
-
-    2021/12/07:v1.67 -  1. Update: Updated the links to the Windows update RSS feed
-                        2. New Feature: Removed duplacate webpage is scraps
-
-    2021/11/04:v1.66 -  1. Bug Fix: Resolved 403 errors on report upload
-
-    2021/11/02:v1.65 -  1. Bug Fix: Resolved Telemetry data
-
-    2021/10/xx:v1.64 -  1. Bug Fix: Resolved missing CPLD due to source webpage format change
-                        2. New Feature: Added supported OS to driver filter
-                        3. Bug Fix: Removed dumps from Switch port to Host map
-
-    2020/08/xx:v1.63 -  1. Bug Fix: Removed extraneous output for new table format
-                        2. New Feature: Added support for Precision 7910/20
-                        3. New Feature: Moved source code to Azure
-                        4. New Feature: Moved telemetry to Azure Tables
-                        5. New Feature: Added Report Data to Azure Tables 
-                        6. New Feature: Removed doanloaded and extracted files
-                        7. New Feature: Do not show emplty reports
-
-    2020/02/xx:v1.62 -  1. Bug Fix: Removed all Alias references
-                        2. Add Feature: Added multi file commandline process via -input comma delimited list 
-                        3. Bug Fix: Fixed missing Microsoft Update due to ATOM Feed Changes
-                        4. New Feature: Added Azure Stack Hub support
-                        5. New Feature: New multi node reporting view for easy node comparison
-                        6. New Feature: Added SEL log Error/Warning for the last 30 days
-
-    2020/01/28:v1.61 -  1. Bug Fix: Resolved failing CPLD details lookup
-                        2. Bug Fix: Removed allways use AZCHI catalog.xml
-                        3. New Feature: Add support of new iDRAC 4.40
-
-    2020/01/08:v1.60 -  1. Bug Fix: Add XR2 = R440
-                        2. New Feature: Added Memory Settings,Node Interleaving,Disabled
-                        3. New Feature: Added R740XD2 to System Profile Settings,Turbo Boost,Enabled
-                        4. New Feature: Added System Security,TPM Security,On
-                        5. New Feature: Added Power Configuration,Redundancy Policy,Redundant
-                        6. New Feature: Added Power Configuration,Enable Hot Spare,Enabled
-                        7. New Feature: Added Power Configuration,Primary Power Supply Unit,PSU1
-                        8. New Feature: Added Network Settings,Enable NIC,Enabled
-                        9. New Feature: Added Network Settings,NIC Selection,Dedicated
-                        10. New Feature: Added CPLD updates for S2D AX/Ready Nodes
-                        11. New Feature: Moved Switch port to Host map to CluChk mode
-
-    
-    
-    See older version for previous notes
+    Set-StrictMode is intentionally not enabled because TSR, DSET, Redfish, catalog,
+    and metadata objects all contain optional or generation-specific fields. Treating
+    missing optional properties as terminating errors would make parser behavior less
+    reliable across mixed Dell collection formats.
 #>
-Function Invoke-RunDriFT{
-    $uploadToAzure=$True
-# logging
-$DateTime=Get-Date -Format yyyyMMdd_HHmmss;Start-Transcript -NoClobber -Path "C:\programdata\Dell\DriFT\DriFT_$DateTime.log"
-Write-host "Starting log: C:\programdata\Dell\DriFT\DriFT_$DateTime.log"
-IF(!($args)){
-    #Variable Cleanup
-    Remove-Variable * -ErrorAction SilentlyContinue
-}
-[system.gc]::Collect()
-$DriFTVer="DriFT_v1.78"
-$DirFTV=$DriFTVer.Split("v")
-$DFTV=$DirFTV[1]
+Set-StrictMode -Off
 
-#Param ($TSRIn)
-#If($TSRIn.lenght -gt 0){$args=$TSRIn}
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+#region Constants / Types
 
-Function EndScript{  
-    break
-}
-$WhatsNew=@"
-    1. Bug Fix: TP - Fixed MS latest updates by copying and converting it from CluChk
-"@
+$script:DriFTVersion = 'DriFT_v2.00DEV'
+$script:DriFTDellDownloadRoot = 'https://downloads.dell.com/'
+$script:DriFTDefaultWorkRoot = Join-Path $env:TEMP 'DriFT'
 
-If(!($args)){Clear-Host}
-$text = @"
-v$DFTV                                           
-_______                                     
-\  ___ `'.           .--.                   
- ' |--.\  \          |__|     _.._          
- | |    \  ' .-,.--. .--.   .' .._|    .|   
- | |     |  '|  .-. ||  |   | '      .' |_  
- | |     |  || |  | ||  | __| |__  .'     | 
- | |     ' .'| |  | ||  ||__   __|'--.  .-' 
- | |___.' /' | |  '- |  |   | |      |  |   
-/_______.'/  | |     |__|   | |      |  |   
-\_______|/   | |            | |      |  '.' 
-             |_|            | |      |   /  
-                            |_|      `'-'   
+#endregion Constants / Types
 
-                             by: Jim Gandy
+#region Public Entry Point
 
-"@
-Write-Host $text
-If($args){
-    IF($args -match "cluchk"){
-        Write-Host "DriFT running in CluChk mode..."
-        Write-Host "    $args"
-        $FileNameGuid=(($args -split '\-cluchk\s')[1] -split '-input')[0].trim()
-        #$FileNameGuid=$args -replace '-cluchk ',""
-        Write-Host "File Name Guid:" $FileNameGuid
-        Write-Host "Processing TRS File(s)"
-        $TSRInputFiles=@()
-        $TSRInputFiles=(($args -split '-input')[1].trim() -split ',').trim()
-        $TSRLoc=$TSRInputFiles
-        $TSRLoc
-        $args=""
-        $CluChkMode="YES"
-    }Else{
-        Write-Host "CMD Mode: Processing one TSR..."
-        Write-Host "TSR Input File: "$args
-    }
-}
+function Invoke-RunDriFT {
+<#
+.SYNOPSIS
+    Public DriFT entry point.
 
+.DESCRIPTION
+    Preserves the existing public function name used by GitHub one-liners.
+    This function should remain small and only orchestrate the run:
+      1. Initialize context/logging.
+      2. Resolve input files.
+      3. Prepare catalogs.
+      4. Import each SupportAssist collection.
+      5. Normalize inventory.
+      6. Compare to catalog.
+      7. Add supplemental checks.
+      8. Write reports.
+      9. Cleanup.
 
-#Input file
-Function Get-FileName($initialDirectory)
-{
-    [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null
-    
-    $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog -Property @{Multiselect = $true}
-    $OpenFileDialog.Title = "Please Select One or More SupportAssist File(s)."
-    $OpenFileDialog.initialDirectory = $initialDirectory
-    $OpenFileDialog.filter = "ZIP (*.zip)| *.zip"
-    $OpenFileDialog.ShowDialog((New-Object System.Windows.Forms.Form -Property @{TopMost = $true })) | Out-Null
-    $OpenFileDialog.filenames
-}
+.PARAMETER InputPath
+    One or more SupportAssist Collection ZIP files. If omitted, a file picker is used.
 
-IF(!($CluChkMode)){
-    If(!($args)){
-        $Title=@()
-        $Title+="Welcome to DriFT (Driver and Firmware Tool)"
-        Write-host $Title
-        Write-host " "
-        Write-Host "What's New in"$DFTV":"
-        Write-Host $WhatsNew 
-        Write-Host "" 
-        $Run = Read-Host "Ready to run? [y/n]"
-        If (($run -ieq "n")-or ($run -ieq "")){
-            $OutputType="No"
-            EndScript}
-    };
-}
+.PARAMETER CluChk
+    Enables CluChk-compatible behavior and supplemental XML outputs.
 
+.PARAMETER FileNameGuid
+    Optional file name GUID used by CluChk output naming.
 
-# =====================================================
-#region Telemetry Information
-# =====================================================
-$uploadToAzure=$True
-IF($uploadToAzure){
+.PARAMETER NoTelemetry
+    Disables telemetry upload.
 
-    Write-Host "Logging Telemetry Information..."
+.PARAMETER KeepTemp
+    Keeps temporary extracted files for troubleshooting.
 
-    function Add-TableData {
-        [CmdletBinding()]
-        param(
-            [Parameter(Mandatory=$true)]
-            [string]$TableName,
+.PARAMETER ExportDebugData
+    Enables debug CSV exports for normalized data, matches, and unmatched records.
 
-            [Parameter(Mandatory=$true)]
-            [string]$PartitionKey,
+.EXAMPLE
+    Invoke-RunDriFT
 
-            [Parameter(Mandatory=$true)]
-            [hashtable]$Data
-        )
+.EXAMPLE
+    Invoke-RunDriFT -InputPath C:\Temp\TSR.zip -ExportDebugData
 
-        if (-not $uploadToAzure) { return }
+.EXAMPLE
+    Invoke-RunDriFT -InputPath @('C:\Temp\node1.zip','C:\Temp\node2.zip') -CluChk -FileNameGuid 1234
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string[]]$InputPath,
 
-        $RowKey = [guid]::NewGuid().Guid
-        
-        $TableSvcSasUrl = 'https://gsetools.table.core.windows.net/?SECRET REMOVED'
+        [switch]$CluChk,
 
-        $uri = "https://gsetools.table.core.windows.net/$TableName$($TableSvcSasUrl.Substring($TableSvcSasUrl.IndexOf('?')))"
+        [string]$FileNameGuid,
 
-        $headers = @{
-            "Accept"       = "application/json;odata=nometadata"
-            "Content-Type" = "application/json"
-            "x-ms-version" = "2019-02-02"
-        }
+        [switch]$NoTelemetry,
 
-        $Data["PartitionKey"] = $PartitionKey
-        $Data["RowKey"]       = $RowKey
+        [switch]$KeepTemp,
 
-        $body = $Data | ConvertTo-Json -Depth 5
+        [switch]$ExportDebugData
+    )
 
-        $maxRetries = 3
-        $attempt = 0
-        $success = $false
-
-        while (-not $success -and $attempt -lt $maxRetries) {
-
-            try {
-                Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $body | Out-Null
-                $success = $true
-                Write-Indent "Telemetry recorded successfully" 1 Green
-            }
-            catch {
-                $attempt++
-
-                if ($attempt -lt $maxRetries) {
-                    Write-Indent "Retrying telemetry upload ($attempt/$maxRetries)..." 1 Yellow
-                    Start-Sleep -Seconds 2
-                }
-                else {
-                    Write-Indent "Telemetry upload failed after $maxRetries attempts" 1 Yellow
-                }
-            }
-        }
-    }
-
-    function Write-Indent {
-        param(
-            [string]$Message,
-            [int]$Level = 1,
-            [string]$Color = "Gray"
-        )
-
-        $prefix = "  " * $Level
-        Write-Host "$prefix$Message" -ForegroundColor $Color
-    }
-
-    # Unique report id
-    $CReportID = [guid]::NewGuid().Guid
-
-
-    Write-Indent "Resolving Geo Location..."
+    $ctx = $null
 
     try {
-        if (-not $global:GeoCache) {
-            $global:GeoCache = Invoke-RestMethod "https://ipwho.is/" -TimeoutSec 5
+        $ctx = Initialize-DriFTRunContext `
+            -InputPath $InputPath `
+            -CluChk:$CluChk `
+            -FileNameGuid $FileNameGuid `
+            -NoTelemetry:$NoTelemetry `
+            -KeepTemp:$KeepTemp `
+            -ExportDebugData:$ExportDebugData
+
+        Write-DriFTBanner -Context $ctx
+
+        if (-not $ctx.NoTelemetry) {
+            Write-DriFTTelemetry -Context $ctx
         }
 
-        $response = $global:GeoCache
+        $collections = Import-DriFTSupportAssistCollections -Context $ctx
 
-        if ($response.success -eq $true) {
+        if ($ctx.Cancelled -or -not $collections -or @($collections).Count -eq 0) {
+            return $null
+        }
 
-            $country     = $response.country
-            $countryCode = $response.country_code
-            $region      = $response.region
-            $city        = $response.city
-            $latitude    = $response.latitude
-            $longitude   = $response.longitude
-            $timezone    = $response.timezone.id
+        $catalogSet = Initialize-DriFTCatalogSet -Context $ctx
 
-            Write-Indent "Country: $country" 2
-            Write-Indent "Region : $region" 2
+        $allReportRows = @()
+        $allBiosConfigRows = @()
+        $allSwitchMapRows = @()
+        $allSelRows = @()
+
+        foreach ($collection in $collections) {
+
+            # Track active collection for downstream report generation.
+            if ($ctx.PSObject.Properties.Name -notcontains 'CurrentCollection') {
+                $ctx | Add-Member -MemberType NoteProperty -Name CurrentCollection -Value $collection -Force
+            }
+            else {
+                $ctx.CurrentCollection = $collection
+            }
+
+            # Write the HTML report beside the TSR/SupportAssist ZIP being processed.
+            $sourceFolder = Split-Path -Parent $collection.SourcePath
+            if ($sourceFolder -and (Test-Path -LiteralPath $sourceFolder)) {
+                $ctx.OutputRoot = $sourceFolder
+            }
+            Write-DriFTLog -Context $ctx -Message "Processing collection: $($collection.SourcePath)" -Level Info
+
+            $system = Get-DriFTSystemIdentity -Collection $collection -Context $ctx
+            $os = Get-DriFTOperatingSystem -Collection $collection -Context $ctx
+            $inventory = @(Get-DriFTInstalledInventory -Collection $collection -Context $ctx | Where-Object { $null -ne $_ })
+            Write-DriFTLog -Context $ctx -Message "Normalized inventory rows: $(@($inventory).Count)" -Level Info -Indent 1
+
+            if (-not $inventory -or @($inventory).Count -eq 0) {
+                Write-DriFTLog -Context $ctx -Message "WARNING: No installed inventory rows were returned for this collection." -Level Warn -Indent 1
+            }
+
+            Export-DriFTDebugData -Context $ctx -Name "$($system.ServiceTag)_NormalizedInventory.csv" -InputObject $inventory
+
+            $filteredCatalogs = Get-DriFTApplicableCatalogRows `
+                -CatalogSet $catalogSet `
+                -System $system `
+                -OperatingSystem $os `
+                -Context $ctx
+
+            $catalogIndex = New-DriFTCatalogIndex -CatalogRows $filteredCatalogs.AllRows -Context $ctx
+
+            $matches = Compare-DriFTInventoryToCatalog `
+                -Inventory $inventory `
+                -CatalogIndex $catalogIndex `
+                -CatalogRows $filteredCatalogs `
+                -System $system `
+                -OperatingSystem $os `
+                -Context $ctx
+
+            Export-DriFTDebugData -Context $ctx -Name "$($system.ServiceTag)_CatalogMatches.csv" -InputObject $matches
+
+            $reportRows = New-DriFTReportRows `
+                -Matches $matches `
+                -System $system `
+                -OperatingSystem $os `
+                -Context $ctx
+
+            foreach ($row in @($reportRows)) { if ($null -ne $row) { $allReportRows += @($row) } }
+
+            $unmatchedPciRows = New-DriFTUnmatchedPciReportRows `
+                -Matches $matches `
+                -System $system `
+                -OperatingSystem $os `
+                -Context $ctx
+
+            foreach ($row in @($unmatchedPciRows)) { if ($null -ne $row) { $allReportRows += @($row) } }
+
+            if ($os.Family -eq 'Windows') {
+                $driverRows = Add-DriFTWindowsDriverRows `
+                    -Inventory $inventory `
+                    -CatalogRows $filteredCatalogs `
+                    -System $system `
+                    -OperatingSystem $os `
+                    -Context $ctx
+
+                foreach ($row in @($driverRows)) { if ($null -ne $row) { $allReportRows += @($row) } }
+
+                $osRows = Add-DriFTWindowsUpdateRows `
+                    -System $system `
+                    -OperatingSystem $os `
+                    -Context $ctx
+
+                foreach ($row in @($osRows | Where-Object { $null -ne $_ })) { $allReportRows += @($row) }
+            }
+
+            if ($os.Family -eq 'VMware' -or $os.RawName -imatch 'vSAN|VMware|ESXi' -or $os.DisplayName -imatch 'vSAN|VMware|ESXi') {
+                $vmwareRows = Add-DriFTVmwareCompatibilityRows `
+                    -Inventory $inventory `
+                    -System $system `
+                    -OperatingSystem $os `
+                    -Context $ctx
+
+                foreach ($row in @($vmwareRows)) { if ($null -ne $row) { $allReportRows += @($row) } }
+            }
+
+            $selRows = Get-DriFTSelHealthRows -Collection $collection -System $system -Context $ctx
+            foreach ($row in @($selRows)) { if ($null -ne $row) { $allSelRows += @($row) } }
+
+            if ($ctx.CluChk) {
+                $biosRows = Get-DriFTBiosAndIdracConfigRows `
+                    -Collection $collection `
+                    -System $system `
+                    -OperatingSystem $os `
+                    -Context $ctx
+
+                foreach ($row in @($biosRows)) { if ($null -ne $row) { $allBiosConfigRows += @($row) } }
+
+                $switchRows = Get-DriFTSwitchPortMapRows `
+                    -Collection $collection `
+                    -System $system `
+                    -Context $ctx
+
+                foreach ($row in @($switchRows)) { if ($null -ne $row) { $allSwitchMapRows += @($row) } }
+            }
+        }
+
+        $reportPath = Write-DriFTHtmlReport `
+            -Rows @($allReportRows) `
+            -Context $ctx `
+            -CatalogSet $catalogSet
+
+        if ($ctx.CluChk) {
+            Write-DriFTCluChkOutputs `
+                -Context $ctx `
+                -BiosConfigRows @($allBiosConfigRows) `
+                -SwitchMapRows @($allSwitchMapRows) `
+                -SelRows @($allSelRows)
+        }
+
+        Write-DriFTLog -Context $ctx -Message "Report written to: $reportPath" -Level Success
+
+        if ($reportPath -and (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            try {
+                Invoke-Item -LiteralPath $reportPath
+            }
+            catch {
+                Write-DriFTLog -Context $ctx -Message "Report was written but could not be opened automatically: $($_.Exception.Message)" -Level Warn
+            }
+        }
+
+        return $reportPath
+    }
+    catch {
+        $err = $_
+        $line = $err.InvocationInfo.ScriptLineNumber
+        $cmd  = $err.InvocationInfo.Line
+        $msg  = $err.Exception.Message
+        $stack = $err.ScriptStackTrace
+
+        Write-Host ""
+        Write-Host "========== DriFT DEBUG ==========" -ForegroundColor Red
+        Write-Host ("Line    : {0}" -f $line) -ForegroundColor Yellow
+        Write-Host ("Message : {0}" -f $msg) -ForegroundColor Yellow
+        Write-Host ("Command : {0}" -f $cmd) -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "Stack Trace:" -ForegroundColor Magenta
+        Write-Host $stack
+        Write-Host "=================================" -ForegroundColor Red
+
+        throw
+    }
+    finally {
+        if ($ctx) {
+            Complete-DriFTRun -Context $ctx
+        }
+    }
+}
+
+#endregion Public Entry Point
+
+#region Run Context / Logging / UI
+
+function Initialize-DriFTRunContext {
+<#
+.SYNOPSIS
+    Creates the per-run state object.
+
+.DESCRIPTION
+    Centralizes run-specific paths, switches, log path, report ID, and input paths.
+    Avoids global variables and prevents accidental session-scope cleanup.
+#>
+    [CmdletBinding()]
+    param(
+        [string[]]$InputPath,
+        [switch]$CluChk,
+        [string]$FileNameGuid,
+        [switch]$NoTelemetry,
+        [switch]$KeepTemp,
+        [switch]$ExportDebugData
+    )
+
+    $dateStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $workRoot = $script:DriFTDefaultWorkRoot
+    $logRoot = Join-Path $workRoot 'Logs'
+    $extractRoot = Join-Path $workRoot 'Extract'
+    $redfishRoot = Join-Path $workRoot 'Redfish'
+    $catalogRoot = Join-Path $workRoot 'Catalog'
+    $debugRoot = Join-Path $workRoot 'Debug'
+    $runRoot = Join-Path $extractRoot ('Run_' + ([guid]::NewGuid().Guid.Substring(0, 8)))
+
+    foreach ($path in @($workRoot, $extractRoot, $redfishRoot, $catalogRoot, $debugRoot, $runRoot)) {
+        if (-not (Test-Path -Path $path -PathType Container)) {
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+        }
+    }
+
+    if (-not (Test-Path -Path $logRoot -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+    }
+
+    $logPath = Join-Path $logRoot "DriFT_$dateStamp.log"
+    try { Start-Transcript -Path $logPath -NoClobber -ErrorAction Stop | Out-Null } catch { }
+
+    [PSCustomObject]@{
+        Version       = $script:DriFTVersion
+        DisplayVer    = ($script:DriFTVersion -replace '^.*_v', '')
+        RunId         = [guid]::NewGuid().Guid
+        DateStamp     = $dateStamp
+        Started       = Get-Date
+        InputPath     = $InputPath
+        CluChk        = [bool]$CluChk
+        FileNameGuid  = $FileNameGuid
+        NoTelemetry   = [bool]$NoTelemetry
+        KeepTemp      = [bool]$KeepTemp
+        ExportDebugData = [bool]$ExportDebugData
+        WorkRoot      = $workRoot
+        RunRoot       = $runRoot
+        RedfishRoot   = $redfishRoot
+        CatalogRoot   = $catalogRoot
+        DebugRoot     = $debugRoot
+        ExportDebugDataRoot = $debugRoot
+        LogPath       = $logPath
+        OutputRoot    = $null
+        Cancelled     = $false
+        ServiceTags   = New-Object System.Collections.Generic.List[string]
+    }
+}
+
+function Write-DriFTBanner {
+<#
+.SYNOPSIS
+    Writes the startup banner.
+
+.DESCRIPTION
+    Keeps presentation code out of the orchestrator.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+$VerLine = "|v$($Context.DisplayVer)"+" "*(43-$($Context.DisplayVer).length)+"|"
+
+$text = @"
++--------------------------------------------+
+$VerLine 
+|          __   __     ___ ___               |
+|         |  \ |__) | |__   |                |
+|         |__/ |  \ | |     |                |
+|                                            |
+|             Driver & Firmware Tool         |
+|                         By: Jim Gandy      |
+|                                            |
++--------------------------------------------+
+
+"@
+    Clear-Host
+    Write-Host $text
+    Write-DriFTLog -Context $Context -Message "Starting log: $($Context.LogPath)" -Level Info
+}
+
+function Write-DriFTLog {
+<#
+.SYNOPSIS
+    Writes a consistent status message.
+
+.DESCRIPTION
+    Simple wrapper for Write-Host today. Can later be replaced with structured logging.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Context,
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet('Info','Warn','Error','Success')]
+        [string]$Level = 'Info',
+        [int]$Indent = 0
+    )
+
+    $prefix = '  ' * $Indent
+    $color = switch ($Level) {
+        'Warn'    { 'Yellow' }
+        'Error'   { 'Red' }
+        'Success' { 'Green' }
+        default   { 'Gray' }
+    }
+
+    Write-Host "$prefix$Message" -ForegroundColor $color
+}
+
+function Export-DriFTDebugData {
+<#
+.SYNOPSIS
+    Exports stage debug data when -ExportDebugData is enabled.
+
+.DESCRIPTION
+    Debug export should never break a DriFT run. If ExportDebugDataRoot is missing,
+    it falls back to DebugRoot and then %TEMP%\DriFT\Debug.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$Context,
+        [Parameter(Mandatory)][string]$Name,
+        [AllowNull()][object]$InputObject
+    )
+
+    try {
+        if ($null -eq $Context) { return $null }
+
+        $enabled = $false
+        foreach ($propName in @('ExportDebugData','Debug','EnableDebugExports')) {
+            if ($Context.PSObject.Properties.Name -contains $propName -and [bool]$Context.$propName) {
+                $enabled = $true
+                break
+            }
+        }
+
+        if (-not $enabled) { return $null }
+
+        $debugRoot = Get-DriFTFirstNonEmpty `
+            $Context.ExportDebugDataRoot `
+            $Context.DebugRoot `
+            (Join-Path $env:TEMP 'DriFT\Debug')
+
+        if ($Context.PSObject.Properties.Name -notcontains 'ExportDebugDataRoot') {
+            $Context | Add-Member -MemberType NoteProperty -Name ExportDebugDataRoot -Value $debugRoot -Force
+        }
+        elseif ([string]::IsNullOrWhiteSpace([string]$Context.ExportDebugDataRoot)) {
+            $Context.ExportDebugDataRoot = $debugRoot
+        }
+
+        if (-not (Test-Path -LiteralPath $debugRoot -PathType Container)) {
+            New-Item -ItemType Directory -Force -Path $debugRoot | Out-Null
+        }
+
+        $safeName = ([string]$Name) -replace '[<>:"/\\|?*]', '_'
+        if ($safeName -notmatch '\.(csv|json|txt)$') {
+            $safeName = "$safeName.csv"
+        }
+
+        $path = Join-Path $debugRoot $safeName
+
+        if ($null -eq $InputObject) {
+            '' | Out-File -LiteralPath $path -Encoding UTF8
+        }
+        elseif ($safeName -match '\.json$') {
+            $InputObject | ConvertTo-Json -Depth 20 | Out-File -LiteralPath $path -Encoding UTF8
+        }
+        elseif ($safeName -match '\.csv$') {
+            @($InputObject) | Export-Csv -NoTypeInformation -LiteralPath $path -Encoding UTF8
+        }
+        else {
+            $InputObject | Out-File -LiteralPath $path -Encoding UTF8
+        }
+
+        Write-DriFTLog -Context $Context -Message "Debug export written: $path" -Level Info -Indent 1
+
+        return $path
+    }
+    catch {
+        try {
+            Write-DriFTLog -Context $Context -Message "Debug export failed for '$Name': $($_.Exception.Message)" -Level Warn -Indent 1
+        }
+        catch { }
+
+        return $null
+    }
+}
+
+function Complete-DriFTRun {
+<#
+.SYNOPSIS
+    Performs final cleanup.
+
+.DESCRIPTION
+    Stops transcript and removes temporary extraction folders unless -KeepTemp was used.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    if (-not $Context.KeepTemp) {
+        foreach ($path in @($Context.RunRoot, $Context.RedfishRoot)) {
+            if ($path -and (Test-Path $path)) {
+                try { Remove-Item -Path $path -Recurse -Force -ErrorAction Stop }
+                catch { Write-Warning "Failed to remove temp path $path. It can be deleted manually." }
+            }
+        }
+    }
+
+    try { Stop-Transcript | Out-Null } catch {}
+}
+
+#endregion Run Context / Logging / UI
+
+#region Telemetry
+
+function Write-DriFTTelemetry {
+<#
+.SYNOPSIS
+    Records optional DriFT telemetry.
+
+.DESCRIPTION
+    This function intentionally does not embed SAS tokens. The SAS URL should be provided
+    through an environment variable or external configuration. This avoids committing a
+    writable storage token to GitHub.
+
+    Expected environment variable:
+      DRIFT_TABLE_SAS_URL
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    $sasUrl = [Environment]::GetEnvironmentVariable('DRIFT_TABLE_SAS_URL', 'User')
+    if (-not $sasUrl) {
+        $sasUrl = [Environment]::GetEnvironmentVariable('DRIFT_TABLE_SAS_URL', 'Machine')
+    }
+
+    if (-not $sasUrl) {
+        Write-DriFTLog -Context $Context -Message 'Telemetry skipped: DRIFT_TABLE_SAS_URL is not configured.' -Level Warn -Indent 1
+        return
+    }
+
+    # Intentionally minimal in the foundation. Port existing Azure Table write logic here.
+    Write-DriFTLog -Context $Context -Message 'Telemetry configured. Upload logic should be ported into Write-DriFTTelemetry.' -Level Info -Indent 1
+}
+
+#endregion Telemetry
+
+#region Input / Extraction
+
+function Resolve-DriFTInputPath {
+<#
+.SYNOPSIS
+    Resolves SupportAssist input files.
+
+.DESCRIPTION
+    Uses the supplied -InputPath when present. If omitted, opens the same ZIP picker
+    behavior used by the legacy script.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    if ($Context.InputPath -and @($Context.InputPath).Count -gt 0) {
+        $resolved = @()
+
+        foreach ($item in @($Context.InputPath)) {
+            if ([string]::IsNullOrWhiteSpace([string]$item)) { continue }
+
+            $candidate = ([string]$item).Trim().Trim('"').Trim("'")
+
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $resolved += @((Resolve-Path -LiteralPath $candidate).Path)
+                continue
+            }
+
+            # Last-resort DSET friendliness: if PowerShell wildcard parsing or
+            # pasted paths with brackets caused issues, try a filename search in
+            # the parent folder using -Filter, not wildcard path matching.
+            $parent = Split-Path -Path $candidate -Parent
+            $leaf = Split-Path -Path $candidate -Leaf
+
+            if ($parent -and (Test-Path -LiteralPath $parent -PathType Container)) {
+                $found = Get-ChildItem -LiteralPath $parent -Filter $leaf -File -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($found) {
+                    $resolved += @($found.FullName)
+                    continue
+                }
+            }
+
+            $resolved += @($candidate)
+        }
+
+        return @($resolved)
+    }
+
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.OpenFileDialog -Property @{
+        Multiselect      = $true
+        Title            = 'Please Select One or More SupportAssist File(s).'
+        InitialDirectory = $env:USERPROFILE
+        Filter           = 'ZIP (*.zip)|*.zip'
+    }
+
+    $dialog.ShowDialog((New-Object System.Windows.Forms.Form -Property @{ TopMost = $true })) | Out-Null
+    return @($dialog.FileNames)
+}
+
+
+
+function Get-DriFT7ZipPath {
+<#
+.SYNOPSIS
+    Finds a usable 7-Zip executable.
+
+.DESCRIPTION
+    Password-protected DSET archives cannot be extracted by .NET ZipArchive.
+    7-Zip supports encrypted ZIP entries and can extract DSET archives with the
+    legacy password.
+#>
+    [CmdletBinding()]
+    param()
+
+    $candidates = @(
+        "$env:ProgramFiles\7-Zip\7z.exe",
+        "${env:ProgramFiles(x86)}\7-Zip\7z.exe",
+        "$env:ProgramData\chocolatey\bin\7z.exe",
+        "$env:ProgramData\chocolatey\bin\7za.exe",
+        "7z.exe",
+        "7za.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+
+        try {
+            $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+        }
+        catch { }
+
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Expand-DriFTZipFileWith7Zip {
+<#
+.SYNOPSIS
+    Extracts ZIP files using 7-Zip.
+
+.DESCRIPTION
+    Used for password-protected DSET ZIP archives. DSET default password is "dell".
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Destination,
+        [AllowNull()][string]$Password,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $sevenZip = Get-DriFT7ZipPath
+    if ([string]::IsNullOrWhiteSpace($sevenZip)) {
+        throw "7-Zip was not found. Password-protected DSET ZIP extraction requires 7-Zip. Install 7-Zip or manually extract the DSET ZIP with password 'dell' and run DriFT against the extracted folder."
+    }
+
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    }
+
+    $args = @(
+        'x',
+        '-y',
+        "-o$Destination"
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Password)) {
+        $args += "-p$Password"
+    }
+
+    $args += $Path
+
+    Write-DriFTLog -Context $Context -Message "Trying 7-Zip extraction for ZIP: $Path" -Level Info -Indent 1
+
+    $process = Start-Process `
+        -FilePath $sevenZip `
+        -ArgumentList $args `
+        -NoNewWindow `
+        -Wait `
+        -PassThru `
+        -RedirectStandardOutput (Join-Path $Destination 'DriFT_7zip_stdout.txt') `
+        -RedirectStandardError (Join-Path $Destination 'DriFT_7zip_stderr.txt')
+
+    if ($process.ExitCode -ne 0) {
+        $stderr = ''
+        $stderrPath = Join-Path $Destination 'DriFT_7zip_stderr.txt'
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            $stderr = Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+        }
+
+        throw "7-Zip extraction failed with exit code $($process.ExitCode). $stderr"
+    }
+
+    $anyExtracted = Get-ChildItem -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '^DriFT_7zip_(stdout|stderr)\.txt$' } |
+        Select-Object -First 1
+
+    if (-not $anyExtracted) {
+        throw "7-Zip extraction completed but no files were extracted."
+    }
+
+    Write-DriFTLog -Context $Context -Message "7-Zip extraction succeeded." -Level Success -Indent 1
+
+    return $Destination
+}
+
+function Test-DriFTZipLooksLikeDset {
+<#
+.SYNOPSIS
+    Determines whether a ZIP filename/path appears to be a DSET archive.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$Path)
+
+    return ([string]$Path -imatch 'DSET|DSET_Report|DSET Report')
+}
+
+
+function Expand-DriFTZipFileWithShell {
+<#
+.SYNOPSIS
+    Extracts ZIP files using Windows Shell.Application fallback.
+
+.DESCRIPTION
+    Older DSET ZIP archives can contain entries that .NET ZipArchive fails to
+    decode with "Found invalid data while decoding." Windows Explorer/Shell can
+    often extract those same archives successfully, so this is used as a fallback.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    }
+
+    $shell = New-Object -ComObject Shell.Application
+    $zipNs = $shell.NameSpace((Resolve-Path -LiteralPath $Path).Path)
+    $dstNs = $shell.NameSpace((Resolve-Path -LiteralPath $Destination).Path)
+
+    if (-not $zipNs -or -not $dstNs) {
+        throw "Shell.Application could not open ZIP or destination. ZIP='$Path'; Destination='$Destination'"
+    }
+
+    # 0x10 = Yes to all / no UI prompts where possible
+    # 0x400 = Do not display progress dialog
+    # 0x4 = No UI
+    $copyFlags = 0x10 -bor 0x400 -bor 0x4
+    $dstNs.CopyHere($zipNs.Items(), $copyFlags)
+
+    # Shell copy is async. Wait briefly until extracted content appears.
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        Start-Sleep -Milliseconds 300
+        $items = Get-ChildItem -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($items) { break }
+    } while ((Get-Date) -lt $deadline)
+
+    return $Destination
+}
+
+function Expand-DriFTZipFileEntryByEntry {
+<#
+.SYNOPSIS
+    Extracts ZIP entries one by one and skips unreadable DSET entries.
+
+.DESCRIPTION
+    This is used before Shell fallback so good entries from partially problematic
+    DSET archives are still extracted. Failures are logged and extraction continues.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Destination,
+        $Context
+    )
+
+    if ($null -eq $Context) {
+        $Context = [PSCustomObject]@{
+            QuietExtractionWarnings = $true
+        }
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    }
+
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    $extracted = 0
+    $failed = 0
+
+    try {
+        foreach ($entry in $zip.Entries) {
+            if ([string]::IsNullOrWhiteSpace($entry.FullName)) { continue }
+
+            $relative = $entry.FullName -replace '/', '\'
+            if ($relative.EndsWith('\')) {
+                $dirPath = Join-Path $Destination $relative
+                if (-not (Test-Path -LiteralPath $dirPath -PathType Container)) {
+                    New-Item -ItemType Directory -Force -Path $dirPath | Out-Null
+                }
+                continue
+            }
+
+            $targetPath = Join-Path $Destination $relative
+            $targetDir = Split-Path -Parent $targetPath
+            if (-not (Test-Path -LiteralPath $targetDir -PathType Container)) {
+                New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+            }
+
+            try {
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, [string]$targetPath, $true)
+                $extracted++
+            }
+            catch {
+                $failed++
+
+                $isLowValueDsetLog = ($entry.FullName -imatch '\.(log|txt)$')
+                $showExtractionWarning = $true
+
+                if ($isLowValueDsetLog -and $Context.QuietExtractionWarnings -ne $false) {
+                    $showExtractionWarning = $false
+                }
+
+                if ($showExtractionWarning) {
+                    Write-DriFTLog -Context $Context -Message "ZIP entry skipped during extraction: $($entry.FullName) - $($_.Exception.Message)" -Level Warn -Indent 1
+                }
+            }
+        }
+    }
+    finally {
+        if ($zip) { $zip.Dispose() }
+    }
+
+    Write-DriFTLog -Context $Context -Message "ZIP extraction completed. Extracted=$extracted; Skipped=$failed" -Level Info -Indent 1
+
+    return $Destination
+}
+
+
+function Expand-DriFTZipFile {
+<#
+.SYNOPSIS
+    Extracts a ZIP file to a destination folder.
+
+.DESCRIPTION
+    Uses entry-by-entry .NET extraction first. If .NET cannot decode an older DSET
+    archive, it falls back to Windows Shell.Application extraction, which handles
+    some legacy ZIP structures better.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Destination,
+        $Context
+    )
+
+    if ($null -eq $Context) {
+        $Context = [PSCustomObject]@{
+            QuietExtractionWarnings = $true
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Input file was not found: $Path"
+    }
+
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    }
+
+    # DSET archives are commonly password-protected with password 'dell'.
+    # .NET ZipArchive cannot extract encrypted ZIP entries, so try 7-Zip first
+    # for files that look like DSET reports.
+    if (Test-DriFTZipLooksLikeDset -Path $Path) {
+        try {
+            Expand-DriFTZipFileWith7Zip -Path $Path -Destination $Destination -Password 'dell' -Context $Context | Out-Null
+            return $Destination
+        }
+        catch {
+            Write-DriFTLog -Context $Context -Message "7-Zip/DSET password extraction did not complete: $($_.Exception.Message)" -Level Warn -Indent 1
+            Write-DriFTLog -Context $Context -Message "Continuing with standard extraction fallback..." -Level Warn -Indent 1
+        }
+    }
+
+    try {
+        Expand-DriFTZipFileEntryByEntry -Path $Path -Destination $Destination -Context $Context | Out-Null
+
+        $anyExtracted = Get-ChildItem -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($anyExtracted) {
+            return $Destination
+        }
+
+        throw "No files were extracted by .NET ZipArchive."
+    }
+    catch {
+        Write-DriFTLog -Context $Context -Message "Primary ZIP extraction failed: $($_.Exception.Message)" -Level Warn -Indent 1
+        Write-DriFTLog -Context $Context -Message "Trying Shell.Application ZIP extraction fallback..." -Level Warn -Indent 1
+
+        try {
+            Expand-DriFTZipFileWithShell -Path $Path -Destination $Destination | Out-Null
+
+            $anyExtracted = Get-ChildItem -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($anyExtracted) {
+                Write-DriFTLog -Context $Context -Message "Shell.Application extraction fallback succeeded." -Level Success -Indent 1
+                return $Destination
+            }
+
+            throw "Shell.Application did not extract any files."
+        }
+        catch {
+            throw "Unable to extract ZIP '$Path'. Primary and fallback extraction failed. Last error: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Import-DriFTSupportAssistCollections {
+<#
+.SYNOPSIS
+    Extracts and classifies all input SupportAssist collections.
+
+.DESCRIPTION
+    Expands the outer TSR ZIP and any inner inventory ZIPs, then calls
+    Get-DriFTCollectionType to decide which parser path applies:
+      - LegacyTSR for 16G and older XML inventory
+      - TSR17G for 17G viewer.html/redfishidracwalk
+      - SAEXml for SupportAssist Enterprise XML
+      - SAEJson for unsupported SAE JSON detection
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    $inputFiles = Resolve-DriFTInputPath -Context $Context
+    if (-not $inputFiles -or @($inputFiles).Count -eq 0) {
+        Write-DriFTLog -Context $Context -Message "No TSR selected. Exiting." -Level Warn
+        $Context.Cancelled = $true
+        return @()
+    }
+
+    $collections = @()
+
+    foreach ($input in $inputFiles) {
+        if (-not (Test-Path -LiteralPath $input -PathType Leaf)) {
+            throw "Input file was not found: $input"
+        }
+
+        $input = [string]$input
+        $input = $input.Trim().Trim('"').Trim("'")
+
+        $baseName = [IO.Path]::GetFileNameWithoutExtension($input)
+        $dest = Join-Path $Context.RunRoot $baseName
+        Write-DriFTLog -Context $Context -Message "Extracting $input" -Level Info
+
+        Expand-DriFTZipFile -Path $input -Destination $dest -Context $Context | Out-Null
+        Expand-DriFTNestedInventoryZips -Root $dest -Context $Context
+
+        Write-DriFTLog -Context $Context -Message "Classifying extracted collection..." -Level Info -Indent 1
+        $collection = Get-DriFTCollectionType -Root ([string]$dest) -SourcePath ([string]$input) -Context $Context
+        Write-DriFTLog -Context $Context -Message "Collection type detected: $($collection.Type)" -Level Success -Indent 1
+        $collections += @($collection)
+    }
+
+    if (@($collections).Count -gt 0) {
+        $Context.OutputRoot = Split-Path -Path $inputFiles[0] -Parent
+    }
+
+    return @($collections)
+}
+
+function Expand-DriFTNestedInventoryZips {
+<#
+.SYNOPSIS
+    Extracts inner SupportAssist ZIPs.
+
+.DESCRIPTION
+    Preserves legacy behavior of extracting nested ZIP files while excluding obvious
+    non-inventory payloads such as thermal and dump logs.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $innerZips = Get-ChildItem -Path $Root -Filter '*.zip' -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch 'thermal|dumplog' } |
+        Sort-Object FullName -Unique
+
+    foreach ($zip in $innerZips) {
+        try {
+            Write-DriFTLog -Context $Context -Message "Extracting nested ZIP: $($zip.Name)" -Level Info -Indent 1
+            Expand-DriFTZipFile -Path ([string]$zip.FullName) -Destination ([string]$Root) -Context $Context | Out-Null
+        }
+        catch {
+            Write-DriFTLog -Context $Context -Message "Failed to extract nested ZIP $($zip.FullName): $($_.Exception.Message)" -Level Warn -Indent 1
+        }
+    }
+}
+
+function Get-DriFTCollectionType {
+<#
+.SYNOPSIS
+    Classifies an extracted collection.
+
+.DESCRIPTION
+    Determines the parser path without parsing the entire collection.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$SourcePath,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $inventoryDir = Get-ChildItem -Path $Root -Filter inventory -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    $hasLegacySoftwareIdentity = $false
+    if ($inventoryDir) {
+        $hasLegacySoftwareIdentity = Test-Path (Join-Path $inventoryDir.FullName 'sysinfo_DCIM_SoftwareIdentity.xml') -PathType Leaf
+    }
+
+    $viewerHtml = Get-ChildItem -Path $Root -Filter 'viewer.html' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    $redfishWalk = Get-ChildItem -Path $Root -Filter 'redfishidracwalk.tar.gz' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    $saeXml = Get-ChildItem -Path $Root -Include 'MaserInfo.xml','Inventory.xml' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    $saeJson = Get-ChildItem -Path $Root -Filter 'supportassist_output.json' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    $dsetInventory = Get-ChildItem -Path $Root -Filter 'Inventory.xml' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'OM Server Administrator' -or $_.FullName -match 'logs' } |
+        Select-Object -First 1
+
+    $dsetSyssum = Get-ChildItem -Path $Root -Filter 'syssum.xml' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'rawxml|xml|tmpreport' } |
+        Select-Object -First 1
+
+    $dsetFwView = Get-ChildItem -Path $Root -Filter 'fwview.xml' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'rawxml|xml|tmpreport' } |
+        Select-Object -First 1
+
+    $dsetBiosView = Get-ChildItem -Path $Root -Filter 'biosview.xml' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'rawxml|xml|tmpreport' } |
+        Select-Object -First 1
+
+    $type = if ($dsetInventory -or $dsetSyssum -or $dsetFwView -or $dsetBiosView) {
+        'DSET'
+    }
+    elseif ($inventoryDir -and $hasLegacySoftwareIdentity) {
+        'LegacyTSR'
+    }
+    elseif ($viewerHtml -or $redfishWalk) {
+        'TSR17G'
+    }
+    elseif ($saeXml) {
+        'SAEXml'
+    }
+    elseif ($saeJson) {
+        'SAEJson'
+    }
+    else {
+        'Unknown'
+    }
+
+    [PSCustomObject]@{
+        SourcePath       = $SourcePath
+        Root             = $Root
+        Type             = $type
+        InventoryPath    = if ($inventoryDir) { $inventoryDir.FullName } else { $null }
+        ViewerHtmlPath   = if ($viewerHtml) { $viewerHtml.FullName } else { $null }
+        RedfishWalkPath  = if ($redfishWalk) { $redfishWalk.FullName } else { $null }
+        SaeXmlPath       = if ($saeXml) { $saeXml.FullName } else { $null }
+        SaeJsonPath      = if ($saeJson) { $saeJson.FullName } else { $null }
+        DsetInventoryPath= if ($dsetInventory) { $dsetInventory.FullName } else { $null }
+        DsetSyssumPath   = if ($dsetSyssum) { $dsetSyssum.FullName } else { $null }
+        DsetFwViewPath   = if ($dsetFwView) { $dsetFwView.FullName } else { $null }
+        DsetBiosViewPath = if ($dsetBiosView) { $dsetBiosView.FullName } else { $null }
+    }
+}
+
+#endregion Input / Extraction
+
+#region Normalized Object Constructors
+
+function New-DriFTSystemInfo {
+<#
+.SYNOPSIS
+    Creates a normalized system identity object.
+#>
+    [CmdletBinding()]
+    param(
+        [string]$ServiceTag,
+        [string]$PowerEdge,
+        [string]$OS,
+        [string]$HostName,
+        [string]$SystemID,
+        [string]$SourceType,
+        [string]$SpecialCatalogNeeded = 'NO',
+        [string]$S2DCatalogNeeded = 'NO'
+    )
+
+    [PSCustomObject]@{
+        ServiceTag           = $ServiceTag
+        PowerEdge            = $PowerEdge
+        OS                   = $OS
+        HostName             = $HostName
+        SystemID             = $SystemID
+        SourceType           = $SourceType
+        SpecialCatalogNeeded = $SpecialCatalogNeeded
+        S2DCatalogNeeded     = $S2DCatalogNeeded
+    }
+}
+
+function New-DriFTInventoryItem {
+<#
+.SYNOPSIS
+    Creates a normalized inventory row.
+
+.DESCRIPTION
+    Every parser must emit this shape. This lets the matcher work the same way
+    for legacy XML, SAE XML, and 17G Redfish.
+#>
+    [CmdletBinding()]
+    param(
+        [string]$SourceGeneration,
+        [string]$ComponentType,
+        [string]$ComponentID,
+        [string]$VendorID,
+        [string]$DeviceID,
+        [string]$SubVendorID,
+        [string]$SubDeviceID,
+        [string]$Version,
+        [string]$Display,
+        [string]$ElementName,
+        [string]$RelatedItem,
+        [string]$Source
+    )
+
+    [PSCustomObject]@{
+        SourceGeneration = $SourceGeneration
+        ComponentType    = $ComponentType
+        ComponentID      = $ComponentID
+        VendorID         = Convert-DriFTHexId $VendorID
+        DeviceID         = Convert-DriFTHexId $DeviceID
+        SubVendorID      = Convert-DriFTHexId $SubVendorID
+        SubDeviceID      = Convert-DriFTHexId $SubDeviceID
+        Version          = $Version
+        Display          = $Display
+        ElementName      = $ElementName
+        RelatedItem      = $RelatedItem
+        Source           = $Source
+    }
+}
+
+function New-DriFTOperatingSystemInfo {
+<#
+.SYNOPSIS
+    Creates a normalized OS object.
+#>
+    [CmdletBinding()]
+    param(
+        [string]$RawName,
+        [string]$Family,
+        [string]$DisplayName,
+        [string]$Version,
+        [string]$CatalogPackageType = 'LW64',
+        [string]$MajorVersion,
+        [string]$MinorVersion,
+        [string]$Build,
+        [bool]$DriverSupport = $true
+    )
+
+    [PSCustomObject]@{
+        RawName            = $RawName
+        Family             = $Family
+        DisplayName        = $DisplayName
+        Version            = $Version
+        CatalogPackageType = $CatalogPackageType
+        MajorVersion       = $MajorVersion
+        MinorVersion       = $MinorVersion
+        Build              = $Build
+        DriverSupport      = $DriverSupport
+    }
+}
+
+function New-DriFTReportRow {
+<#
+.SYNOPSIS
+    Creates a normalized report row.
+#>
+    [CmdletBinding()]
+    param(
+        [string]$ServiceTag,
+        [string]$PowerEdge,
+        [string]$OS,
+        [string]$Type,
+        [string]$Category,
+        [string]$Name,
+        [string]$InstalledVersion,
+        [string]$AvailableVersion,
+        [string]$CatalogInfo,
+        [string]$Criticality,
+        [string]$ReleaseDate,
+        [string]$URL,
+        [string]$Details,
+        [string]$SourceType = 'Unknown'
+    )
+
+    # If a supplemental/non-Dell row has no direct download URL but does have
+    # documentation/details, reuse that link in the Download Link column so the
+    # HTML report remains consistent with legacy DriFT behavior.
+    if ([string]::IsNullOrWhiteSpace([string]$URL) -and
+        -not [string]::IsNullOrWhiteSpace([string]$Details)) {
+        $URL = $Details
+    }
+
+    [PSCustomObject]@{
+        ServiceTag       = $ServiceTag
+        PowerEdge        = $PowerEdge
+        OS               = $OS
+        Type             = $Type
+        Category         = $Category
+        Name             = $Name
+        InstalledVersion = $InstalledVersion
+        AvailableVersion = $AvailableVersion
+        CatalogInfo      = $CatalogInfo
+        Criticality      = $Criticality
+        ReleaseDate      = $ReleaseDate
+        URL              = $URL
+        Details          = $Details
+        SourceType       = $SourceType
+    }
+}
+
+#endregion Normalized Object Constructors
+
+#region Parser Dispatch
+
+function Get-DriFTSystemIdentity {
+<#
+.SYNOPSIS
+    Returns normalized system identity.
+
+.DESCRIPTION
+    Dispatches to parser-specific identity functions based on collection type.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    switch ($Collection.Type) {
+        'LegacyTSR' { return Get-DriFTLegacyTsrSystemIdentity -Collection $Collection -Context $Context }
+        'DSET'      { return Get-DriFTDsetSystemIdentity -Collection $Collection -Context $Context }
+        'TSR17G'    { return Get-DriFT17GSystemIdentity -Collection $Collection -Context $Context }
+        'SAEXml'    { return Get-DriFTSaeXmlSystemIdentity -Collection $Collection -Context $Context }
+        default     { throw "Unsupported or unknown SupportAssist collection type: $($Collection.Type)" }
+    }
+}
+
+function Get-DriFTOperatingSystem {
+<#
+.SYNOPSIS
+    Returns normalized operating system information.
+
+.DESCRIPTION
+    Dispatches to parser-specific OS functions and normalizes catalog OS values.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    switch ($Collection.Type) {
+        'LegacyTSR' { return Get-DriFTLegacyTsrOperatingSystem -Collection $Collection -Context $Context }
+        'DSET'      { return Get-DriFTDsetOperatingSystem -Collection $Collection -Context $Context }
+        'TSR17G'    { return Get-DriFT17GOperatingSystem -Collection $Collection -Context $Context }
+        'SAEXml'    { return Get-DriFTSaeXmlOperatingSystem -Collection $Collection -Context $Context }
+        default     { throw "Unsupported or unknown SupportAssist collection type: $($Collection.Type)" }
+    }
+}
+
+function Get-DriFTInstalledInventory {
+<#
+.SYNOPSIS
+    Returns normalized installed inventory.
+
+.DESCRIPTION
+    Dispatches to parser-specific inventory importers. Every parser returns the same
+    New-DriFTInventoryItem shape.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    switch ($Collection.Type) {
+        'LegacyTSR' { return Import-DriFTLegacyTsrInventory -Collection $Collection -Context $Context }
+        'DSET'      { return Import-DriFTDsetInventory -Collection $Collection -Context $Context }
+        'TSR17G'    { return Import-DriFT17GInventory -Collection $Collection -Context $Context }
+        'SAEXml'    { return Import-DriFTSaeXmlInventory -Collection $Collection -Context $Context }
+        default     { throw "Unsupported or unknown SupportAssist collection type: $($Collection.Type)" }
+    }
+}
+
+#endregion Parser Dispatch
+
+
+#region DSET Parser
+
+function Get-DriFTDsetInventoryXml {
+<#
+.SYNOPSIS
+    Loads DSET OM Server Administrator Inventory.xml.
+
+.DESCRIPTION
+    DSET predates TSR and often stores the useful inventory in
+    logs\OM Server Administrator\Inventory.xml as UTF-16 XML.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Collection)
+
+    $path = $Collection.DsetInventoryPath
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        $path = Get-ChildItem -Path $Collection.Root -Filter 'Inventory.xml' -File -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'OM Server Administrator' -or $_.FullName -match 'logs' } |
+            Select-Object -First 1 -ExpandProperty FullName
+    }
+
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return $null
+    }
+
+    $raw = [System.IO.File]::ReadAllText($path)
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        $raw = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::Unicode)
+    }
+
+    # Some DSET files are UTF-16 and can include null characters when read with the
+    # wrong default encoding. Strip nulls as a safety net.
+    $raw = $raw -replace [char]0, ''
+
+    $xml = New-Object System.Xml.XmlDocument
+    $xml.PreserveWhitespace = $false
+    $xml.LoadXml($raw.Trim())
+
+    return $xml
+}
+
+function Get-DriFTDsetRawXml {
+<#
+.SYNOPSIS
+    Loads a DSET rawxml/xml file by name.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)][string]$FileName
+    )
+
+    $file = Get-ChildItem -Path $Collection.Root -Filter $FileName -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'rawxml|gui\\xml|gui/xml' } |
+        Select-Object -First 1
+
+    if (-not $file) { return $null }
+
+    try {
+        return [xml](Get-Content -Raw -LiteralPath $file.FullName)
+    }
+    catch {
+        try {
+            $raw = [System.IO.File]::ReadAllText($file.FullName) -replace [char]0, ''
+            return [xml]$raw
+        }
+        catch {
+            return $null
+        }
+    }
+}
+
+
+function Get-DriFTDsetXmlTextValues {
+<#
+.SYNOPSIS
+    Returns text values from XML nodes whose name matches a pattern.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$Xml,
+        [Parameter(Mandatory)][string]$NamePattern
+    )
+
+    if ($null -eq $Xml) { return @() }
+
+    $values = @()
+
+    try {
+        foreach ($node in @($Xml.SelectNodes("//*"))) {
+            if ($node.LocalName -imatch $NamePattern -or $node.Name -imatch $NamePattern) {
+                $text = ([string]$node.InnerText).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($text)) {
+                    $values += @($text)
+                }
+            }
+        }
+    }
+    catch { }
+
+    return @($values | Sort-Object -Unique)
+}
+
+function Get-DriFTDsetFirstXmlTextValue {
+<#
+.SYNOPSIS
+    Returns the first matching text value from one or more DSET XML files.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object[]]$Xml,
+        [Parameter(Mandatory)][string]$NamePattern
+    )
+
+    foreach ($doc in @($Xml | Where-Object { $null -ne $_ })) {
+        $value = Get-DriFTFirstNonEmpty (Get-DriFTDsetXmlTextValues -Xml $doc -NamePattern $NamePattern)
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
+    }
+
+    return ''
+}
+
+function New-DriFTDsetInventoryItemFromText {
+<#
+.SYNOPSIS
+    Creates a best-effort DSET inventory item from text-only XML fallback data.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$ComponentType,
+        [AllowNull()][string]$Name,
+        [AllowNull()][string]$Version,
+        [AllowNull()][string]$ComponentID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name) -and [string]::IsNullOrWhiteSpace($Version)) {
+        return $null
+    }
+
+    return New-DriFTInventoryItem `
+        -SourceGeneration 'DSET' `
+        -ComponentType $ComponentType `
+        -ComponentID $ComponentID `
+        -Version $Version `
+        -Display $Name `
+        -ElementName $Name `
+        -RelatedItem '' `
+        -Source 'DSET XML fallback'
+}
+
+
+function Get-DriFTDsetSystemIdentity {
+<#
+.SYNOPSIS
+    Gets normalized system identity from a DSET report.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $inventoryXml = Get-DriFTDsetInventoryXml -Collection $Collection
+    $syssumXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'syssum.xml'
+    $chasInfoXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'chasinfo.xml'
+
+    $systemId = Get-DriFTFirstNonEmpty `
+        $inventoryXml.SVMInventory.System.systemID `
+        (Get-DriFTDsetFirstXmlTextValue -Xml @($syssumXml,$chasInfoXml) -NamePattern 'SystemID|SystemId')
+
+    $model = Get-DriFTFirstNonEmpty `
+        $syssumXml.OMA.OMA.ChassisList.Chassis.ChassisInfo.ChassisProps1.ChassModel `
+        $syssumXml.OMA.ChassisList.Chassis.ChassisInfo.ChassisProps1.ChassModel `
+        (Get-DriFTDsetFirstXmlTextValue -Xml @($syssumXml,$chasInfoXml) -NamePattern 'ChassModel|ChassisModel|Model|SystemModel') `
+        ''
+
+    $serviceTag = Get-DriFTFirstNonEmpty `
+        $syssumXml.OMA.OMA.ChassisList.Chassis.ChassisInfo.ChassisProps2.ServiceTag `
+        $syssumXml.OMA.ChassisList.Chassis.ChassisInfo.ChassisProps2.ServiceTag `
+        (Get-DriFTDsetFirstXmlTextValue -Xml @($syssumXml,$chasInfoXml) -NamePattern 'ServiceTag|SvcTag|AssetTag') `
+        ''
+
+    $hostName = Get-DriFTFirstNonEmpty `
+        $syssumXml.OMA.OMA.ChassisList.Chassis.ChassisInfo.SystemInfo.SystemName `
+        $syssumXml.OMA.ChassisList.Chassis.ChassisInfo.SystemInfo.SystemName `
+        (Get-DriFTDsetFirstXmlTextValue -Xml @($syssumXml,$chasInfoXml) -NamePattern 'SystemName|HostName|Hostname') `
+        ''
+
+    if ([string]::IsNullOrWhiteSpace($serviceTag)) {
+        $serviceTag = Get-DriFTFirstNonEmpty ([IO.Path]::GetFileNameWithoutExtension($Collection.SourcePath) -replace '^.*?([A-Z0-9]{7}).*$', '$1')
+    }
+
+    $normalizedModel = ConvertTo-DriFTServerModel -Model $model
+    if ([string]::IsNullOrWhiteSpace($normalizedModel)) { $normalizedModel = $model }
+
+    $catalogFlags = Get-DriFTCatalogNeed -Model $model -NormalizedModel $normalizedModel
+
+    if ($catalogFlags.S2DCatalogNeeded -eq 'YES') {
+        $serviceTag = "$serviceTag***"
+    }
+
+    if ($Context.ServiceTags) {
+        [void]$Context.ServiceTags.Add(($serviceTag -replace '\*',''))
+    }
+
+    Write-DriFTLog -Context $Context -Message "DSET identity: ServiceTag=$serviceTag; Model=$normalizedModel; SystemID=$systemId; Host=$hostName" -Level Info -Indent 1
+
+    return New-DriFTSystemInfo `
+        -ServiceTag $serviceTag `
+        -PowerEdge $normalizedModel `
+        -HostName $hostName `
+        -SystemID $systemId `
+        -SourceType 'DSET' `
+        -SpecialCatalogNeeded $catalogFlags.SpecialCatalogNeeded `
+        -S2DCatalogNeeded $catalogFlags.S2DCatalogNeeded
+}
+
+function Get-DriFTDsetOperatingSystem {
+<#
+.SYNOPSIS
+    Gets operating system data from DSET Inventory.xml.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $inventoryXml = Get-DriFTDsetInventoryXml -Collection $Collection
+    $osNode = $inventoryXml.SVMInventory.OperatingSystem
+
+    $osSumXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'OSsum.xml'
+    $unameXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'uname.xml'
+
+    $major = Get-DriFTFirstNonEmpty $osNode.majorVersion (Get-DriFTDsetFirstXmlTextValue -Xml @($osSumXml,$unameXml) -NamePattern 'Major')
+    $minor = Get-DriFTFirstNonEmpty $osNode.minorVersion (Get-DriFTDsetFirstXmlTextValue -Xml @($osSumXml,$unameXml) -NamePattern 'Minor')
+    $vendor = Get-DriFTFirstNonEmpty $osNode.osVendor (Get-DriFTDsetFirstXmlTextValue -Xml @($osSumXml,$unameXml) -NamePattern 'Vendor|Distributor|Name') 'Microsoft'
+    $arch = Get-DriFTFirstNonEmpty $osNode.osArch (Get-DriFTDsetFirstXmlTextValue -Xml @($osSumXml,$unameXml) -NamePattern 'Arch|Architecture') 'x64'
+
+    if ([string]::IsNullOrWhiteSpace($major)) { $major = '6' }
+    if ([string]::IsNullOrWhiteSpace($minor)) { $minor = '3' }
+
+    $display = if ($vendor -imatch 'Microsoft' -and $major -eq '6' -and $minor -eq '3') {
+        'Microsoft Windows Server 2012 R2'
+    }
+    elseif ($vendor -imatch 'Microsoft' -and $major -eq '6' -and $minor -eq '2') {
+        'Microsoft Windows Server 2012'
+    }
+    elseif ($vendor -imatch 'Microsoft' -and $major -eq '6' -and $minor -eq '1') {
+        'Microsoft Windows Server 2008 R2'
+    }
+    elseif ($vendor -imatch 'Microsoft') {
+        "Microsoft Windows $major.$minor"
+    }
+    else {
+        "$vendor $major.$minor"
+    }
+
+    Write-DriFTLog -Context $Context -Message "DSET OS detected: $display ($arch)" -Level Info -Indent 1
+
+    return ConvertTo-DriFTOperatingSystemInfo -OSName $display -OSVersion "$major.$minor"
+}
+
+function Import-DriFTDsetInventory {
+<#
+.SYNOPSIS
+    Imports installed inventory from DSET.
+
+.DESCRIPTION
+    Uses OM Server Administrator Inventory.xml as the primary source because it
+    exposes DSET-era componentID, componentType, version, display, and PCI identity.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $inventoryXml = Get-DriFTDsetInventoryXml -Collection $Collection
+
+    $items = @()
+
+    if ($inventoryXml) {
+        foreach ($device in @($inventoryXml.SVMInventory.Device | Where-Object { $null -ne $_ })) {
+        $componentId = Get-DriFTFirstNonEmpty $device.componentID
+        $vendorId = Get-DriFTFirstNonEmpty $device.vendorID
+        $deviceId = Get-DriFTFirstNonEmpty $device.deviceID
+        $subVendorId = Get-DriFTFirstNonEmpty $device.subVendorID
+        $subDeviceId = Get-DriFTFirstNonEmpty $device.subDeviceID
+        $deviceDisplay = Get-DriFTFirstNonEmpty $device.display
+
+        foreach ($app in @($device.Application | Where-Object { $null -ne $_ })) {
+            $componentType = Get-DriFTFirstNonEmpty $app.componentType $app.componenttype
+            $version = Get-DriFTFirstNonEmpty $app.version
+            $display = Get-DriFTFirstNonEmpty $app.display $deviceDisplay
+
+            $item = New-DriFTInventoryItem `
+                -SourceGeneration 'DSET' `
+                -ComponentType $componentType `
+                -ComponentID $componentId `
+                -VendorID $vendorId `
+                -DeviceID $deviceId `
+                -SubVendorID $subVendorId `
+                -SubDeviceID $subDeviceId `
+                -Version $version `
+                -Display $deviceDisplay `
+                -ElementName $display `
+                -RelatedItem '' `
+                -Source 'DSET Inventory.xml'
+
+            if ($null -ne $item -and ($item.ComponentID -or $item.DeviceID -or $item.ElementName -or $item.Display)) {
+                $items += @($item)
+            }
+        }
+        }
+    }
+    else {
+        Write-DriFTLog -Context $Context -Message 'DSET Inventory.xml was not found. Using legacy DSET XML fallback parser.' -Level Warn -Indent 1
+    }
+
+    if (@($items).Count -eq 0) {
+        $fwViewXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'fwview.xml'
+        $biosViewXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'biosview.xml'
+        $driverListXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'driverlist.xml'
+        if (-not $driverListXml) { $driverListXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'getdriverlist.xml' }
+
+        $biosVersion = Get-DriFTDsetFirstXmlTextValue -Xml @($biosViewXml,$fwViewXml) -NamePattern 'Version|BIOSVersion'
+        if (-not [string]::IsNullOrWhiteSpace($biosVersion)) {
+            $items += @(New-DriFTInventoryItem `
+                -SourceGeneration 'DSET' `
+                -ComponentType 'BIOS' `
+                -ComponentID '159' `
+                -Version $biosVersion `
+                -Display 'BIOS' `
+                -ElementName 'BIOS' `
+                -Source 'DSET BIOS/FW fallback')
+        }
+
+        # Best-effort generic firmware/driver extraction. This will not be perfect
+        # for every DSET schema, but it lets catalog matching work when componentID
+        # is present and keeps older reports from returning no inventory.
+        foreach ($docInfo in @(
+            [PSCustomObject]@{ Xml = $fwViewXml;     Type = 'FRMW' },
+            [PSCustomObject]@{ Xml = $driverListXml; Type = 'DRVR' }
+        )) {
+            if (-not $docInfo.Xml) { continue }
+
+            foreach ($node in @($docInfo.Xml.SelectNodes('//*') | Where-Object { $_.ChildNodes.Count -gt 0 })) {
+                $name = Get-DriFTFirstNonEmpty `
+                    (Get-DriFTDsetFirstXmlTextValue -Xml @($node) -NamePattern 'Name|Display|Description|Device')
+                $version = Get-DriFTFirstNonEmpty `
+                    (Get-DriFTDsetFirstXmlTextValue -Xml @($node) -NamePattern 'Version|FirmwareVersion|DriverVersion')
+                $componentId = Get-DriFTFirstNonEmpty `
+                    (Get-DriFTDsetFirstXmlTextValue -Xml @($node) -NamePattern 'ComponentID|ComponentId')
+
+                if (-not [string]::IsNullOrWhiteSpace($name) -or -not [string]::IsNullOrWhiteSpace($version)) {
+                    $fallbackItem = New-DriFTDsetInventoryItemFromText `
+                        -ComponentType $docInfo.Type `
+                        -Name $name `
+                        -Version $version `
+                        -ComponentID $componentId
+
+                    if ($fallbackItem) { $items += @($fallbackItem) }
+                }
+            }
+        }
+    }
+
+    # Fallback for older DSET reports where BIOS/FWView entries are present but
+    # missing from Inventory.xml.
+    if (-not (@($items | Where-Object { $_.ComponentID -eq '159' -or $_.ComponentType -eq 'BIOS' }).Count)) {
+        $biosXml = Get-DriFTDsetRawXml -Collection $Collection -FileName 'BIOSView.xml'
+        $biosVersion = Get-DriFTFirstNonEmpty $biosXml.OMA.BIOSView1.SystemBIOS.Version
+        if (-not [string]::IsNullOrWhiteSpace($biosVersion)) {
+            $items += @(New-DriFTInventoryItem `
+                -SourceGeneration 'DSET' `
+                -ComponentType 'BIOS' `
+                -ComponentID '159' `
+                -Version $biosVersion `
+                -Display 'BIOS' `
+                -ElementName 'BIOS' `
+                -Source 'DSET BIOSView.xml')
+        }
+    }
+
+    $items = @($items |
+        Where-Object { $null -ne $_ } |
+        Sort-Object ComponentType,ComponentID,VendorID,DeviceID,SubVendorID,SubDeviceID,Version,Display,ElementName -Unique)
+
+    Write-DriFTLog -Context $Context -Message "DSET inventory rows found: $(@($items).Count)" -Level Info -Indent 1
+
+    return @($items)
+}
+
+#endregion DSET Parser
+
+
+#region Legacy TSR Parser
+
+function Get-DriFTLegacyTsrXml {
+<#
+.SYNOPSIS
+    Loads a legacy TSR inventory XML file.
+
+.DESCRIPTION
+    Centralizes XML loading so parser functions do not duplicate Get-Content/[xml] logic.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)][string]$FileName
+    )
+
+    $path = Join-Path $Collection.InventoryPath $FileName
+    if (-not (Test-Path $path -PathType Leaf)) { return $null }
+
+    return [xml](Get-Content -Raw -Path $path)
+}
+
+function ConvertFrom-DriFTCimNamedInstances {
+<#
+.SYNOPSIS
+    Converts CIM VALUE.NAMEDINSTANCE XML nodes to easier PowerShell objects.
+
+.DESCRIPTION
+    Legacy TSR XML stores data as generic Property nodes. This function flattens
+    the properties into note properties for faster and easier lookups.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$NamedInstances)
+
+    $rows = @()
+
+    foreach ($instance in @($NamedInstances.INSTANCE | Where-Object { $null -ne $_ })) {
+        $obj = [ordered]@{}
+        foreach ($prop in @($instance.Property | Where-Object { $null -ne $_ })) {
+            if ($prop.Name) { $obj[$prop.Name] = $prop.InnerText }
+        }
+
+        if ($obj.Count -gt 0) {
+            $rows += @([PSCustomObject]$obj)
+        }
+    }
+
+    return @($rows)
+}
+
+function Get-DriFTLegacyTsrSystemIdentity {
+<#
+.SYNOPSIS
+    Gets system identity from 16G and older TSR XML.
+
+.DESCRIPTION
+    Ports the existing DCIM_SystemView and BIOSAttribute logic into a contained function.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $biosXml = Get-DriFTLegacyTsrXml -Collection $Collection -FileName 'sysinfo_CIM_BIOSAttribute.xml'
+    $viewXml = Get-DriFTLegacyTsrXml -Collection $Collection -FileName 'sysinfo_DCIM_View.xml'
+
+    if (-not $biosXml -or -not $viewXml) {
+        throw 'Legacy TSR identity XML files were not found.'
+    }
+
+    $biosInstances = $biosXml.CIM.MESSAGE.SIMPLEREQ.'VALUE.NAMEDINSTANCE'.INSTANCE
+    $viewInstances = $viewXml.CIM.MESSAGE.SIMPLEREQ.'VALUE.NAMEDINSTANCE'.INSTANCE
+
+    $systemView = $viewInstances | Where-Object { $_.CLASSNAME -eq 'DCIM_SystemView' } | Select-Object -First 1
+
+    $serviceTag = Get-DriFTCimPropertyValue -Instance $systemView -Name 'ServiceTag'
+    $model = Get-DriFTCimPropertyValue -Instance $systemView -Name 'Model'
+
+    $sysIdNode = $biosInstances |
+        Where-Object { $_.CLASSNAME -eq 'DCIM_LCString' -and $_.PROPERTY.VALUE -eq 'SYSID' } |
+        Select-Object -First 1
+
+    $systemId = Get-DriFTCimArrayCurrentValue -Instance $sysIdNode
+
+    $hostNode = $biosInstances |
+        Where-Object { $_.CLASSNAME -eq 'DCIM_SystemString' -and $_.PROPERTY.VALUE -eq 'HostName' } |
+        Select-Object -First 1
+
+    $hostName = Get-DriFTCimArrayCurrentValue -Instance $hostNode
+    $normalizedModel = ConvertTo-DriFTServerModel -Model $model
+
+    $catalogFlags = Get-DriFTCatalogNeed -Model $model -NormalizedModel $normalizedModel
+
+    if ($catalogFlags.S2DCatalogNeeded -eq 'YES') {
+        $serviceTag = "$serviceTag***"
+    }
+
+    [void]$Context.ServiceTags.Add(($serviceTag -replace '\*',''))
+
+    return New-DriFTSystemInfo `
+        -ServiceTag $serviceTag `
+        -PowerEdge $normalizedModel `
+        -HostName $hostName `
+        -SystemID $systemId `
+        -SourceType 'LegacyTSR' `
+        -SpecialCatalogNeeded $catalogFlags.SpecialCatalogNeeded `
+        -S2DCatalogNeeded $catalogFlags.S2DCatalogNeeded
+}
+
+
+function Get-DriFTLegacyTsrSystemStringValues {
+<#
+.SYNOPSIS
+    Gets all CurrentValue entries for a legacy TSR DCIM_SystemString name.
+
+.DESCRIPTION
+    VMware TSRs can contain multiple OSVersion CurrentValue values. The old DriFT
+    logic inspected all of them and selected the value that contained the actual
+    ESXi release, such as 8.0 U3. The rewrite previously took only the first value,
+    which could be Dell-ESXi and caused Broadcom Compatibility Guide lookups to fail.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Instances,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    $values = @()
+
+    $nodes = @($Instances |
+        Where-Object {
+            $_.CLASSNAME -eq 'DCIM_SystemString' -and
+            $_.PROPERTY.Value -match $Name
+        })
+
+    foreach ($node in $nodes) {
+        foreach ($currentNode in @($node.ChildNodes | Where-Object { $_.Name -match 'CurrentValue' })) {
+            foreach ($value in @($currentNode.InnerText)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                    $values += @(([string]$value).Trim())
+                }
+            }
+        }
+
+        # Keep fallback for XML shapes where CurrentValue is exposed as PROPERTY.ARRAY.
+        $fallback = Get-DriFTCimArrayCurrentValue -Instance $node
+        if (-not [string]::IsNullOrWhiteSpace([string]$fallback)) {
+            $values += @(([string]$fallback).Trim())
+        }
+    }
+
+    return @($values | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+}
+
+function Select-DriFTBestVmwareOsVersion {
+<#
+.SYNOPSIS
+    Selects the actual ESXi/vSAN release from legacy TSR OSVersion values.
+#>
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][object[]]$Values)
+
+    foreach ($value in @($Values)) {
+        $parsed = Get-DriFTEsxiVersionFromText -Text ([string]$value)
+        if (-not [string]::IsNullOrWhiteSpace($parsed)) {
+            return $parsed
+        }
+    }
+
+    foreach ($value in @($Values)) {
+        if ([string]$value -imatch 'build|patch|GA|Update|U[123]') {
+            $parsed = ConvertTo-DriFTVmwareVersion -OSName ([string]$value) -OSVersion ''
+            if (-not [string]::IsNullOrWhiteSpace($parsed)) {
+                return $parsed
+            }
+        }
+    }
+
+    return Get-DriFTFirstNonEmpty $Values
+}
+
+
+function Get-DriFTLegacyTsrOperatingSystem {
+<#
+.SYNOPSIS
+    Gets operating system data from 16G and older TSR XML.
+
+.DESCRIPTION
+    Reads all legacy DCIM_SystemString OSName/OSVersion CurrentValue values. This
+    preserves old DriFT VMware behavior where OSVersion can include both Dell image
+    profile text and the real ESXi release.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $biosXml = Get-DriFTLegacyTsrXml -Collection $Collection -FileName 'sysinfo_CIM_BIOSAttribute.xml'
+    if (-not $biosXml) {
+        return New-DriFTOperatingSystemInfo -RawName '' -Family 'Windows' -DisplayName 'NO OS Detected in TSR Data: Assuming Windows 64bit' -Version '' -MajorVersion 6 -MinorVersion 3
+    }
+
+    $instances = $biosXml.CIM.MESSAGE.SIMPLEREQ.'VALUE.NAMEDINSTANCE'.INSTANCE
+
+    $osNameValues = @(Get-DriFTLegacyTsrSystemStringValues -Instances $instances -Name 'OSName')
+    $osVersionValues = @(Get-DriFTLegacyTsrSystemStringValues -Instances $instances -Name 'OSVersion')
+
+    $osName = Get-DriFTFirstNonEmpty $osNameValues
+    $osVersion = Get-DriFTFirstNonEmpty $osVersionValues
+
+    if ("$osName $($osVersionValues -join ' ')" -imatch 'VMware|ESXi|vSAN') {
+        $bestVmwareVersion = Select-DriFTBestVmwareOsVersion -Values $osVersionValues
+
+        Write-DriFTLog -Context $Context -Message "VMware OS detected. OSName='$osName'; OSVersion candidates='$($osVersionValues -join ' | ')'; selected='$bestVmwareVersion'" -Level Info -Indent 1
+
+        return ConvertTo-DriFTOperatingSystemInfo -OSName $osName -OSVersion $bestVmwareVersion
+    }
+
+    return ConvertTo-DriFTOperatingSystemInfo -OSName $osName -OSVersion $osVersion
+}
+
+function Import-DriFTLegacyTsrInventory {
+<#
+.SYNOPSIS
+    Imports installed hardware from legacy DCIM_SoftwareIdentity XML.
+
+.DESCRIPTION
+    Preserves the 16G-and-older inventory source and normalizes rows into
+    New-DriFTInventoryItem. Uses plain PowerShell arrays instead of generic lists
+    to avoid Windows PowerShell 5.1 XML-node type conversion issues.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $xml = Get-DriFTLegacyTsrXml -Collection $Collection -FileName 'sysinfo_DCIM_SoftwareIdentity.xml'
+    if (-not $xml) {
+        Write-DriFTLog -Context $Context -Message 'Legacy SoftwareIdentity XML was not found.' -Level Warn -Indent 1
+        return @()
+    }
+
+    $namedInstances = @($xml.CIM.MESSAGE.SIMPLEREQ.'VALUE.NAMEDINSTANCE')
+
+    $installed = @($namedInstances | Where-Object {
+        try {
+            $_.INSTANCENAME.KEYBINDING.KEYVALUE.'#text' -match 'DCIM:INSTALLED'
+        }
+        catch { $false }
+    })
+
+    $items = @()
+
+    foreach ($prop in @($installed.INSTANCE | Where-Object { $null -ne $_ })) {
+        $item = New-DriFTInventoryItem `
+            -SourceGeneration 'Legacy' `
+            -ComponentType (Get-DriFTCimPropertyValue -Instance $prop -Name 'ComponentType') `
+            -ComponentID (Get-DriFTCimPropertyValue -Instance $prop -Name 'ComponentID') `
+            -VendorID (Get-DriFTCimPropertyValue -Instance $prop -Name 'VendorID') `
+            -DeviceID (Get-DriFTCimPropertyValue -Instance $prop -Name 'DeviceID') `
+            -SubVendorID (Get-DriFTCimPropertyValue -Instance $prop -Name 'SubVendorID') `
+            -SubDeviceID (Get-DriFTCimPropertyValue -Instance $prop -Name 'SubDeviceID') `
+            -Version (Get-DriFTCimPropertyValue -Instance $prop -Name 'VersionString') `
+            -Display (Get-DriFTCimPropertyValue -Instance $prop -Name 'FQDD') `
+            -ElementName (Get-DriFTCimPropertyValue -Instance $prop -Name 'ElementName') `
+            -RelatedItem '' `
+            -Source 'DCIM_SoftwareIdentity'
+
+        if ($null -ne $item -and ($item.ComponentID -or $item.DeviceID -or $item.ElementName -or $item.Display)) {
+            $items += @($item)
+        }
+    }
+
+    Write-DriFTLog -Context $Context -Message "Legacy installed SoftwareIdentity rows found: $(@($items).Count)" -Level Info -Indent 1
+
+    return @($items |
+        Where-Object { $null -ne $_ } |
+        Sort-Object ComponentType,ComponentID,VendorID,DeviceID,SubDeviceID,SubVendorID,Version,Display -Unique)
+}
+
+#endregion Legacy TSR Parser
+
+#region 17G Redfish Parser
+
+function Import-DriFT17GInventory {
+<#
+.SYNOPSIS
+    Imports 17G inventory from viewer.html or redfishidracwalk.tar.gz.
+
+.DESCRIPTION
+    17G SupportAssist collections may omit legacy SoftwareIdentity XML. This parser
+    reads normalized Redfish data, builds firmware inventory, builds PCI identity maps,
+    then enriches firmware rows with catalog-ready PCI IDs.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $redfishRoot = if ($Collection.ViewerHtmlPath) {
+        Expand-DriFT17GViewerHtmlRedfishWalk -ViewerHtmlPath $Collection.ViewerHtmlPath -Context $Context
+    }
+    elseif ($Collection.RedfishWalkPath) {
+        Expand-DriFT17GRedfishWalk -TarGzPath $Collection.RedfishWalkPath -Context $Context
+    }
+    else {
+        throw '17G collection did not include viewer.html or redfishidracwalk.tar.gz.'
+    }
+
+    $allJsonFiles = @(Get-ChildItem -Path $redfishRoot -Filter '*.json' -File -Recurse -Force -ErrorAction SilentlyContinue)
+    Export-DriFTDebugData -Context $Context -Name '17G_AllJsonFiles.csv' -InputObject ($allJsonFiles | Select-Object FullName, Length)
+
+    $firmwareRows = @(Get-DriFT17GFirmwareRows -RedfishRoot $redfishRoot -AllJsonFiles $allJsonFiles -Context $Context)
+    Write-DriFTLog -Context $Context -Message "17G firmware inventory rows found: $(@($firmwareRows).Count)" -Level Info -Indent 1
+
+    $pciRows = @(Get-DriFT17GPciIdentityRows -AllJsonFiles $allJsonFiles -Context $Context)
+    Write-DriFTLog -Context $Context -Message "17G PCI identity rows found: $(@($pciRows).Count)" -Level Info -Indent 1
+
+    $enriched = @(Add-DriFT17GPciIdentityToFirmwareRows -FirmwareRows $firmwareRows -PciRows $pciRows -Context $Context)
+    Write-DriFTLog -Context $Context -Message "17G enriched inventory rows returned: $(@($enriched).Count)" -Level Info -Indent 1
+
+    Export-DriFTDebugData -Context $Context -Name '17G_PciIdentity.csv' -InputObject $pciRows
+    Export-DriFTDebugData -Context $Context -Name '17G_EnrichedFirmware.csv' -InputObject $enriched
+
+    return @($enriched |
+        Sort-Object ComponentType,ComponentID,VendorID,DeviceID,SubVendorID,SubDeviceID,Version,Display -Unique)
+}
+
+function Get-DriFT17GSystemIdentity {
+<#
+.SYNOPSIS
+    Gets 17G system identity from metadata.json and/or Redfish System object.
+
+.DESCRIPTION
+    Uses metadata.json first, then Redfish System.Embedded.1 fallback.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $metadata = Get-DriFTMetadataJson -Root $Collection.Root
+
+    $redfishRoot = $null
+    try {
+        if ($Collection.ViewerHtmlPath) {
+            $redfishRoot = Expand-DriFT17GViewerHtmlRedfishWalk -ViewerHtmlPath $Collection.ViewerHtmlPath -Context $Context
+        }
+        elseif ($Collection.RedfishWalkPath) {
+            $redfishRoot = Expand-DriFT17GRedfishWalk -TarGzPath $Collection.RedfishWalkPath -Context $Context
         }
     }
     catch {
-        Write-Indent "WARN: ipwho lookup failed" 2 Yellow
+        Write-DriFTLog -Context $Context -Message "Unable to expand 17G Redfish for identity: $($_.Exception.Message)" -Level Warn -Indent 1
     }
 
-    $data = @{
-        Region       = $region
-        DriftVersion = $DFTV
-        ReportID     = $CReportID
-        country      = $country
-        countryCode  = $countryCode
-        geoRegion    = $region
-        city         = $city
-        lat          = $latitude
-        lon          = $longitude
-        timezone     = $timezone
-        Timestamp = (Get-Date).ToUniversalTime().ToString("o")
-        HostOS = [System.Environment]::OSVersion.VersionString
-        PSVersion = $PSVersionTable.PSVersion.ToString()
+    $systemJson = if ($redfishRoot) {
+        Get-DriFT17GJsonFile -RedfishRoot $redfishRoot -RelativePath 'redfish/v1/Systems/System.Embedded.1/index.json'
     }
 
-    # We use tool name for this value
-    $PartitionKey = "DriFT"
+    $model = Get-DriFTFirstNonEmpty (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'Model') $systemJson.Model
+    $normalizedModel = ConvertTo-DriFTServerModel -Model $model
+    $catalogFlags = Get-DriFTCatalogNeed -Model $model -NormalizedModel $normalizedModel
 
-    Add-TableData `
-        -TableName "DriftTelemetryData" `
-        -PartitionKey $PartitionKey `
-        -Data $data 
+    $serviceTag = Get-DriFTFirstNonEmpty (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'ServiceTag') $systemJson.SerialNumber $systemJson.SKU
+    if ($catalogFlags.S2DCatalogNeeded -eq 'YES') {
+        $serviceTag = "$serviceTag***"
+    }
 
+    [void]$Context.ServiceTags.Add(($serviceTag -replace '\*',''))
+
+    return New-DriFTSystemInfo `
+        -ServiceTag $serviceTag `
+        -PowerEdge $normalizedModel `
+        -HostName (Get-DriFTFirstNonEmpty (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'HostName') $systemJson.HostName $systemJson.Name) `
+        -SystemID (Get-DriFTFirstNonEmpty (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'DeviceSystemId') (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'SystemID') $systemJson.Oem.Dell.DellSystem.SystemID) `
+        -SourceType 'TSR17G' `
+        -SpecialCatalogNeeded $catalogFlags.SpecialCatalogNeeded `
+        -S2DCatalogNeeded $catalogFlags.S2DCatalogNeeded
 }
-#endregion
 
-#Variables
-#$DellURL="https://dl.dell.com/"
-$DellURL="https://downloads.dell.com/"
+function Get-DriFT17GOperatingSystem {
 
-#Get the catalog.cab
-$LocCabSize=1
-$DownloadFile="$env:TEMP\Catalog.cab"
-#$url = "http://dl.dell.com/catalog/Catalog.cab"
-$url = "https://downloads.dell.com/catalog/Catalog.cab"
-#Downloading a new Catalog.cab
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
 
-# Added for proxy auth 
-    $browser = New-Object System.Net.WebClient
-    $browser.Proxy.Credentials =[System.Net.CredentialCache]::DefaultNetworkCredentials 
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $metadata = Get-DriFTMetadataJson -Root $Collection.Root
 
-If($LocCabSize -eq "1"){
-    Write-host "Downloading Catalog.cab...."
-    $CatLocNA="NO"
-    #Invoke-WebRequest -Uri $url -OutFile $DownloadFile
-    Try{Invoke-WebRequest -Uri $url -OutFile $DownloadFile}
-    Catch{
-        $CatLocNA="YES"
-        Write-Host "    WARNING: Catalog Source location NOT accessible. Please provide CATALOG.CAB file."-foregroundcolor Yellow
-        Write-Host "    Or manually download from:"$url -foregroundcolor Yellow}
-    Finally{
-        #Ask for the catalog.cab
-        If($CatLocNA -eq "YES"){
-            Function Get-CatFile($initialDirectory)
-            {
-                [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null
-                $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog -Property @{Multiselect = $true}
-                $OpenFileDialog.Title = "Please Select CATALOG.CAB file..."
-                $OpenFileDialog.initialDirectory = $initialDirectory
-                $OpenFileDialog.filter = "CAB (*.cab)| *.cab"
-                $OpenFileDialog.ShowDialog() | Out-Null
-                $OpenFileDialog.filenames
+    $osName = Get-DriFTFirstNonEmpty `
+        (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'OSName') `
+        (Get-DriFTObjectProperty -InputObject $metadata -PropertyName 'OperatingSystem')
+
+    #
+    # IMPORTANT:
+    # If 17G metadata.json does not contain OS information,
+    # suppress all OS-dependent matching (drivers, VMware, Microsoft Update).
+    #
+    if ([string]::IsNullOrWhiteSpace($osName)) {
+
+        Write-DriFTLog `
+            -Context $Context `
+            -Message '17G metadata.json did not contain OS information. Driver and OS update matching will be skipped.' `
+            -Level Warn `
+            -Indent 1
+
+        return New-DriFTOperatingSystemInfo `
+            -RawName '' `
+            -Family '' `
+            -DisplayName 'NO OS Detected in TSR Data' `
+            -Version '' `
+            -CatalogPackageType 'LW64' `
+            -MajorVersion 0 `
+            -MinorVersion 0 `
+            -DriverSupport $false
+    }
+
+    return ConvertTo-DriFTOperatingSystemInfo `
+        -OSName $osName `
+        -OSVersion ''
+}
+
+function Expand-DriFT17GRedfishWalk {
+<#
+.SYNOPSIS
+    Extracts redfishidracwalk.tar.gz to a short temp path.
+
+.DESCRIPTION
+    Uses a short extraction path to reduce MAX_PATH issues in Windows PowerShell 5.1.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$TarGzPath,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $dest = Join-Path $Context.RedfishRoot ([guid]::NewGuid().Guid.Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if (-not $tar) { $tar = Get-Command tar -ErrorAction SilentlyContinue }
+    if (-not $tar) { throw 'tar.exe was not found. Cannot extract redfishidracwalk.tar.gz.' }
+
+    & $tar.Source -xzf $TarGzPath -C $dest 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "tar extraction failed for $TarGzPath"
+    }
+
+    return $dest
+}
+
+function Expand-DriFT17GViewerHtmlRedfishWalk {
+<#
+.SYNOPSIS
+    Extracts embedded Redfish ZIP from 17G viewer.html.
+
+.DESCRIPTION
+    Handles invalid Windows path characters in ZIP entries by sanitizing extracted paths.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ViewerHtmlPath,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $dest = Join-Path $Context.RedfishRoot ([guid]::NewGuid().Guid.Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+    $raw = Get-Content -Raw -Path $ViewerHtmlPath
+    $match = [regex]::Match(
+        $raw,
+        '<script\s+[^>]*content=["'']redfish["''][^>]*>(?<body>.*?)</script>',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline
+    )
+
+    if (-not $match.Success) {
+        throw "viewer.html did not contain a script tag with content='redfish'."
+    }
+
+    $zipPath = Join-Path $dest 'viewer_redfishwalk.zip'
+    [System.IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($match.Groups['body'].Value.Trim()))
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $invalidCharsPattern = '[<>:"|?*]'
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+
+    try {
+        foreach ($entry in $zip.Entries) {
+            if ([string]::IsNullOrWhiteSpace($entry.FullName)) { continue }
+
+            $safeRelativePath = ($entry.FullName -replace '/', [IO.Path]::DirectorySeparatorChar) -replace $invalidCharsPattern, '_'
+            $safeRelativePath = $safeRelativePath.TrimStart([IO.Path]::DirectorySeparatorChar)
+            if ([string]::IsNullOrWhiteSpace($safeRelativePath)) { continue }
+
+            $destinationPath = Join-Path $dest $safeRelativePath
+
+            if ($entry.FullName.EndsWith('/') -or [string]::IsNullOrWhiteSpace($entry.Name)) {
+                New-Item -ItemType Directory -Force -Path $destinationPath | Out-Null
+                continue
             }
-            $DownloadFile=Get-CatFile("C:")
-            if(!$DownloadFile){
-                $OutputType="No"
-                EndScript}
+
+            $destinationDirectory = Split-Path -Path $destinationPath -Parent
+            New-Item -ItemType Directory -Force -Path $destinationDirectory | Out-Null
+
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destinationPath, $true)
         }
     }
+    finally {
+        $zip.Dispose()
+    }
+
+    return $dest
 }
 
-#Check/Create temp DIR 
-$ExtracLoc="$env:TEMP\DriFT"
-if (!(Test-Path $ExtracLoc -PathType Container)) {New-Item -ItemType Directory -Force -Path $ExtracLoc}
+function Get-DriFT17GJsonFile {
+<#
+.SYNOPSIS
+    Finds and loads a Redfish JSON file.
 
-#Extract the cab
-Write-host "Extracting Catalog.xml from CAB...."
-if (Test-Path "$ExtracLoc\Catalog.xml") {Remove-Item "$ExtracLoc\Catalog.xml"}
+.DESCRIPTION
+    Tries the expected Redfish path first, then falls back to suffix search.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RedfishRoot,
+        [Parameter(Mandatory)][string]$RelativePath
+    )
 
-Function Expand-Cab ($SourceFile,$TargetFolder,$Item){
+    $cleanPath = $RelativePath.TrimStart('/').Replace('/', [IO.Path]::DirectorySeparatorChar)
+    $jsonPath = Join-Path $RedfishRoot $cleanPath
 
-    $ShellObject = New-Object -com shell.application
-    $zipfolder = $ShellObject.namespace($sourceFile)
-    $Item = $zipfolder.parsename("$Item")
-    $TargetFolder = $ShellObject.namespace("$TargetFolder")
-    $TargetFolder.copyhere($Item)
+    if (-not (Test-Path $jsonPath -PathType Leaf)) {
+        $suffix = [regex]::Escape($RelativePath.TrimStart('/').Replace('/', [IO.Path]::DirectorySeparatorChar))
+        $jsonPath = Get-ChildItem -Path $RedfishRoot -Filter 'index.json' -File -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "$suffix$" } |
+            Select-Object -First 1 -ExpandProperty FullName
+    }
+
+    if ($jsonPath -and (Test-Path $jsonPath -PathType Leaf)) {
+        try { return Get-Content -Raw -Path $jsonPath | ConvertFrom-Json }
+        catch { return $null }
+    }
+
+    return $null
 }
-IF(!(Test-Path "$ExtracLoc\Catalog.xml")){Expand-Cab -SourceFile $DownloadFile -TargetFolder $ExtracLoc -Item "Catalog.xml"}
 
-# Used to extract .gz files
-Function DeGZip-File{
-    Param(
-        $infile
+function Get-DriFT17GFirmwareRows {
+<#
+.SYNOPSIS
+    Builds normalized firmware inventory rows from 17G Redfish.
+
+.DESCRIPTION
+    Finds FirmwareInventory members using the collection index when present and a
+    recursive fallback when not present.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RedfishRoot,
+        [Parameter(Mandatory)][object[]]$AllJsonFiles,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $fwIndex = Get-DriFT17GJsonFile -RedfishRoot $RedfishRoot -RelativePath 'redfish/v1/UpdateService/FirmwareInventory/index.json'
+    $firmwareFiles = @()
+
+    if ($fwIndex -and $fwIndex.Members) {
+        foreach ($member in @($fwIndex.Members)) {
+            $memberPath = [string]$member.'@odata.id'
+            if ([string]::IsNullOrWhiteSpace($memberPath)) { continue }
+            $memberPath = $memberPath.TrimStart('/')
+            if ($memberPath -notmatch 'index\.json$') { $memberPath = $memberPath.TrimEnd('/') + '/index.json' }
+
+            $candidate = Join-Path $RedfishRoot ($memberPath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+            if (Test-Path $candidate -PathType Leaf) {
+                $firmwareFiles += @(Get-Item $candidate)
+            }
+        }
+    }
+
+    if (@($firmwareFiles).Count -eq 0) {
+        $AllJsonFiles |
+            Where-Object {
+                $_.FullName -imatch 'UpdateService.*FirmwareInventory' -and
+                $_.DirectoryName -notmatch '[\\/]FirmwareInventory$'
+            } |
+            ForEach-Object { $firmwareFiles += @($_) }
+    }
+
+    if (@($firmwareFiles).Count -eq 0) {
+        foreach ($jsonFile in $AllJsonFiles) {
+            try {
+                $raw = Get-Content -Raw -Path $jsonFile.FullName
+                if (($raw -imatch '"@odata\.type"\s*:\s*".*SoftwareInventory') -or
+                    ($raw -imatch '"SoftwareId"\s*:') -or
+                    ($raw -imatch '"Updateable"\s*:')) {
+                    $firmwareFiles += @($jsonFile)
+                }
+            }
+            catch {}
+        }
+    }
+
+    $rows = New-Object System.Collections.Generic.List[object]
+
+    foreach ($file in $firmwareFiles) {
+        try { $fw = Get-Content -Raw -Path $file.FullName | ConvertFrom-Json }
+        catch { continue }
+
+        if (-not $fw) { continue }
+
+        $fwIdText = [string]$fw.Id
+        $fwOdataText = [string]$fw.'@odata.id'
+        $fwFileText = [string]$file.FullName
+
+        # 17G viewer/Redfish data can include previous firmware inventory entries.
+        # Legacy DriFT reports current installed versions only, so skip previous entries.
+        if ($fwIdText -imatch '^Previous-|DCIM[_:]PREVIOUS|PREVIOUS#') { continue }
+        if ($fwOdataText -imatch '/Previous-|DCIM[_:]PREVIOUS|PREVIOUS#') { continue }
+        if ($fwFileText -imatch 'Previous-|DCIM[_:]PREVIOUS|PREVIOUS#') { continue }
+
+        if ($fw.Members -and -not $fw.Version -and -not $fw.SoftwareId) { continue }
+
+        $odataType = [string]$fw.'@odata.type'
+        if (($odataType -and $odataType -notmatch 'SoftwareInventory|FirmwareInventory') -and
+            (-not $fw.SoftwareId) -and (-not $fw.Updateable)) {
+            continue
+        }
+
+        $relatedPath = $null
+        if ($fw.RelatedItem) {
+            $relatedPath = @($fw.RelatedItem | ForEach-Object { $_.'@odata.id' } | Where-Object { $_ })[0]
+        }
+
+        $display = if ($relatedPath) { (($relatedPath.TrimEnd('/') -split '/')[-1]) } else { Get-DriFTFirstNonEmpty $fw.Id $fw.Name }
+        $elementName = ([string](Get-DriFTFirstNonEmpty $fw.Name $display)) -replace '\s+Firmware Inventory$', ''
+        $componentId = Get-DriFTFirstNonEmpty $fw.SoftwareId $fw.Id
+
+        $item = New-DriFTInventoryItem `
+            -SourceGeneration '17G' `
+            -ComponentType 'FRMW' `
+            -ComponentID ([string]$componentId) `
+            -VendorID '' `
+            -DeviceID '' `
+            -SubVendorID '' `
+            -SubDeviceID '' `
+            -Version ([string]$fw.Version) `
+            -Display ([string]$display) `
+            -ElementName ([string]$elementName) `
+            -RelatedItem ([string]$relatedPath) `
+            -Source 'RedfishFirmwareInventory'
+
+        if ($item.ComponentID -or $item.Version) {
+            $rows += @($item)
+        }
+    }
+
+    return @($rows)
+}
+
+function Get-DriFT17GPciIdentityRows {
+<#
+.SYNOPSIS
+    Builds the 17G PCI identity map.
+
+.DESCRIPTION
+    Searches PCIeFunction, Network, Storage, and DellSoftwareInventory records.
+    DellSoftwareInventory IdentityInfoValue is preferred because it contains catalog-ready
+    hex IDs such as VendorID:DeviceID:SubVendorID:SubDeviceID.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$AllJsonFiles,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $rows = @()
+
+    foreach ($jsonFile in $AllJsonFiles) {
+        try { $json = Get-Content -Raw -Path $jsonFile.FullName | ConvertFrom-Json }
+        catch { continue }
+
+        if (-not $json) { continue }
+
+        $odataType = [string]$json.'@odata.type'
+        $pathText = [string]$jsonFile.FullName
+
+        $dellNic = $json.Oem.Dell.DellNIC
+        $dellPcieFunction = $json.Oem.Dell.DellPCIeFunction
+
+        $vendorId = Get-DriFTFirstNonEmpty `
+            $json.VendorId $json.VendorID $json.PciVendorId $json.PCIVendorID $json.PCIVendorId $json.PCIVendorID `
+            $json.Oem.Dell.VendorId $json.Oem.Dell.VendorID $json.Oem.Dell.PCIVendorID $json.Oem.Dell.PCIVendorId `
+            $dellNic.PCIVendorID $dellNic.PCIVendorId $dellPcieFunction.PCIVendorID $dellPcieFunction.PCIVendorId
+
+        $deviceId = Get-DriFTFirstNonEmpty `
+            $json.DeviceId $json.DeviceID $json.PciDeviceId $json.PCIDeviceID $json.PCIDeviceId $json.PCIDeviceID `
+            $json.Oem.Dell.DeviceId $json.Oem.Dell.DeviceID $json.Oem.Dell.PCIDeviceID $json.Oem.Dell.PCIDeviceId `
+            $dellNic.PCIDeviceID $dellNic.PCIDeviceId $dellPcieFunction.PCIDeviceID $dellPcieFunction.PCIDeviceId
+
+        $subVendorId = Get-DriFTFirstNonEmpty `
+            $json.SubsystemVendorId $json.SubsystemVendorID $json.SubVendorId $json.SubVendorID $json.PciSubVendorId $json.PCISubVendorID $json.PCISubVendorId $json.PCISubVendorID `
+            $json.Oem.Dell.SubsystemVendorId $json.Oem.Dell.SubsystemVendorID $json.Oem.Dell.SubVendorID $json.Oem.Dell.PCISubVendorID $json.Oem.Dell.PCISubVendorId `
+            $dellNic.PCISubVendorID $dellNic.PCISubVendorId $dellPcieFunction.PCISubVendorID $dellPcieFunction.PCISubVendorId
+
+        $subDeviceId = Get-DriFTFirstNonEmpty `
+            $json.SubsystemId $json.SubsystemID $json.SubsystemDeviceId $json.SubsystemDeviceID $json.SubDeviceId $json.SubDeviceID $json.PciSubDeviceId $json.PCISubDeviceID $json.PCISubDeviceId $json.PCISubDeviceID `
+            $json.Oem.Dell.SubsystemId $json.Oem.Dell.SubsystemID $json.Oem.Dell.SubDeviceID $json.Oem.Dell.PCISubDeviceID $json.Oem.Dell.PCISubDeviceId `
+            $dellNic.PCISubDeviceID $dellNic.PCISubDeviceId $dellPcieFunction.PCISubDeviceID $dellPcieFunction.PCISubDeviceId
+
+        $identityMatchFound = $false
+        if ($json.IdentityInfoType -and $json.IdentityInfoValue) {
+            $identityTypes = @($json.IdentityInfoType)
+            $identityValues = @($json.IdentityInfoValue)
+
+            for ($i = 0; $i -lt @($identityTypes).Count; $i++) {
+                $typeText = [string]$identityTypes[$i]
+                $valueText = [string]$identityValues[[Math]::Min($i, @($identityValues).Count - 1)]
+
+                if ($typeText -imatch 'VendorID:DeviceID:SubVendorID:SubDeviceID' -and
+                    -not [string]::IsNullOrWhiteSpace($valueText)) {
+
+                    $typeParts = $typeText -split ':'
+                    $valueParts = $valueText -split ':'
+                    $map = @{}
+
+                    for ($p = 0; $p -lt @($typeParts).Count -and $p -lt @($valueParts).Count; $p++) {
+                        $map[$typeParts[$p]] = $valueParts[$p]
+                    }
+
+                    $vendorId = $map['VendorID']
+                    $deviceId = $map['DeviceID']
+                    $subVendorId = $map['SubVendorID']
+                    $subDeviceId = $map['SubDeviceID']
+                    $identityMatchFound = $true
+                    break
+                }
+            }
+        }
+
+        if (-not $vendorId -and -not $deviceId -and -not $subVendorId -and -not $subDeviceId) { continue }
+
+        if ((-not $identityMatchFound) -and
+            ($odataType -and $odataType -notmatch 'PCIeFunction|PCIeDevice|DellPCIeFunction|NetworkDeviceFunction|NetworkAdapter|Storage|SoftwareInventory') -and
+            ($pathText -notmatch 'PCIe|DellPCIe|NetworkAdapters|NetworkDeviceFunctions|Storage|DellSoftwareInventory')) {
+            continue
+        }
+
+        $keys = Get-DriFT17GObjectKeys -JsonObject $json -FilePath $jsonFile.FullName
+        $fqdd = Get-DriFT17GPreferredFqdd -JsonObject $json -FilePath $jsonFile.FullName
+
+        $rows += @([PSCustomObject]@{
+            OdataId     = [string]$json.'@odata.id'
+            Id          = [string]$json.Id
+            Name        = [string]$json.Name
+            Description = [string](Get-DriFTFirstNonEmpty `
+                $json.ElementName `
+                $json.Description `
+                $json.DeviceDescription `
+                $json.Model `
+                $json.ProductName `
+                $json.Oem.Dell.ElementName `
+                $json.Oem.Dell.Description `
+                $json.Oem.Dell.DeviceDescription `
+                $json.Oem.Dell.ProductName `
+                $json.Name)
+            IdentityInfoValue = [string](@($json.IdentityInfoValue | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -First 1))
+            PartNumber  = [string](Get-DriFTFirstNonEmpty `
+                $json.PartNumber `
+                $json.PartNumberString `
+                $json.SparePartNumber `
+                $json.Oem.Dell.PartNumber `
+                $json.Oem.Dell.SparePartNumber `
+                $json.Oem.Dell.MMPartNumber `
+                $json.Oem.Dell.ManufacturerPartNumber)
+            SerialNumber = [string](Get-DriFTFirstNonEmpty `
+                $json.SerialNumber `
+                $json.Oem.Dell.SerialNumber)
+            FQDD        = [string]$fqdd
+            SoftwareId  = [string]$json.SoftwareId
+            OdataType   = $odataType
+            VendorID    = Convert-DriFTHexId $vendorId
+            DeviceID    = Convert-DriFTHexId $deviceId
+            SubVendorID = Convert-DriFTHexId $subVendorId
+            SubDeviceID = Convert-DriFTHexId $subDeviceId
+            KeyText     = (@($keys) -join '|')
+            SourceFile  = [string]$jsonFile.FullName
+        })
+    }
+
+    return @($rows) | Sort-Object OdataId,Id,FQDD,VendorID,DeviceID,SubVendorID,SubDeviceID -Unique
+}
+
+function Add-DriFT17GPciIdentityToFirmwareRows {
+<#
+.SYNOPSIS
+    Enriches 17G firmware rows with PCI identity.
+
+.DESCRIPTION
+    Correlates firmware inventory RelatedItem/display/FQDD values to PCI identity rows.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][AllowEmptyCollection()][object[]]$FirmwareRows,
+        [AllowNull()][AllowEmptyCollection()][object[]]$PciRows,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $FirmwareRows = @($FirmwareRows)
+    $PciRows = @($PciRows)
+    $rows = @()
+
+    foreach ($fw in $FirmwareRows) {
+        $pci = Find-DriFT17GPciRecordForFirmware -FirmwareRow $fw -PciRows $PciRows
+
+        $vendorId = $fw.VendorID
+        $deviceId = $fw.DeviceID
+        $subVendorId = $fw.SubVendorID
+        $subDeviceId = $fw.SubDeviceID
+        $source = $fw.Source
+
+        if ($pci) {
+            if ($pci.VendorID) { $vendorId = $pci.VendorID }
+            if ($pci.DeviceID) { $deviceId = $pci.DeviceID }
+            if ($pci.SubVendorID) { $subVendorId = $pci.SubVendorID }
+            if ($pci.SubDeviceID) { $subDeviceId = $pci.SubDeviceID }
+            $source = 'RedfishFirmwareInventory+PCI'
+        }
+
+        $item = New-DriFTInventoryItem `
+            -SourceGeneration '17G' `
+            -ComponentType $fw.ComponentType `
+            -ComponentID $fw.ComponentID `
+            -VendorID $vendorId `
+            -DeviceID $deviceId `
+            -SubVendorID $subVendorId `
+            -SubDeviceID $subDeviceId `
+            -Version $fw.Version `
+            -Display $fw.Display `
+            -ElementName $fw.ElementName `
+            -RelatedItem $fw.RelatedItem `
+            -Source $source
+
+        if ($pci) {
+            foreach ($extra in @(
+                @{ Name = 'OriginalElementName'; Value = (Get-DriFTFirstNonEmpty $pci.Description $pci.Name) },
+                @{ Name = 'OriginalId';          Value = $pci.Id },
+                @{ Name = 'IdentityInfoValue';   Value = $pci.IdentityInfoValue },
+                @{ Name = 'Description';         Value = (Get-DriFTFirstNonEmpty $pci.Description $pci.Name) },
+                @{ Name = 'PartNumber';          Value = $pci.PartNumber },
+                @{ Name = 'SerialNumber';        Value = $pci.SerialNumber },
+                @{ Name = 'FQDD';                Value = $pci.FQDD },
+                @{ Name = 'PciSourceFile';       Value = $pci.SourceFile }
+            )) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$extra.Value)) {
+                    $item | Add-Member -MemberType NoteProperty -Name $extra.Name -Value ([string]$extra.Value) -Force
+                }
+            }
+        }
+
+        $rows += @($item)
+    }
+
+    return @($rows)
+}
+
+function Find-DriFT17GPciRecordForFirmware {
+<#
+.SYNOPSIS
+    Finds the best PCI identity row for one firmware row.
+
+.DESCRIPTION
+    Prefer DellSoftwareInventory identity records over generic PCIeFunction rows.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$FirmwareRow,
+        [Parameter(Mandatory)][object[]]$PciRows
+    )
+
+    if (-not $PciRows) { return $null }
+
+    $needles = New-Object System.Collections.Generic.List[string]
+    foreach ($candidate in @($FirmwareRow.RelatedItem, $FirmwareRow.Display, $FirmwareRow.ElementName, $FirmwareRow.ComponentID)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+
+        [void]$needles.Add(([string]$candidate).Trim())
+        if ($candidate -match '/') {
+            [void]$needles.Add((([string]$candidate).TrimEnd('/') -split '/')[-1])
+        }
+
+        foreach ($variant in Get-DriFT17GFqddVariants -Value $candidate) {
+            if ($variant) { [void]$needles.Add($variant) }
+        }
+    }
+
+    $needles = @($needles | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+
+    $prioritized = @($PciRows | Sort-Object @{ Expression = { if ($_.SourceFile -imatch 'DellSoftwareInventory') { 0 } else { 1 } } }, FQDD, Id)
+
+    foreach ($needle in $needles) {
+        if ($needle -match '^NIC\.Slot\.\d+$') {
+            $escapedBase = [regex]::Escape($needle)
+            $hit = $prioritized | Where-Object {
+                ($_.SourceFile -imatch 'DellSoftwareInventory') -and
+                ($_.VendorID -or $_.DeviceID -or $_.SubVendorID -or $_.SubDeviceID) -and
+                (
+                    ($_.FQDD -imatch "^$escapedBase(?:-|$)") -or
+                    ($_.Id -imatch "DCIM[:_](CURRENT|INSTALLED).*$escapedBase(?:-|$)") -or
+                    ($_.KeyText -imatch "(^|\|)$escapedBase(?:-|\||$)")
+                )
+            } | Sort-Object FQDD | Select-Object -First 1
+
+            if ($hit) { return $hit }
+        }
+    }
+
+    foreach ($needle in $needles) {
+        $escaped = [regex]::Escape($needle)
+        $hit = $prioritized | Where-Object {
+            ($_.FQDD -ieq $needle) -or
+            ($_.Id -ieq $needle) -or
+            ($_.OdataId -ieq $needle) -or
+            ($_.SoftwareId -ieq $needle) -or
+            ($_.KeyText -imatch "(^|\|)$escaped(\||$)")
+        } | Select-Object -First 1
+
+        if ($hit) { return $hit }
+    }
+
+    return $null
+}
+
+#endregion 17G Redfish Parser
+
+#region SAE XML Parser
+
+function Get-DriFTSaeXmlSystemIdentity {
+<#
+.SYNOPSIS
+    Gets system identity from SAE XML collections.
+
+.DESCRIPTION
+    Placeholder body keeps SAE XML capability in the new architecture.
+    Port existing MaserInfo.xml / Inventory.xml / chasinfo.xml logic here.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    throw 'SAE XML system identity parser not yet ported. Port existing SAEX logic into Get-DriFTSaeXmlSystemIdentity.'
+}
+
+function Get-DriFTSaeXmlOperatingSystem {
+<#
+.SYNOPSIS
+    Gets OS information from SAE XML collections.
+
+.DESCRIPTION
+    Placeholder body keeps SAE XML capability in the new architecture.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    throw 'SAE XML OS parser not yet ported. Port existing SAEX logic into Get-DriFTSaeXmlOperatingSystem.'
+}
+
+function Import-DriFTSaeXmlInventory {
+<#
+.SYNOPSIS
+    Imports installed inventory from SAE XML collections.
+
+.DESCRIPTION
+    Placeholder body keeps SAE XML capability in the new architecture.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$Context
+    )
+
+    throw 'SAE XML inventory parser not yet ported. Port existing SAEX logic into Import-DriFTSaeXmlInventory.'
+}
+
+#endregion SAE XML Parser
+
+#region Catalog Download / Import / Filtering
+
+function Initialize-DriFTCatalogSet {
+<#
+.SYNOPSIS
+    Downloads/imports the Dell catalog set.
+
+.DESCRIPTION
+    Loads Catalog.cab/Catalog.xml and prepares placeholders for ASHCI and Precision
+    catalogs when requested by a system.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    $catalogPath = Get-DriFTDellCatalog -Context $Context
+    $catalogXmlPath = Expand-DriFTCatalogCab -CabPath $catalogPath -Context $Context
+
+    $catalogXml = [xml](Get-Content -Raw -Path $catalogXmlPath)
+
+    [PSCustomObject]@{
+        MainCatalogPath = $catalogXmlPath
+        MainCatalog     = $catalogXml
+        MainInfo        = "Catalog.xml<br> $($catalogXml.Manifest.version)"
+        MainVersion     = [string]$catalogXml.Manifest.version
+        AshciCatalog    = $null
+        AshciInfo       = $null
+        AshciVersion    = $null
+        PrecisionCache  = @{}
+        CatVerInfo      = "<br> Catalog.xml Info <br>&nbsp&nbspData/Time: $($catalogXml.Manifest.dateTime)<br>&nbsp&nbspReleaseId: $($catalogXml.Manifest.releaseID)<br>&nbsp&nbspVersion: $($catalogXml.Manifest.version)"
+    }
+}
+
+function Get-DriFTDellCatalog {
+<#
+.SYNOPSIS
+    Downloads Catalog.cab.
+
+.DESCRIPTION
+    Uses Invoke-WebRequest with default credentials for proxy-friendly environments.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    $url = 'https://downloads.dell.com/catalog/Catalog.cab'
+    $path = Join-Path $Context.CatalogRoot 'Catalog.cab'
+
+    Write-DriFTLog -Context $Context -Message 'Downloading Catalog.cab...' -Level Info
+
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $path -UseDefaultCredentials -ErrorAction Stop
+        return $path
+    }
+    catch {
+        Write-DriFTLog -Context $Context -Message "Catalog download failed: $($_.Exception.Message)" -Level Warn
+        throw 'Catalog.cab download failed. Add manual catalog selection fallback here if offline support is required.'
+    }
+}
+
+
+function Get-DriFTAshciCatalog {
+<#
+.SYNOPSIS
+    Downloads and extracts the Dell ASHCI catalog.
+
+.DESCRIPTION
+    Azure Stack HCI / AX systems should use the ASHCI-Catalog.xml.gz catalog.
+    The downloaded .gz is decompressed, then sanitized because some catalog payloads
+    can include extra content or repeated XML declarations after the first Manifest.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    $url = 'https://downloads.dell.com/catalog/ASHCI-Catalog.xml.gz'
+    $gzPath = Join-Path $Context.CatalogRoot 'ASHCI-Catalog.xml.gz'
+    $xmlPath = Join-Path $Context.CatalogRoot 'ASHCI-Catalog.xml'
+
+    Write-DriFTLog -Context $Context -Message 'Downloading ASHCI-Catalog.xml.gz...' -Level Info
+
+    try {
+        foreach ($stale in @($gzPath, $xmlPath)) {
+            if (Test-Path -LiteralPath $stale -PathType Leaf) {
+                Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Invoke-WebRequest -Uri $url -OutFile $gzPath -UseDefaultCredentials -ErrorAction Stop
+        Expand-DriFTGzipFile -Path $gzPath -DestinationPath $xmlPath | Out-Null
+        Repair-DriFTCatalogXmlFile -Path $xmlPath -Context $Context | Out-Null
+
+        return $xmlPath
+    }
+    catch {
+        Write-DriFTLog -Context $Context -Message "ASHCI catalog download/extract failed: $($_.Exception.Message)" -Level Warn -Indent 1
+        return $null
+    }
+}
+
+function Expand-DriFTGzipFile {
+<#
+.SYNOPSIS
+    Decompresses a .gz file to a target path.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$DestinationPath
+    )
+
+    $sourceStream = [System.IO.File]::OpenRead($Path)
+    $gzipStream = $null
+    $targetStream = $null
+
+    try {
+        $gzipStream = New-Object System.IO.Compression.GzipStream($sourceStream, [System.IO.Compression.CompressionMode]::Decompress)
+        $targetStream = [System.IO.File]::Create($DestinationPath)
+        $buffer = New-Object byte[] 8192
+
+        while (($read = $gzipStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $targetStream.Write($buffer, 0, $read)
+        }
+    }
+    finally {
+        if ($targetStream) { $targetStream.Dispose() }
+        if ($gzipStream) { $gzipStream.Dispose() }
+        if ($sourceStream) { $sourceStream.Dispose() }
+    }
+
+    return $DestinationPath
+}
+
+function Repair-DriFTCatalogXmlFile {
+<#
+.SYNOPSIS
+    Sanitizes a Dell catalog XML file before XML parsing.
+
+.DESCRIPTION
+    Some catalog downloads can contain extra data or repeated XML declarations after
+    the first Manifest document. This function keeps only the first complete
+    <?xml ...?><Manifest>...</Manifest> document so [xml] parsing is reliable.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Context
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+
+    $raw = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+
+    $match = [regex]::Match(
+        $raw,
+        '(?s)<\?xml[^>]*>\s*<Manifest\b.*?</Manifest>',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+
+    if ($match.Success) {
+        $clean = $match.Value.Trim()
+        if ($clean.Length -lt $raw.Length) {
+            Write-DriFTLog -Context $Context -Message "Sanitized catalog XML from $($raw.Length) to $($clean.Length) characters." -Level Warn -Indent 1
+        }
+
+        [System.IO.File]::WriteAllText($Path, $clean, [System.Text.Encoding]::UTF8)
+        return $Path
+    }
+
+    # Fallback: trim anything before the first XML declaration and after the first closing Manifest.
+    $start = $raw.IndexOf('<?xml')
+    $end = $raw.IndexOf('</Manifest>')
+    if ($start -ge 0 -and $end -gt $start) {
+        $clean = $raw.Substring($start, ($end + '</Manifest>'.Length) - $start).Trim()
+        [System.IO.File]::WriteAllText($Path, $clean, [System.Text.Encoding]::UTF8)
+        return $Path
+    }
+
+    return $Path
+}
+
+
+function Ensure-DriFTAshciCatalogLoaded {
+<#
+.SYNOPSIS
+    Lazily loads the ASHCI catalog into the catalog set.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$CatalogSet,
+        [Parameter(Mandatory)]$Context
+    )
+
+    if ($CatalogSet.AshciCatalog) { return $true }
+
+    $ashciPath = Get-DriFTAshciCatalog -Context $Context
+    if (-not $ashciPath -or -not (Test-Path -LiteralPath $ashciPath -PathType Leaf)) {
+        return $false
+    }
+
+    try {
+        Repair-DriFTCatalogXmlFile -Path $ashciPath -Context $Context | Out-Null
+        $ashciXmlText = [System.IO.File]::ReadAllText($ashciPath, [System.Text.Encoding]::UTF8)
+        $ashciXml = New-Object System.Xml.XmlDocument
+        $ashciXml.PreserveWhitespace = $false
+        $ashciXml.LoadXml($ashciXmlText)
+        $CatalogSet.AshciCatalog = $ashciXml
+        $CatalogSet.AshciInfo = "ASHCI-Catalog.xml<br> $($ashciXml.Manifest.version)"
+        if ($CatalogSet.PSObject.Properties.Name -notcontains 'AshciVersion') {
+            $CatalogSet | Add-Member -MemberType NoteProperty -Name AshciVersion -Value ([string]$ashciXml.Manifest.version) -Force
+        }
+        else {
+            $CatalogSet.AshciVersion = [string]$ashciXml.Manifest.version
+        }
+
+        $CatalogSet.CatVerInfo += "<br><br> ASHCI-Catalog.xml Info <br>&nbsp&nbspData/Time: $($ashciXml.Manifest.dateTime)<br>&nbsp&nbspReleaseId: $($ashciXml.Manifest.releaseID)<br>&nbsp&nbspVersion: $($ashciXml.Manifest.version)"
+
+        Write-DriFTLog -Context $Context -Message "ASHCI catalog loaded: version $($ashciXml.Manifest.version)" -Level Success -Indent 1
+        return $true
+    }
+    catch {
+        Write-DriFTLog -Context $Context -Message "ASHCI catalog parse failed: $($_.Exception.Message)" -Level Warn -Indent 1
+        return $false
+    }
+}
+
+function Get-DriFTCatalogRowsForSystem {
+<#
+.SYNOPSIS
+    Filters one catalog XML document for the current system and package type.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$CatalogXml,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem
+    )
+
+    return @($CatalogXml.Manifest.SoftwareComponent |
+        Where-Object {
+            ($_.SupportedSystems.Brand.Model.Display.'#cdata-section' -eq $System.PowerEdge) -or
+            ($_.SupportedSystems.Brand.Model.systemID -eq $System.SystemID) -or
+            ($_.SupportedSystems.Brand.Model.systemID -match 'VRTX')
+        } |
+        Where-Object {
+            ($_.packageType -eq $OperatingSystem.CatalogPackageType) -or
+            ($_.packageType -eq 'LW64') -or
+            ($_.packageType -eq 'LWXP')
+        })
+}
+
+function Expand-DriFTCatalogCab {
+<#
+.SYNOPSIS
+    Extracts Catalog.xml from Catalog.cab.
+
+.DESCRIPTION
+    Uses Shell.Application because CAB extraction is supported there on Windows.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$CabPath,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $dest = Join-Path $Context.CatalogRoot 'Main'
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    $target = Join-Path $dest 'Catalog.xml'
+
+    if (Test-Path $target) { Remove-Item $target -Force }
+
+    $shell = New-Object -ComObject Shell.Application
+    $cab = $shell.NameSpace($CabPath)
+    $folder = $shell.NameSpace($dest)
+
+    if (-not $cab -or -not $folder) {
+        throw "Unable to open catalog CAB: $CabPath"
+    }
+
+    $item = $cab.ParseName('Catalog.xml')
+    if (-not $item) { throw 'Catalog.xml was not found inside Catalog.cab.' }
+
+    $folder.CopyHere($item)
+
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path $target -PathType Leaf) -and $timer.Elapsed.TotalSeconds -lt 30) {
+        Start-Sleep -Milliseconds 250
+    }
+
+    if (-not (Test-Path $target -PathType Leaf)) {
+        throw 'Timed out waiting for Catalog.xml extraction.'
+    }
+
+    return $target
+}
+
+
+function Add-DriFTCatalogSourceInfo {
+<#
+.SYNOPSIS
+    Adds source catalog metadata to filtered SoftwareComponent rows.
+
+.DESCRIPTION
+    Catalog XML nodes are live XML element objects. This helper tags each row
+    with SourceCatalogName and SourceCatalogInfo note properties so later matching
+    and reporting can identify whether the update came from ASHCI-Catalog.xml or
+    the general Dell Catalog.xml.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object[]]$Rows,
+        [Parameter(Mandatory)][string]$SourceCatalogName,
+        [Parameter(Mandatory)][string]$SourceCatalogInfo
+    )
+
+    foreach ($row in @($Rows | Where-Object { $null -ne $_ })) {
+        if ($row.PSObject.Properties.Name -notcontains 'SourceCatalogName') {
+            $row | Add-Member -MemberType NoteProperty -Name SourceCatalogName -Value $SourceCatalogName -Force
+        }
+        else {
+            $row.SourceCatalogName = $SourceCatalogName
+        }
+
+        if ($row.PSObject.Properties.Name -notcontains 'SourceCatalogInfo') {
+            $row | Add-Member -MemberType NoteProperty -Name SourceCatalogInfo -Value $SourceCatalogInfo -Force
+        }
+        else {
+            $row.SourceCatalogInfo = $SourceCatalogInfo
+        }
+    }
+
+    return @($Rows)
+}
+
+
+function Format-DriFTCatalogInfo {
+<#
+.SYNOPSIS
+    Formats catalog info consistently for report output.
+
+.DESCRIPTION
+    Always returns:
+      Catalog.xml 26.05.15
+      ASHCI-Catalog.xml 26.03.03
+
+    instead of mixing multiline and plain catalog names.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$CatalogName,
+        [AllowNull()][string]$CatalogVersion
+    )
+
+    $name = Get-DriFTFirstNonEmpty $CatalogName 'Catalog.xml'
+    $version = Get-DriFTFirstNonEmpty $CatalogVersion
+
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        return $name
+    }
+
+    return "$name $version"
+}
+
+
+function Get-DriFTCatalogSourceInfo {
+<#
+.SYNOPSIS
+    Returns the report CatalogInfo text for a catalog row.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$CatalogRow)
+
+    $info = Get-DriFTFirstNonEmpty $CatalogRow.SourceCatalogInfo $CatalogRow.SourceCatalogName
+    if ([string]::IsNullOrWhiteSpace($info)) { return 'Catalog.xml' }
+    return $info
+}
+
+function ConvertTo-DriFTCriticality {
+<#
+.SYNOPSIS
+    Normalizes Dell catalog criticality text.
+
+.DESCRIPTION
+    The report should only show Urgent, Recommended, Optional, or Not Available.
+    Some catalogs include extra wording; this strips it to the useful severity.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$Value)
+
+    $text = Get-DriFTFirstNonEmpty $Value
+    if ([string]::IsNullOrWhiteSpace($text)) { return 'Not Available' }
+
+    if ($text -imatch 'Urgent') { return 'Urgent' }
+    if ($text -imatch 'Recommended') { return 'Recommended' }
+    if ($text -imatch 'Optional') { return 'Optional' }
+
+    return $text.Trim()
+}
+
+function Get-DriFTCatalogRowKey {
+<#
+.SYNOPSIS
+    Builds a stable deduplication key for a catalog row.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$CatalogRow)
+
+    if ($null -eq $CatalogRow) { return '' }
+
+    $name = Get-DriFTFirstNonEmpty $CatalogRow.Name.Display.'#cdata-section' $CatalogRow.name
+    $version = Get-DriFTFirstNonEmpty $CatalogRow.vendorVersion
+    $path = Get-DriFTFirstNonEmpty $CatalogRow.path
+    $category = Get-DriFTFirstNonEmpty $CatalogRow.LUCategory.value
+
+    return (@($category, $name, $version, $path) -join '|').ToLowerInvariant()
+}
+
+function Join-DriFTCatalogRowsAshciFirst {
+<#
+.SYNOPSIS
+    Merges ASHCI and Dell catalog rows with ASHCI priority.
+
+.DESCRIPTION
+    ASHCI rows come first. Dell Catalog.xml rows are appended only when an equivalent
+    row is not already present in ASHCI. This gives AX/HCI systems ASHCI-first
+    matching while preserving Dell Catalog.xml fallback for components not found
+    in ASHCI.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object[]]$AshciRows,
+        [AllowNull()][object[]]$DellRows
+    )
+
+    $merged = @()
+    $seen = @{}
+
+    foreach ($row in @($AshciRows | Where-Object { $null -ne $_ })) {
+        $key = Get-DriFTCatalogRowKey -CatalogRow $row
+        if (-not $seen.ContainsKey($key)) {
+            $seen[$key] = $true
+            $merged += @($row)
+        }
+    }
+
+    foreach ($row in @($DellRows | Where-Object { $null -ne $_ })) {
+        $key = Get-DriFTCatalogRowKey -CatalogRow $row
+        if (-not $seen.ContainsKey($key)) {
+            $seen[$key] = $true
+            $merged += @($row)
+        }
+    }
+
+    return @($merged)
+}
+
+
+
+function Get-DriFTPlatformInfo {
+<#
+.SYNOPSIS
+    Detects the hardware platform family for the active collection.
+
+.DESCRIPTION
+    Provides a single routing object for catalog selection and matching behavior.
+    This keeps PowerEdge, AX/HCI, Precision, and future client platforms from being
+    hardcoded throughout the report engine.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $text = @(
+        $System.PowerEdge,
+        $System.Model,
+        $System.SystemModel,
+        $System.ChassisName,
+        $System.SystemID,
+        $System.ServiceTag,
+        $System.SourceType
+    ) -join ' '
+
+    if ($text -imatch 'Precision') {
+        return [PSCustomObject]@{
+            Type        = 'Precision'
+            Family      = 'Workstation'
+            CatalogType = 'Precision'
+            IsPrecision = $true
+            IsPowerEdge = $false
+            IsHCI       = $false
+        }
+    }
+
+    if ($System.SpecialCatalogNeeded -eq 'HCI' -or
+        $System.S2DCatalogNeeded -eq 'YES' -or
+        $System.PowerEdge -match '^AX|Azure|Storage Spaces Direct') {
+        return [PSCustomObject]@{
+            Type        = 'AX/HCI'
+            Family      = 'PowerEdge'
+            CatalogType = 'ASHCI'
+            IsPrecision = $false
+            IsPowerEdge = $true
+            IsHCI       = $true
+        }
+    }
+
+    return [PSCustomObject]@{
+        Type        = 'PowerEdge'
+        Family      = 'Server'
+        CatalogType = 'Catalog'
+        IsPrecision = $false
+        IsPowerEdge = $true
+        IsHCI       = $false
+    }
+}
+
+function Test-DriFTPrecisionSystem {
+<#
+.SYNOPSIS
+    Determines whether a system identity represents a Precision workstation.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$System)
+
+    $text = @(
+        $System.PowerEdge,
+        $System.Model,
+        $System.SystemModel,
+        $System.ChassisName
+    ) -join ' '
+
+    return ($text -imatch 'Precision')
+}
+
+function Get-DriFTPrecisionModelTokens {
+<#
+.SYNOPSIS
+    Builds normalized Precision model tokens for catalog matching.
+
+.DESCRIPTION
+    Precision package metadata often uses multiple naming forms, for example:
+      Precision 5820 Tower
+      Precision Tower 5820
+      Precision 5820
+      5820
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$Model)
+
+    if ([string]::IsNullOrWhiteSpace($Model)) { return @() }
+
+    $m = ([string]$Model).Trim()
+    $tokens = @($m)
+
+    if ($m -match '(?i)Precision\s+(?<num>\d{4})') {
+        $num = $Matches.num
+        $tokens += @(
+            "Precision $num",
+            "Precision Tower $num",
+            "Precision $num Tower",
+            $num
         )
-    $outFile = $infile.Substring(0, $infile.LastIndexOfAny('.'))
-    $input = New-Object System.IO.FileStream $inFile, ([IO.FileMode]::Open), ([IO.FileAccess]::Read), ([IO.FileShare]::Read)
-    $output = New-Object System.IO.FileStream $outFile, ([IO.FileMode]::Create), ([IO.FileAccess]::Write), ([IO.FileShare]::None)
-    $gzipStream = New-Object System.IO.Compression.GzipStream $input, ([IO.Compression.CompressionMode]::Decompress)
-
-    $buffer = New-Object byte[](1024)
-    while($true){
-        $read = $gzipstream.Read($buffer, 0, 1024)
-        if ($read -le 0){break}
-        $output.Write($buffer, 0, $read)
-        }
-
-    $gzipStream.Close()
-    $output.Close()
-    $input.Close()
-}
-#import the XML
-Write-host "Importing Catalog.xml...."
-$CatalogXMLData = [Xml] (Get-Content "$ExtracLoc\Catalog.xml")
-Write-host "Filtering Catalog.xml for latest PowerEdge Firmware and Drivers...."
-$allArray=@()
-$Files2Download=@()
-$IsNewS2DCatalog="YES" #Do not change this to No Jim. :)
-$SwPort2HostMapAll=@()
-
-
-Do{
-
-$NoneSupportedDevices=@()
-$OutputType="HTML"
-#Support Assist Data Input
-IF(-not($TSRInputFiles)){
-    If (-not($args)){
-        $OutputType=$OutputType.ToUpper()
-        Write-Host ""
-        Write-Host "Please provide Support Assist Collection file from the iDRAC."
-        Write-Host "    Steps to export a Support Assist Collection file:"
-        Write-Host "    1. Logon to iDRAC."
-        Write-Host "    2. Click on the Maintenance tab."
-        Write-Host "    3. Click on the SupportAssist tab."
-        Write-Host "    4. Click the Start a Collection button."
-        Write-Host "    5. Click the Collect button."
-        Write-Host "    6. Once completed click OK to download."
-        Write-Host "    7. This is the Support Assist Collection file needed."
-        Write-Host ""
-        $TSRLoc=Get-FileName($env:USERPROFILE)
-        if(!$TSRLoc){
-            $OutputType="No"
-            EndScript}
-    }Else{
-        IF(-not($TSRLoc)){
-            $TSRLoc=$args
-        }
     }
+
+    if ($m -match '(?i)Precision\s+(?<word>Mobile|Tower|Rack)\s+(?<num>\d{4})') {
+        $num = $Matches.num
+        $word = $Matches.word
+        $tokens += @(
+            "Precision $word $num",
+            "Precision $num $word",
+            "Precision $num",
+            $num
+        )
+    }
+
+    return @($tokens | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
 }
 
-#Extraction temp location
-$ExtracLoc="$env:TEMP\DriFT"
-if (Test-Path $ExtracLoc -PathType Container){Remove-Item $ExtracLoc -Recurse -Force | Out-Null}
-if (!(Test-Path $ExtracLoc -PathType Container)) {New-Item -ItemType Directory -Force -Path $ExtracLoc | Out-Null }
+function Test-DriFTCatalogRowAppliesToPrecision {
+<#
+.SYNOPSIS
+    Tests whether a catalog row appears applicable to the Precision workstation.
 
-#TSR unzip files
-Write-Host "Unziping TSR data files...."
-function Expand-ZIPFile{
-    param($file, $destination)
-    $shell = new-object -com shell.application
-    $zip = $shell.NameSpace($file)
-    foreach($item in $zip.items())
-    {
-    #Removed ,1564 to allow for DSet password prompt
-    #$shell.Namespace($destination).copyhere($item,1564)
-    $shell.Namespace($destination).copyhere($item)
-    Write-Host "$($item.path) extracted"
-    "$($item.path)"
+.DESCRIPTION
+    This is intentionally permissive during the first Precision pass. Dell client
+    catalogs frequently surface supported system metadata differently from server
+    catalogs. We first prefer explicit model token matches, then allow rows from a
+    catalog that was already filtered to the system.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$CatalogRow,
+        [Parameter(Mandatory)]$System
+    )
+
+    if ($null -eq $CatalogRow) { return $false }
+
+    $modelText = Get-DriFTFirstNonEmpty $System.PowerEdge $System.Model $System.SystemModel $System.ChassisName
+    $tokens = @(Get-DriFTPrecisionModelTokens -Model $modelText)
+
+    $rowText = @(
+        $CatalogRow.SupportedSystems.Brand.Model.Display.'#cdata-section',
+        $CatalogRow.SupportedSystems.Brand.Model.systemID,
+        $CatalogRow.SupportedSystems.Brand.Model.name,
+        $CatalogRow.SupportedSystems.Brand.Display.'#cdata-section',
+        $CatalogRow.Name.Display.'#cdata-section',
+        $CatalogRow.path,
+        $CatalogRow.Description.Display.'#cdata-section'
+    ) -join ' '
+
+    foreach ($token in $tokens) {
+        if ($rowText -imatch [regex]::Escape($token)) { return $true }
     }
+
+    $systemId = Get-DriFTFirstNonEmpty $System.SystemID
+    if (-not [string]::IsNullOrWhiteSpace($systemId) -and $rowText -imatch [regex]::Escape($systemId)) {
+        return $true
+    }
+
+    return $false
 }
-$TFile=@()
-$InnerZIP=@()
-ForEach($TFile in $TSRLoc){
-    $ExtFolderName=$TFile.Split('\')[-1]
-    $ExtFolderName=$ExtFolderName.split('.')[0]
-    $TSRDataFolder=$ExtracLoc+"\"+$ExtFolderName
-    New-Item -ItemType Directory -Force -Path $TSRDataFolder | Out-Null
-    Expand-ZIPFile $TFile $TSRDataFolder
-    $InnerZIP=get-childitem $TSRDataFolder -filter '*.zip' -Exclude '*thermal*','*dumplog*' -Recurse
-    If($InnerZIP.name){
-        #$UnZipInner=$TSRDataFolder+"\"+$InnerZIP.Name
-        Expand-ZIPFile $InnerZIP.fullname $TSRDataFolder
-        $InnerInnerZIP=get-childitem $TSRDataFolder -filter '*.zip'
-        IF($InnerInnerZIP.name -imatch $ServiceTag){
-            IF($InnerInnerZIP.name -ne $InnerZIP.name){
-                Expand-ZIPFile $InnerInnerZIP.fullname $TSRDataFolder
-            }
-        }
-    }
+
+function Get-DriFTPrecisionCatalog {
+<#
+.SYNOPSIS
+    Loads a Precision/workstation applicable catalog.
+
+.DESCRIPTION
+    First implementation uses the main Dell Catalog.xml already downloaded by DriFT.
+    Precision package rows are tagged as Precision catalog rows when the platform is
+    Precision. This keeps the implementation safe while preserving future ability to
+    replace this with a dedicated Dell Command Update/client catalog source.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$CatalogSet,
+        [Parameter(Mandatory)]$Context
+    )
+
+    # Placeholder hook for a future dedicated workstation/client catalog.
+    # For now, return the main catalog so Precision uses the same Dell catalog
+    # download path but with Precision-aware filtering/matching.
+    return $CatalogSet.MainCatalog
 }
 
 
-$E=@()
-$DriFTFolders=@()
-$DriFTFolders=Get-ChildItem $ExtracLoc | Where-Object{ $_.PSIsContainer } | sort-object name
+function Get-DriFTApplicableCatalogRows {
+<#
+.SYNOPSIS
+    Filters catalog rows for the current system and OS.
 
-$allArrayout=@()
-$MBSelLogWarnERR=@()
+.DESCRIPTION
+    Catalog routing priority:
+      1. Precision workstation path
+      2. AX / Azure Stack HCI ASHCI-first path
+      3. Standard Dell Catalog.xml path
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$CatalogSet,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
 
-Foreach($E in $DriFTFolders.PSPath){
-    #Support Assist Enterprise Collection from iDRAC or TSR
-    $SupportAssistDataType=""
-    If ($TSRDataInventory=Get-ChildItem -Path $E -Filter inventory -Directory -Recurse -Force | ForEach-Object{ $_.fullname }){
-        Write-Host "SupportAssist Collection Found..."
-        $SupportAssistDataType="TSR"
-        #Importing TSR Data
-        Write-host "Importing TSR data...."
-        $CIM_BIOSAttribute=@()
-        $CIM_BIOSAttribute_Instances=@()
-        $DCIM_View=@()
-        $DCIM_View_Instances=@()
-        $DCIM_SoftwareIdentity=@()
-        $DCIM_SoftwareIdentity_NAMEDINSTANCE=@()
-        if (Test-Path $TSRDataInventory"\sysinfo_CIM_BIOSAttribute.xml" -PathType Leaf){
-            $CIM_BIOSAttribute=[Xml] (Get-Content $TSRDataInventory"\sysinfo_CIM_BIOSAttribute.xml")
-            $CIM_BIOSAttribute_Instances=$CIM_BIOSAttribute.CIM.MESSAGE.SIMPLEREQ."VALUE.NAMEDINSTANCE".INSTANCE
-            
-        }Else{
-            $CIM_BIOSAttribute_Instances="MISSING"
-        }
-        if (Test-Path $TSRDataInventory"\sysinfo_DCIM_View.xml" -PathType Leaf){
-            $DCIM_View=[Xml] (Get-Content $TSRDataInventory"\sysinfo_DCIM_View.xml")
-            $DCIM_View_Instances=$DCIM_View.CIM.MESSAGE.SIMPLEREQ."VALUE.NAMEDINSTANCE".INSTANCE
-            $DCIM_VIEM_Properties=@()
-            foreach ($Object in @($DCIM_View_Instances)) {
-                $PSObject = New-Object PSObject
-                foreach ($Property in @($Object.Property)) {
-                    $PSObject | Add-Member NoteProperty $Property.Name $Property.InnerText
-                }
-            $DCIM_VIEM_Properties+=$PSObject
-            }
-        }Else{
-            $DCIM_View_Instances="MISSING"
-        }
-        if (Test-Path $TSRDataInventory"\sysinfo_DCIM_SoftwareIdentity.xml" -PathType Leaf){
-            $DCIM_SoftwareIdentity=[Xml] (Get-Content $TSRDataInventory"\sysinfo_DCIM_SoftwareIdentity.xml")
-            $DCIM_SoftwareIdentity_NAMEDINSTANCE=$DCIM_SoftwareIdentity.CIM.MESSAGE.SIMPLEREQ."VALUE.NAMEDINSTANCE"
-            $DCIM_SoftwareIdentity_Properties=@()
-            foreach ($Object in @($DCIM_SoftwareIdentity_NAMEDINSTANCE.INSTANCE)) {
-                $PSObject = New-Object PSObject
-                foreach ($Property in @($Object.Property)) {
-                    $PSObject | Add-Member NoteProperty $Property.Name $Property.InnerText
-                }
-            $DCIM_SoftwareIdentity_Properties+=$PSObject
-            }
-        }Else{
-            $DCIM_SoftwareIdentity_NAMEDINSTANCE="MISSING"
-            Write-host "    WARNING: SoftwareIdentity.xml missing. Please upgrade to the latest iDRAC version to see the rest of the hardware." -foregroundcolor Yellow
-        }
-        # Azure Stack Hub
-           
-            # All possible PM modules 
-            [hashtable]$AZHUBElementNames = @{}
-            $AZHUBElementNames.Add('3X9R5','R640')
-            $AZHUBElementNames.Add('R4GYM','R840')
-            $AZHUBElementNames.Add('MGFK5','R640')
-            $AZHUBElementNames.Add('V4F4H','R640')
-            $AZHUBElementNames.Add('V8NYX','R640')
-            $AZHUBElementNames.Add('50CRT','R740XD')
-            #$AZHUBElementNames
-            
-            # PM Module from TSR                            
-            $IDModule = $DCIM_SoftwareIdentity_Properties | Where-Object{$_.ElementName -imatch 'Identity Module'} |select ElementName
-            $IsAZHub=""
-            IF($AZHUBElementNames.keys -imatch (($IDModule.ElementName -split '\(')[1] -split '\)')[0]){
-                $IsAZHub=$True
-                Write-Host "    Found Azure Stack Hub: $IsAZHub"
-            }Else{$IsAZHub=$False}
-            
-        #Installed hardware from Software Identity
-            Write-Host "Discovering Installed Hardware..."
-            $DCIM_SoftwareIdentity_NAMEDINSTANCE_INSTANCENAME_KEYBINDING_KEYVALUE_Installed = $DCIM_SoftwareIdentity_NAMEDINSTANCE|`
-            Where-Object{$_.INSTANCENAME.KEYBINDING.KEYVALUE."#text" -Match "DCIM:INSTALLED"} 
-        #Converting to customer property to maker easyer to manage install hardware
-            $TSRSystemInfo=@()
-            ForEach($Prop in $DCIM_SoftwareIdentity_NAMEDINSTANCE_INSTANCENAME_KEYBINDING_KEYVALUE_Installed.INSTANCE ){
-                $TSRSystemInfo+=[PSCustomObject]@{
-                    ComponentType=($Prop.Property | Where-Object{$_.Name -eq 'ComponentType'} | Select-Object Value).value
-                    ComponentID=($Prop.Property | Where-Object{$_.Name -eq 'ComponentID'} | Select-Object Value).value
-                    VendorID=($Prop.Property | Where-Object{$_.Name -eq 'VendorID'} | Select-Object Value).value
-                    DeviceID=($Prop.Property | Where-Object{$_.Name -eq 'DeviceID'} | Select-Object Value).value
-                    SubDeviceID=($Prop.Property | Where-Object{$_.Name -eq 'SubDeviceID'} | Select-Object Value).value
-                    SubVendorID=($Prop.Property | Where-Object{$_.Name -eq 'SubVendorID'} | Select-Object Value).value
-                    Version=($Prop.Property | Where-Object{$_.Name -eq 'VersionString'} | Select-Object Value).value
-                    Display=($Prop.Property | Where-Object{$_.Name -eq 'FQDD'} | Select-Object Value).value
-                    ElementName=($Prop.PROPERTY | Where-Object{$_.Name -eq 'ElementName'}|Select-Object Value).Value
-                }
-            }
-        #Filtering for only unique hardware
-            Write-Host "Removing Duplicate Discovered Hardware..."
-            $InstalledHardwareUnique=$TSRSystemInfo|Group-Object 'ComponentID','VendorID','DeviceID','SubDeviceID','SubVendorID'|`
-              ForEach-Object{$_.Group|Select-Object 'componentType','componentID','vendorID','deviceID','subDeviceID','subVendorID','version','display','ElementName' -First 1}|`
-              Where-Object{($_.DeviceID.length -ge 1)-or($_.ComponentID.length -ge 1)}|`
-              sort-object 'componentType','componentID','vendorID','deviceID','subDeviceID','subVendorID','version','display'
-            #$InstalledHardwareUnique|FT
+    $platform = Get-DriFTPlatformInfo -System $System -Context $Context
+
+    if ($Context.PSObject.Properties.Name -notcontains 'Platform') {
+        $Context | Add-Member -MemberType NoteProperty -Name Platform -Value $platform -Force
     }
-    #Support Assist Enterprise Collection XML
-    IF($SupportAssistDataType -lt 3){
-    
-        If($SAEDataInventory=Get-ChildItem -Path $DriFTFolders.fullname -Include "MaserInfo.xml","Inventory.xml" -File -Recurse -Force | Select-Object -last 1  | ForEach-Object{ $_.Directory } ){
-            $InvPath=""
-            $MasPath=""
-            $SupportAssistDataType="SAEX"
-            # Server Type and Service Tag
-            $chasinfoxml=Get-ChildItem -Path $DriFTFolders.fullname -Include "chasinfo.xml" -File -Recurse -Force | sort-object Length | Select-Object -last 1 | ForEach-Object{ $_.Directory } 
-            $SvrInfo=[Xml](Get-Content $chasinfoxml"\chasinfo.xml")
-            #Firmware inventory
-            $InvPath=$SAEDataInventory.FullName+"\Inventory.xml"
-                IF([System.IO.File]::Exists($InvPath)){$inv=[Xml](Get-Content $InvPath)
-                $XMLLIB="SVMInventory"}
-            #Firmware Maser
-            $MasPath=$SAEDataInventory.FullName+"\MaserInfo.xml"
-                IF([System.IO.File]::Exists($MasPath)){
-                $inv=[Xml](Get-Content $MasPath)
-                $XMLLIB="OMA"}
-            $SystemID=$inv.$XMLLIB.System
-            $SystemFW=$inv.$XMLLIB.Device | Select-Object `
-                @{Label="componentType";Expression={$_.Application.componentType}},@{Label="componentID";Expression={$_.componentID}},`
-                @{Label="vendorID";Expression={$_.vendorID}},@{Label="deviceID";Expression={$_.deviceID}},`
-                @{Label="subDeviceID";Expression={$_.subDeviceID}},@{Label="subVendorID";Expression={$_.subVendorID}},`
-                @{Label="version";Expression={$_.Application.version}},@{Label="display";Expression={$_.display}},`
-                @{Label="application";Expression={$_.application.display}}
-
-            #Filter for unique hardware       
-              $InstalledHardwareUnique=$SystemFW|Group-Object 'componentID','vendorID','deviceID','subDeviceID','subVendorID','version'|`
-                ForEach-Object{$_.Group|Select-Object 'componentType','componentID','vendorID','deviceID','subDeviceID','subVendorID','version','display','ElementName' -First 1}|`
-                Where-Object{($_.DeviceID.length -ge 1)-or($_.ComponentID.length -ge 1)}|`
-                sort-object 'componentType','componentID','vendorID','deviceID','subDeviceID','subVendorID','version','display' 
-        }
+    else {
+        $Context.Platform = $platform
     }
-    #Support Assist Enterprise Collection JSON
-    IF($SupportAssistDataType -lt 3){
-        If($SAEDataInventory=Get-ChildItem -Path $DriFTFolders.fullname -Filter 'supportassist_output.json' | ForEach-Object{ $_.fullname } ){
-            $SupportAssistDataType="SAEJ"
-            #Support Assist Enterprise Collection JSON in the RAW
-            IF($SAEJraw=(Get-Content -raw -path $SAEDataInventory | ConvertFrom-Json)){
-                Write-Host "SupportAssist Collection JSON Loaded..."
-                Write-Host "    ERROR: Invalid input file detected. Exiting." -foregroundcolor Red 
-            }
-            $OutputType="No"
-            EndScript
+
+    $mainRows = @(Get-DriFTCatalogRowsForSystem `
+        -CatalogXml $CatalogSet.MainCatalog `
+        -System $System `
+        -OperatingSystem $OperatingSystem)
+
+    $mainRows = @(Add-DriFTCatalogSourceInfo `
+        -Rows $mainRows `
+        -SourceCatalogName 'Catalog.xml' `
+        -SourceCatalogInfo (Format-DriFTCatalogInfo `
+            -CatalogName 'Catalog.xml' `
+            -CatalogVersion $CatalogSet.MainVersion))
+
+    # Precision workstation support
+    if ($platform.IsPrecision) {
+        Write-DriFTLog -Context $Context -Message "Precision workstation detected. Using Precision-aware Dell catalog matching..." -Level Info -Indent 1
+
+        $precisionCatalog = Get-DriFTPrecisionCatalog -CatalogSet $CatalogSet -Context $Context
+
+        $precisionRows = @(Get-DriFTCatalogRowsForSystem `
+            -CatalogXml $precisionCatalog `
+            -System $System `
+            -OperatingSystem $OperatingSystem)
+
+        if (@($precisionRows).Count -eq 0) {
+            # Some workstation catalog metadata does not filter cleanly with the
+            # server-style SupportedSystems path. Fall back to model-token scan.
+            $allSoftwareComponents = @($precisionCatalog.Manifest.SoftwareComponent | Where-Object { $null -ne $_ })
+
+            $precisionRows = @($allSoftwareComponents | Where-Object {
+                Test-DriFTCatalogRowAppliesToPrecision -CatalogRow $_ -System $System
+            })
+        }
+
+        $precisionRows = @(Add-DriFTCatalogSourceInfo `
+            -Rows $precisionRows `
+            -SourceCatalogName 'Catalog.xml' `
+            -SourceCatalogInfo (Format-DriFTCatalogInfo `
+                -CatalogName 'Catalog.xml' `
+                -CatalogVersion $CatalogSet.MainVersion))
+
+        $allRows = @(Join-DriFTCatalogRowsAshciFirst -AshciRows $precisionRows -DellRows $mainRows)
+
+        Write-DriFTLog -Context $Context -Message "Precision applicable rows: $(@($precisionRows).Count); Dell fallback rows: $(@($mainRows).Count); merged rows: $(@($allRows).Count)" -Level Info -Indent 1
+
+        return [PSCustomObject]@{
+            MainRows      = $mainRows
+            AshciRows     = @()
+            PrecisionRows = $precisionRows
+            AllRows       = @($allRows)
+            MainInfo      = (Format-DriFTCatalogInfo -CatalogName 'Catalog.xml' -CatalogVersion $CatalogSet.MainVersion)
+            AshciInfo     = $CatalogSet.AshciInfo
+            PrecisionInfo = (Format-DriFTCatalogInfo -CatalogName 'Catalog.xml' -CatalogVersion $CatalogSet.MainVersion)
+            ActiveInfo    = (Format-DriFTCatalogInfo -CatalogName 'Catalog.xml' -CatalogVersion $CatalogSet.MainVersion)
         }
     }
 
-   IF ($SupportAssistDataType.Length -lt 3){
-        Write-Host
-        Write-Host "    ERROR: Invalid input file detected. Exiting." -foregroundcolor Red 
-        Write-Host
-        $OutputType="No"
-        EndScript
-   }
+    $ashciRows = @()
+    $allRows = $mainRows
+    $activeInfo = $CatalogSet.MainInfo
 
-    #Check for Server Model number
-        Write-host "Finding server model in TSR data...."
-        $ServiceTag=@()
-        $ServerType=@()
-        If($SupportAssistDataType -eq "TSR"){
-            $HostName=(($CIM_BIOSAttribute_Instances|`
-            Where-Object{($_.CLASSNAME -match "DCIM_SystemString")}).PROPERTY|`
-            Where-Object{$_.VALUE -eq "HostName"}).ParentNode.'PROPERTY.ARRAY' |`
-            Where-Object{$_.Name -match "CurrentValue"}|`
-                      Select-Object @{Label="CurrentValue";Expression={$_.'VALUE.ARRAY'.VALUE}}
-            $HostName=$HostName.CurrentValue
-            $ServiceTag=($DCIM_View_Instances| Where-object {($_.CLASSNAME -match "DCIM_SystemView")}).PROPERTY | Where-Object {$_.NAME -eq "ServiceTag"} | Select-Object @{Label="ServiceTag";Expression={$_.Value}} | Select-Object -First 1
-            $ServerType=($DCIM_View_Instances| Where-Object {($_.CLASSNAME -eq "DCIM_SystemView")}).PROPERTY | Where-Object {$_.NAME -eq "MODEL"} | Select-Object @{Label="Model";Expression={$_.Value}}| Select-Object -First 1
-            $SystemID=(($CIM_BIOSAttribute_Instances| Where-Object {($_.CLASSNAME -eq "DCIM_LCString")}|Where-Object{$_.PROPERTY.VALUE -eq 'SYSID'}).'PROPERTY.ARRAY' | Where-Object {$_.NAME -eq "CurrentValue"}).'VALUE.ARRAY'.VALUE
-                
-########### Change this to YES to force ASHCI-catalog.xml
-            $S2DCatalogNeeded="No"
+    if ($platform.IsHCI) {
+        Write-DriFTLog -Context $Context -Message 'HCI/AX system detected. Loading ASHCI catalog...' -Level Info -Indent 1
 
-            $ServerType=$ServerType.Model
-            switch ($ServerType){
-                
-                # Added for Precision rack systems
-                {$PSItem -match 'Precision'}{
-                    IF($ServerType.Length -gt 4){
-                        Write-Host "    Found: Server Type Precision Rack."
-                        $SpecialCatalogNeeded="Precision"
-                        $ServiceTag=$ServiceTag.ServiceTag
-                        }
-                    }
-    
-                #Added for XR2 same as R440
-                {$PSItem -match 'XR2'}{
-                    IF($ServerType.Length -gt 4){
-                        Write-Host "    Found: Server Type XR2. Changing to R440."
-                        #$ServerType=$ServerType -replace "XR2","R440"
-                        $ServerType="R440"
-                        $S2DCatalogNeeded="NO"
-                        $SpecialCatalogNeeded="NO"
-                        $ServiceTag=$ServiceTag.ServiceTag
-                        }
-                    }
-                {$PSItem -match 'AX'}{
-                    IF($ServerType.Length -gt 4){
-                        Write-Host "    Found: Server Type of AX"
-                        $ServerType=$ServerType -replace "AX-","R"
-                        $S2DCatalogNeeded="YES"
-                        $SpecialCatalogNeeded="HCI"
-                        $ServiceTag=$ServiceTag.ServiceTag+"***"
-                        $ServiceTagList+=$ServiceTag+"_"
-                        }
-                    }
-                {$PSItem -match 'Storage Spaces Direct'}{
-                    IF($ServerType.Length -gt 4){
-                        Write-Host "    Found: Server Type of Storage Spaces Direct Ready Node"
-                        $ServerType=$ServerType -replace " Storage Spaces Direct RN","" -replace " Storage Spaces Direct R",""
-                        
-                        $S2DCatalogNeeded="YES"
-                        $SpecialCatalogNeeded="HCI"
-                        $ServiceTag=$ServiceTag.ServiceTag+"***"
-                        $ServiceTagList+=$ServiceTag+"_"
-                        }
-                    }
-                
-                #Added for vSAN Ready Nodes
-                {$PSItem -match 'vSAN'}{
-                    IF($ServerType.Length -gt 4){
-                        Write-Host "    Found: vSAN Ready Node"
-                        $IsvSAN=$True
-                        Write-Host "    ERROR: vSAN is not supported yet. Try again later." -ForegroundColor Red
-                        EndScript
-                        }
-                    }
+        if (Ensure-DriFTAshciCatalogLoaded -CatalogSet $CatalogSet -Context $Context) {
+            $ashciRows = @(Get-DriFTCatalogRowsForSystem `
+                -CatalogXml $CatalogSet.AshciCatalog `
+                -System $System `
+                -OperatingSystem $OperatingSystem)
 
-                #Added for ScaleIO Ready Nodes
-                {$PSItem -match 'ScaleIO'}{
-                    IF($ServerType.Length -gt 4){
-                        Write-Host "    Found: ScaleIO Ready Node"
-                        $IsvSAN=$True
-                        Write-Host "    ERROR: ScaleIO is not supported yet. Try again later." -ForegroundColor Red
-                        EndScript
-                        }
-                    }
+            $ashciRows = @(Add-DriFTCatalogSourceInfo `
+                -Rows $ashciRows `
+                -SourceCatalogName 'ASHCI-Catalog.xml' `
+                -SourceCatalogInfo (Format-DriFTCatalogInfo `
+                    -CatalogName 'ASHCI-Catalog.xml' `
+                    -CatalogVersion $CatalogSet.AshciVersion))
 
-                #everything else
-                default{
-                IF($ServerType.Length -gt 4){
-                    #Added to pull the server model out Ex. PowerEdge R740XD = R740XD
-                    $ServerType=($ServerType -split "\W")[1]
-                    }
-                    #Added for XC6320 servers 
-                    If(($ServerType -like "XC*") -and ((([regex]::match($ServerType,"\d+").Groups[0].Value).Trim()).length -eq 4))`
-                    {$ServerType=$ServerType -replace "XC","C"}
-                    Else{
-                    #Added for XC servers 
-                    $ServerType=$ServerType -replace "XC","R"}# -replace "xd",""}
-                    $ServiceTag=$ServiceTag.ServiceTag
-                    $ServiceTagList+=$ServiceTag+"_"
-                    #Added for R320 Servers
-                    If($ServerType -eq "R320"){$ServerType=$ServerType+'/NX400'}
-                 }
+            if (@($ashciRows).Count -gt 0) {
+                $allRows = @(Join-DriFTCatalogRowsAshciFirst -AshciRows $ashciRows -DellRows $mainRows)
+                $activeInfo = "$($CatalogSet.AshciInfo)<br>Fallback: $($CatalogSet.MainInfo)"
+                Write-DriFTLog -Context $Context -Message "Using ASHCI catalog first. ASHCI rows: $(@($ashciRows).Count); Dell fallback rows: $(@($mainRows).Count); merged rows: $(@($allRows).Count)" -Level Success -Indent 1
             }
-
-            #No Server Type Found
-
-            If(($ServerType.Length -lt 4)-and ($ServiceTag.length -gt 0)){
-                # Retrieve server type from support.dell.com with Service Tag
-                Write-Host "    WARNING: Failed to find Server Model in TSR data..." -foregroundcolor Yellow
-                Write-Host "             Trying to retrieving Server Model from support.dell.com with Service Tag $ServiceTag..." -foregroundcolor Yellow
-                $URL="http://www.dell.com/support/home/us/en/19/product-support/servicetag/$ServiceTag"
-                $result = Invoke-webrequest -Uri $URL -Method Get
-                IF($result.StatusCode -match 200){
-                    $resultTable = @{}
-                    # Get the title
-                    $resultTable.title = $result.ParsedHtml.title
-                    If ($resultTable.title -match 'OEMR'){
-                        Write-Host "    ERROR: None Supported System Detected: OEMR" -foregroundcolor Red
-                        Write-Host "           No Output will be generated..." -foregroundcolor Red
-                        $OutputType="No"
-                        EndScript
-                    }
-                    $ServerType=($resultTable.title -replace "Support for ","").split("|")[0]
-                    IF($ServerType -match 'Storage Spaces Direct'){
-                        IF($ServerType.Length -gt 4){
-                            Write-Host "    Found: Server Type of Storage Spaces Direct Ready Node"
-                            $ServerType=$ServerType -replace "Storage Spaces Direct ","" -replace " Ready Node",""
-                            $ServerType=$ServerType.Trim()
-                            $S2DCatalogNeeded="YES"
-                            $SpecialCatalogNeeded="HCI"
-                            $ServiceTag=$ServiceTag.ServiceTag+"***"
-                            $ServiceTagList+=$ServiceTag+"_"
-                        }
-                    }Else{$ServerType=([regex]::match($ServerType,"\D[A-Z]\d+").Groups[0].Value).Trim()}
-                    Write-Host "    Success: Server Model $ServerType found by Service Tag on support.dell.com..." -foregroundcolor Green
-                }Else{
-                    Write-Host "    ERROR: Service Tag not found on support.dell.com..." -foregroundcolor Red
-                }
-       
-            }
-            #Service tag Not found on support.dell.com
-            If($ServerType.Length -lt 4){
-                #Added to handle missing Server Model information
-                Write-Host "    WARNING: Server Model $ServerType not expected. The expected value should be like R740." -foregroundcolor Yellow
-                $MOServerType = Read-Host "Would you like to manually enter the Server Model? [y/n]"
-                If (($MOServerType -ieq "n")-or ($MOServerType -ieq "")){
-                $OutputType="No"
-                EndScript}
-                Write-Host "Please type the Server Model and press Enter. "
-                $ServerTypeOverride=Read-Host "    Example: R740"
-                If (($ServerTypeOverride.Length -lt 4) -or ($ServerTypeOverride -ieq "")){
-                Write-Host "    ERROR: Server Model you entered was not in the proper format. Please run again." -foregroundcolor Red
-                $OutputType="No"
-                EndScript}
-                    $ServerTypeOverride1 = @{
-                    Model=$ServerTypeOverride
-                    }
-                    $ServerType = New-Object PSObject -Property $ServerTypeOverride1
-                    $ServerType = $ServerType.Model
-                    
-                    # Enable to force R740XD ASHCI Catalog
-                    #$ServerType="$ServerType Storage Spaces Direct RN"
-                    
-                    $ServiceTag=$ServiceTag.ServiceTag
-                    $ServiceTagList+=$ServiceTag+"_"
+            else {
+                Write-DriFTLog -Context $Context -Message "ASHCI catalog loaded but returned no applicable rows. Using main Catalog.xml rows: $(@($mainRows).Count)" -Level Warn -Indent 1
+                $allRows = $mainRows
+                $activeInfo = $CatalogSet.MainInfo
             }
         }
-
-
-        If($SupportAssistDataType -eq "SAEX"){
-            $ServiceTag=$SvrInfo.OMA.ChassisList.Chassis.ChassisInfo.ChassisProps2.ServiceTag
-            $SystemId=$inv.SVMInventory.system.systemid
-            $S2DCatalogNeeded="NO"
-            $SpecialCatalogNeeded="NO"
-            $ServerType=$SvrInfo.OMA.ChassisList.Chassis.ChassisInfo.ChassisProps1.ChassModel
-            If(($SystemId.length -lt 4)-and($ServerType.length -lt 4)){
-                Write-Host "    ERROR: Server type is missing in TSR data. No data to output...." -foregroundcolor red
-                $OutputType="NO"
-                EndScript
-            }
-            #Added for XC servers 
-            #$ServerType=$ServerType -replace "XC","R" #-replace "xd",""
-            $ServiceTagList+=$ServiceTag+"_"
-            switch ($ServerType){
-                #Added for Storage Spaces Direct servers
-                {$PSItem -match 'Storage Spaces Direct'}{
-                    IF($ServerType.Length -gt 4){
-                        Write-Host "    Found: Server Type of Storage Spaces Direct Ready Node"
-                        $ServerType=$ServerType -replace " Storage Spaces Direct RN","" -replace " Storage Spaces Direct R",""
-                        
-                        $S2DCatalogNeeded="YES"
-                        $SpecialCatalogNeeded="HCI"
-                        $ServiceTag=$ServiceTag+"***"
-                        $ServiceTagList+=$ServiceTag+"_"
-                        }
-                    }
-
-                #everything else
-                default{
-                IF($ServerType.Length -gt 4){
-                    #Added to pull the server model out Ex. PowerEdge R740XD = R740XD
-                    $ServerType=($ServerType -split "\W")[1]
-                    }
-                    #Added for XC6320 servers 
-                    If(($ServerType -like "XC*") -and ((([regex]::match($ServerType,"\d+").Groups[0].Value).Trim()).length -eq 4))`
-                    {$ServerType=$ServerType -replace "XC","C"}
-                    Else{
-                    #Added for XC servers 
-                    $ServerType=$ServerType -replace "XC","R"}# -replace "xd",""}
-                    $ServiceTag=$ServiceTag
-                    $ServiceTagList+=$ServiceTag+"_"
-                    #Added for R320 Servers
-                    If($ServerType -eq "R320"){$ServerType=$ServerType+'/NX400'}
-                 }
-            }
-            
+        else {
+            Write-DriFTLog -Context $Context -Message "ASHCI catalog unavailable. Using main Catalog.xml rows: $(@($mainRows).Count)" -Level Warn -Indent 1
+            $allRows = $mainRows
+            $activeInfo = $CatalogSet.MainInfo
         }
-        If($SupportAssistDataType -eq "SAEJ"){
-            $ServiceTag=($SAEJraw.objects | Where-Object{$_.objectId -match 'BIOS_Setup_1_1_SystemServiceTag'}).fields.Value
-            $ServerType=([regex]::match(($SAEJraw.objects | Where-Object{$_.objectId -match 'BIOS_Setup_1_1_SystemModelName'}).fields.Value,"\D[A-Z]\d\d\d").Groups[0].Value).Trim()
-            
-            If($ServerType.Length -lt 4){
-                Write-Host "    ERROR: Server type is missing in input data. No data to output...." -foregroundcolor red
-                $OutputType="NO"
-                EndScript
-            }
-            #Added for XC servers 
-            $ServerType=$ServerType -replace "XC","R" #-replace "xd",""
-            $ServiceTagList+=$ServiceTag+"_"  
-        }
-        Write-host "    Found server model:" $ServerType
-        Write-host "Finding Service Tag...."
-        Write-host "    Found Service Tag:" $ServiceTag
-        
-    #Installed OS Check
-    Write-host "Finding which OS is installed in TSR data...."
-    #LWXP LW64 LLXP
-        $OSCheck=@()
-        $OSMjrVer=@()
-        $OSMinVer=@()
-        $OperatingSystemYear=""
-        If($SupportAssistDataType -eq "TSR"){
-            $OSName0=$CIM_BIOSAttribute_Instances| Where-Object {($_.CLASSNAME -match "DCIM_SystemString")} | Where-Object {$_.PROPERTY.Value -Match "OSName"}
-            $OSName1=$OSName0.ChildNodes | Where-Object{($_.NAME -match "CurrentValue")}
-            $OSCheck=$OSName1.InnerText
-            $DriverSupport = $False
-            $VMWOSVer=""
-            Switch($OSCheck){
-                {$OSCheck -imatch "Windows"}{
-                    #$OSCheck="Windows Server 2016"            
-                    IF ($OSCHECK -match "2008"){
-                    $OperatingSystemYear = "2008"
-                    $OSMjrVer=6
-                    $OSMinVer=0}
-                    IF (($OSCHECK -match "2008") -and ($OSCHECK -match "R2")){
-                    $OperatingSystemYear = "2008 R2"
-                    $OSMjrVer=6 
-                    $OSMinVer=1}
-                    IF ($OSCHECK -match "2012"){
-                    $OperatingSystemYear = "2012"
-                    $OSMjrVer=6 
-                    $OSMinVer=2}
-                    IF (($OSCHECK -match "2012") -and ($OSCHECK -match "R2")){
-                    $OperatingSystemYear = "2012 R2"
-                    $OSMjrVer=6 
-                    $OSMinVer=3}
-                    IF ($OSCHECK -match "2016"){
-                    $OperatingSystemYear = "2016"
-                    $OSMjrVer=10 
-                    $OSMinVer=0
-                    $Build=$NULL}
-                    IF ($OSCHECK -match "2019"){
-                    $OperatingSystemYear = "2019"
-                    $OSMjrVer=10 
-                    $OSMinVer=17763
-                    $Build='17784'}
-                    IF ($OSCHECK -imatch "20H2"){
-                    $OperatingSystemYear = "20H2"
-                    $OSMjrVer=10 
-                    $OSMinVer=0
-                    $Build='17784'}
-                    IF ($OSCHECK -imatch "21H2"){
-                    $OperatingSystemYear = "21H2"
-                    $OSMjrVer=10 
-                    $OSMinVer=0
-                    $Build='20348'}
-                    IF ($OSCHECK -imatch "22H2"){
-                    $OperatingSystemYear = "22H2"
-                    $OSMjrVer=10 
-                    $OSMinVer=0
-                    $Build='20349'}
-                    IF ($OSCHECK -imatch "23H2"){
-                    $OperatingSystemYear = "23H2"
-                    $OSMjrVer=10 
-                    $OSMinVer=0
-                    $Build='25398'}
-                    IF ($OSCHECK -match "2022"){
-                    #$OSCHECK="2022-21H2-22H2"
-                    $OperatingSystemYear = "2022"
-                    $OSMjrVer=10 
-                    $OSMinVer=0
-                    $Build='20348'}
-                    IF ($OSCHECK -match "Windows 10"){
-                    $OSMjrVer=10 
-                    $OSMinVer=0}
-                    $DriverSupport = $True
-                    $OSVersion=$Build
-                }
-                {$OSCheck -imatch "VMware"}{
-                    # Get installed VMware Version from sysinfo_CIM_BIOSAttribute.xml
-                    $IsVMware=$True
-                    If($OSCheck -inotmatch "build"){
-                        $VMWOSVersion0=$CIM_BIOSAttribute_Instances| Where-Object {($_.CLASSNAME -match "DCIM_SystemString")} | Where-Object {$_.PROPERTY.Value -Match "OSVersion"}
-                        $VMWOSVersion1=$VMWOSVersion0.ChildNodes | Where-Object{($_.NAME -match "CurrentValue")}
-                        $VMWOSVersionCheck=$VMWOSVersion1.InnerText | Sort-Object -Unique
-                    }Else{$VMWOSVersionCheck=$OSCheck}
-                    #($VMWOSVersionCheck -split " ")[0]
-                    ForEach($V in $VMWOSVersionCheck){
-                        If($v.length -gt 0){
-                            $VMWOSVer=""
-                            Switch ($V){
-                                {$V -imatch "build"}{
-                                    #$VMWOSVer=($v -replace "VMware ","" -replace "ESXi ","" -replace " Update "," U" -replace ".0 "," " -split "Build")[0]
-                                    $VMWOSVer=($v -replace "VMware ","" -replace "ESXi ","" -replace " Update "," U" -split "Build")[0]
-                                    $VMWOSVer=$VMWOSVer.trim()
-                                    $OSVersion=""
-                                    $OSVersion=$VMWOSVer
-                                    $DriverSupport = $True
-                                }
-                                {$V -imatch "Patch"}{
-                                    $VMWOSVer=($v -replace "Update "," U" -replace ".0 ","" -split " Patch")[0]
-                                    $OSVersion=""
-                                    $OSVersion=$VMWOSVer
-                                    $DriverSupport = $True
-                                }
-                                {$V -imatch "GA"}{
-                                    $VMWOSVer=($v -replace ".0 ","" -split "GA ")[0]
-                                    $OSVersion=""
-                                    $OSVersion=$VMWOSVer
-                                    $DriverSupport = $True
-                                }
-                                {$V -imatch "7.0.0"}{
-                                    $VMWOSVer=($v -split ".0 ")[0]
-                                    $OSVersion=""
-                                    $OSVersion=$VMWOSVer
-                                    $DriverSupport = $True
-                                }
-                                Default{
-                                    $VMWOSVer=($v  -split " ")[0]
-                                    $OSVersion=""
-                                    $OSVersion=$VMWOSVer
-                                    $DriverSupport = $True
-                                    
-                                }
-                        }
-                    }
-                }
-            }
-            }
-            #Removes any extra spaces
-                $VMWOSVer = $VMWOSVer -replace '\s{2}', ' '
-            #Added to compinsate for versions like 7.0.3 U3 where the .3 after the .0 does not matter so we remove it
-                IF((($VMWOSVer | Select-String -Pattern '\.' -AllMatches).Matches.Count) -gt 1){
-                    $VMWOSVer = $VMWOSVer -replace '\.[0-9]\s', ' '
-                }
-
-        }
-        If($SupportAssistDataType -eq "SAEX"){
-            $SAE_OS_info=$inv.SVMInventory.OperatingSystem
-            $OSMjrVer=$SAE_OS_info.majorVersion
-            $OSMinVer=$SAE_OS_info.minorVersion
-            IF($SAE_OS_info.osVendor -match "Microsoft"){
-                IF (($OSMjrVer -eq 6)-and($OSMinVer -eq 0)){
-                $OSCheck="Windows Server 2008"}
-                IF (($OSMjrVer -eq 6)-and($OSMinVer -eq 1)){
-                $OSCheck="Windows Server 2008 R2"}
-                IF (($OSMjrVer -eq 6)-and($OSMinVer -eq 2)){
-                $OSCheck="Windows Server 2012"}
-                IF (($OSMjrVer -eq 6)-and($OSMinVer -eq 3)){
-                $OSCheck="Windows Server 2012 R2"}
-                IF (($OSMjrVer -eq 10)-and($OSMinVer -eq 0)){
-                $OSCheck="Windows Server 2016"}
-                IF (($OSMjrVer -eq 0)-and($OSMinVer -eq 0)){
-                $OSCheck="Windows Server 2019"}
-            }
-                
-        }
-        If($SupportAssistDataType -eq "SAEJ"){
-            $SAEJ_OSVer=@()
-            $SAEJ_OSVerS=@()
-            $SAE_OS_info=($SAEJraw.objects | Where-Object{$_.objectId -match 'OperatingSystem'}).fields.OSName
-            $SAEJ_OSVer=($SAEJraw.objects | Where-Object{$_.objectId -match 'OperatingSystem'}).fields.Version.split() | sort-object
-            $SAEJ_OSVerS=$SAEJ_OSVer[1].Split(".")
-            $OSMjrVer=$SAEJ_OSVerS[0]
-            $OSMinVer=$SAEJ_OSVerS[1]
-            IF($SAE_OS_info -match "Microsoft"){
-            $OSCheck="Windows"}
-        }
-        $NOOSSupport="NO"
-
-        IF($IsVMware -ne $True){
-            $OSVer = "LW64"
-            IF((($OSCHECK).Length -gt 0) -and ($ServerType -match "20") -and (!($OSCHECK -match "Windows"))-and (!($SAE_OS_info.osArch -match "x64"))){$OSVer = "LWXP"}
-            IF ($Null -eq $OSver){
-                #Show firmware only
-                Clear-Host
-                Write-Host "    ERROR: NON-SUPPORTED OS DETECTED: $OSCheck. No output...." -foregroundcolor red
-                $OutputType="NO"
-                EndScript
-            }
-        }
-        If(($OSCHECK).Length -eq 0){
-            $InstalledOS=" NO OS Detected in TSR Data: Assuming Windows 64bit"
-            $OSMjrVer=6 
-            $OSMinVer=3
-        }Else{$InstalledOS=($OSCheck)}
-
-        #Added for driver check
-        IF($DriverSupport -eq $False){
-            $NOOSSupport="YES"
-            Write-host "    ERROR: No Driver Support for"$InstalledOS ". Firmware ONLY."  -foregroundcolor red
-        }
-    Write-host "    Found OS:" $OSCheck $OSVersion
-    $SkipDriversandFirmware = "NO" 
-    # Drivers and Firmware for Precision
-    If($SpecialCatalogNeeded -eq 'Precision'){
-        Write-Host "Downloading Precision catalog..."
-        $CatLocNA="NO"
-        Try{
-            $SpecialCatalogSource="https://downloads.dell.com/catalog/CatalogIndexPC.cab"
-            $SpecialCatalogName=($SpecialCatalogSource -split '\/')[-1]
-            $SpecialCatalogNameExt=($SpecialCatalogName -split '\.')[-1]
-            $SpecialCatalogFile="$env:TEMP\DriFT\$SpecialCatalogName"
-            Invoke-WebRequest -Uri $SpecialCatalogSource -OutFile "$env:TEMP\DriFT\$SpecialCatalogName" -UseDefaultCredentials
-            IF(-not(Test-Path $SpecialCatalogFile)){
-                $CatLocNA="YES"
-            }
-        }
-        Catch{
-            $CatLocNA="YES"
-            Write-Host "    WARNING: Special Catalog $SpecialCatalogName Source location NOT accessible. Please provide file."-foregroundcolor Yellow
-            Write-Host "    Or manually download from:"$SpecialCatalogSource -foregroundcolor Yellow
-            }
-        Finally{
-            #Ask for the catalog.cab
-            If($CatLocNA -eq "YES"){
-                Function Get-CatFile()
-                    {
-                        param([string]$Title,[string]$Directory,[string]$Filter="All Files (*.*)|*.*")
-                        [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null
-                        $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog -Property @{Multiselect = $true}
-                        $OpenFileDialog.Title = $Title
-                        $OpenFileDialog.initialDirectory = $Directory
-                        $OpenFileDialog.filter = $Filter
-                        $OpenFileDialog.ShowDialog() | Out-Null
-                        $OpenFileDialog.filenames
-                    }
-                $FExt=$SpecialCatalogNameExt
-                $DownloadFile=Get-CatFile -Title "Please Select Special Catalog" -Directory "C:" -Filter "$($FExt) (*.$($FExt))| *.$($FExt)"
-                If(!$DownloadFile){
-                    $OutputType="No"
-                    EndScript}
-                }
-
-            IF($SpecialCatalogNameExt -eq 'gz'){
-                $infile = $($env:TEMP)+'\DriFT\'+$($SpecialCatalogName)
-                DeGZip-File -Path $infile
-            }ElseIf($SpecialCatalogNameExt -eq 'cab'-or $SpecialCatalogNameExt -eq 'zip'){
-                $SpecialCatalogExpandedLocation="$env:TEMP\DriFT\"
-                # Clean old xml catalogs
-                Remove-item -Path "$SpecialCatalogExpandedLocation\*.XML"
-                Expand-ZIPFile $($SpecialCatalogFile) $($SpecialCatalogExpandedLocation)
-            }
-        }# Finally
-        # Pull
-        Try{
-            $SpecialCatalogExtractedPath=Get-ChildItem -Path $SpecialCatalogExpandedLocation -Filter "$(($SpecialCatalogName -split '\.')[0]).xml"
-            $PrecisionCatalogLink=(((Get-Content $SpecialCatalogExtractedPath.FullName | Select-String -SimpleMatch "$SystemID.cab") -split 'path=')[-1] -split ' size')[0] -replace '"'
-            $PrecisionCatalogLink="https://dl.dell.com/$PrecisionCatalogLink"
-            $PrecisionCatalogName=($PrecisionCatalogLink -split '\/')[-1]
-            $PrecisionCatalogNameExt=($PrecisionCatalogLink -split '\.')[-1]
-            $SpecialCatalogFile="$env:TEMP\DriFT\$PrecisionCatalogName"
-            Invoke-WebRequest -Uri $PrecisionCatalogLink -OutFile $SpecialCatalogFile -UseDefaultCredentials
-            IF(-not(Test-Path $SpecialCatalogFile)){
-                $CatLocNA="YES"
-            }
-        }Catch{}
-        Finally{
-            IF($PrecisionCatalogNameExt -eq 'gz'){
-                DeGZip-File -Path $($env:TEMP)+'\DriFT\'
-            }ElseIf($PrecisionCatalogNameExt -eq 'cab'-or $PrecisionCatalogNameExt -eq 'zip'){
-                $PrecisionCatalogExpandedLocation="$env:TEMP\DriFT\"
-                Expand-ZIPFile $($SpecialCatalogFile) $($PrecisionCatalogExpandedLocation)
-            }
-            $PrecisionCatalogExtractedPath=Get-ChildItem -Path $PrecisionCatalogExpandedLocation | Where-Object{$_.name -imatch "$($SystemID).xml"}
-            IF($PrecisionCatalogExtractedPath){
-            [xml]$PrecisionCatalog=Get-Content $PrecisionCatalogExtractedPath.FullName
-            # Filter to systemID
-            $PrecisionCatalogXMLDataFiltered = $PrecisionCatalog.Manifest.SoftwareComponent.SupportedSystems.Brand.Model | Where-Object{$_.SupportedSystems.Brand.Model}
-            }Else{
-                Write-Host "ERROR: Failed to find SystemID ($SystemID) in CatalogIndexPC.XML. No data will be added to report." -ForegroundColor Red
-                #$OutputType = "NO"
-                # Skipping driver and fw
-                $SkipDriversandFirmware = "YES"
-                # Removing data from report so it will not show up
-                $allarray=@()
-                $SpecialCatalogNeeded="NO"
-                #EndScript
-            }
-
-        }
-
     }
-   
-    #Drivers and Firmware for Storage Space Direct
-        switch ($SpecialCatalogNeeded){
-        {$PSItem -eq "HCI"}{
-            If($IsNewS2DCatalog -eq "YES"){
-                #Download S2D_Catalog_and_SCP.zip
-                Try{
-                    $S2DCatalogSource="https://downloads.dell.com/catalog/ASHCI-Catalog.xml.gz"
-                    Invoke-WebRequest $S2DCatalogSource -OutFile "$env:TEMP\DriFT\ASHCI-Catalog.xml.gz" -UseDefaultCredentials
-                }Catch{
-                    $CatLocNA="YES"
-                    Write-Host "    WARNING: S2D Catalog Source location NOT accessible. Please provide ASHCI-Catalog.xml.gz file."-foregroundcolor Yellow
-                    Write-Host "    Or manually download from:"$S2DCatalogSource -foregroundcolor Yellow
-                    }
-                Finally{
-                    #Ask for the catalog.cab
-                    If($CatLocNA -eq "YES"){
-                        Function Get-CatFile($initialDirectory)
-                        {
-                            [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null
-                            $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog -Property @{Multiselect = $true}
-                            $OpenFileDialog.Title = "Please Select S2D CATALOG.CAB file..."
-                            $OpenFileDialog.initialDirectory = $initialDirectory
-                            $OpenFileDialog.filter = "CAB (*.gz)| *.gz"
-                            $OpenFileDialog.ShowDialog() | Out-Null
-                            $OpenFileDialog.filenames
-                        }
-                        $DownloadFile=Get-CatFile("C:")
-                        if(!$DownloadFile){
-                            $OutputType="No"
-                            EndScript}
-                    }
-                }
-                
+    else {
+        Write-DriFTLog -Context $Context -Message "Using main Catalog.xml rows for matching/reporting. Rows: $(@($mainRows).Count)" -Level Info -Indent 1
+    }
 
-                #Extract S2D_Catalog_and_SCP.zip
-                    $infile="$($env:TEMP)\DriFT\ASHCI-Catalog.xml.gz"
-                    DeGZip-File $infile
-                #Parse S2D Catalog
-                    #import the XML
-               
-                    Write-host "Importing ASHCI-Catalog.xml...."
-                    $S2DCatalogXMLData = [Xml] (Get-Content "$env:TEMP\DriFT\ASHCI-Catalog.xml")
-                    #$Data = $S2DCatalogXMLData
-                    #$Catalogs+= $S2DCatalogXMLData
-                    Write-host "Filtering ASHCI-Catalog.xml for latest PowerEdge Firmware and Drivers...."
-                    $S2DCatalogXMLDataFiltered=@()
-                    $S2DCatalogXMLDataFiltered+=$S2DCatalogXMLData.Manifest.SoftwareComponent|`
-                    Where-Object{($_.SupportedSystems.Brand.Model.Display."#cdata-section" -eq $ServerType)-or($_.SupportedSystems.Brand.Model.systemID -eq $SystemID)-or($_.SupportedSystems.Brand.Model.systemID -match 'VRTX')}|`
-                    Where-Object{($_.packageType -eq "LW64")-or($_.packageType -eq "LWXP")}|`
-                    <# added a filter to include with Null or SupportedOperatingSystems#>
-                    Where-Object{($_.SupportedOperatingSystems.OperatingSystem.Display.'#cdata-section' -eq $null  -or $_.SupportedOperatingSystems.OperatingSystem.Display.'#cdata-section' -imatch $OperatingSystemYear)}
-                    #pause
-                    $S2DCatalogInfo=@()
-                    $S2DCatalogInfo="ASHCI-Catalog.xml"
-                    #$S2DCatalogInfo+="<br> "+$CatalogXMLData.Manifest.dateTime
-                    #$S2DCatalogInfo+="<br> "+$CatalogXMLData.Manifest.releaseID
-                    $S2DCatalogInfo+="<br> "+$CatalogXMLData.Manifest.version                  
-                    $CatVerInfo+="<br> S2D_Catalog.xml Info <br>&nbsp&nbspData/Time: "+$S2DCatalogXMLData.Manifest.dateTime+"<br>&nbsp&nbspReleaseId: "+$S2DCatalogXMLData.Manifest.releaseID+"<br>&nbsp&nbspVersion: "+$S2DCatalogXMLData.Manifest.version
-                    $IsNewS2DCatalog="YES"
-                    IF(!$S2DCatalogXMLDataFiltered){Write-host "    ERROR: No Driver/Firmware information found in ASHCI-Catalog.xml for System Type:" $ServerType " with OS:" $OSVer -foregroundcolor red}
-                    $SpecialCatalogNeeded="NO"
-                }
-        }
-        }#end switch S2DCatalogNeeded
-        Switch($SpecialCatalogNeeded){
-            {$PSItem -eq "Precision"}{
-                #Write-host "Expanding Special Catalog: $SpecialCatalogNeeded...."
-                   #$SpecialCatalogFile
-                    Write-host "Importing Special Catalog...."
-                    $SpecialCatalogXMLDataFiltered=@()
-                    $SpecialCatalogXMLDataFiltered = $PrecisionCatalog.Manifest.SoftwareComponent
-                    $SpecialCatalogInfo=@()
-                    $SpecialCatalogInfo=$PrecisionCatalogExtractedPath.Name
-                    $SpecialCatalogInfo+="<br> "+$SpecialCatalogXMLDataFiltered.Manifest.version
-                    $CatVerInfo+="<br> $PrecisionCatalogExtractedPath.Name Info <br>&nbsp&nbspData/Time: "+$SpecialCatalogXMLDataFiltered.Manifest.dateTime+"<br>&nbsp&nbspReleaseId: "+$SpecialCatalogXMLDataFiltered.Manifest.releaseID+"<br>&nbsp&nbspVersion: "+$SpecialCatalogXMLDataFiltered.Manifest.version
-                    IF(!$SpecialCatalogXMLDataFiltered){Write-host "    ERROR: No Driver/Firmware information found in catalog.xml for System Type:" $ServerType " with OS:" $OSVer -foregroundcolor red}
-
-            }
-        }#End of switch SpecialCatalogNeeded
-            #{$PSItem -eq "NO"}{
-                # Reloads the catalog.xml data
-                IF(($SpecialCatalogNeeded -ne 'Precision') -and ($SkipDriversandFirmware -eq "NO")){
-                    Write-host "Expanding Catalog.cab...."
-                    IF(!(Test-Path "$ExtracLoc\Catalog.xml")){Expand-Cab -SourceFile $DownloadFile -TargetFolder $ExtracLoc -Item "Catalog.xml" -Force}
-                    Write-host "Importing Catalog.xml...."
-                    #$Data = $CatalogXMLData
-                    #$Catalogs+= $CatalogXMLData
-                    Write-host "Filtering Catalog.xml for latest PowerEdge Firmware and Drivers...."
-                    $CatalogXMLDataFiltered=@()
-                    $CatalogXMLDataFiltered+=$CatalogXMLData.Manifest.SoftwareComponent|`
-                    Where-Object{($_.SupportedSystems.Brand.Model.Display."#cdata-section" -eq $ServerType)-or($_.SupportedSystems.Brand.Model.systemID -eq $SystemID)-or($_.SupportedSystems.Brand.Model.systemID -match 'VRTX')}|`
-                    Where-Object{($_.packageType -eq "LW64")-or($_.packageType -eq "LWXP")}
-                    $CatalogInfo=@()
-                    $CatalogInfo="Catalog.xml"
-                    #$CatalogInfo+="<br> "+$CatalogXMLData.Manifest.dateTime
-                    #$CatalogInfo+="<br> "+$CatalogXMLData.Manifest.releaseID
-                    $CatalogInfo+="<br> "+$CatalogXMLData.Manifest.version
-                    $CatVerInfo+="<br> Catalog.xml Info <br>&nbsp&nbspData/Time: "+$CatalogXMLData.Manifest.dateTime+"<br>&nbsp&nbspReleaseId: "+$CatalogXMLData.Manifest.releaseID+"<br>&nbsp&nbspVersion: "+$CatalogXMLData.Manifest.version
-                    IF(!$CatalogXMLDataFiltered){Write-host "    ERROR: No Driver/Firmware information found in catalog.xml for System Type:" $ServerType " with OS:" $OSVer -foregroundcolor red}
-                }
-
-         #   }
-        #}
-
-    # Combine Catalogs
-
-    # Drivers and Firmware for PowerEdge Servers
-  IF($SkipDriversandFirmware -eq "NO"){
-    #Match Installed Hardware to Catalog
-        Write-host "Comparing Installed Hardware to Dell Catalog...."
-        If(($SupportAssistDataType -eq "SAEX")-or($SupportAssistDataType -eq "TSR")){
-            ForEach ($Device in $InstalledHardwareUnique){
-                $Found=@()
-                If($S2DCatalogNeeded -eq "YES"){
-                    $CatalogInfoOut=""
-                    #Added for iDRAC 4.40 weird chars
-                            IF($Device.deviceID.length -gt 0){
-                                $Found=
-                                $S2DCatalogXMLDataFiltered|`
-                                Where-Object{$_.ComponentType.value -eq $Device.componentType}|`
-                                Where-Object{$_.SupportedDevices.Device.componentID -match $Device.componentID}|`
-                                Where-Object{(($_.SupportedDevices.Device.PCIInfo.deviceID -eq $Device.deviceID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.subDeviceID -eq $Device.subdeviceID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.subVendorID -eq $Device.subVendorID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.vendorID -eq $Device.vendorID))}|`
-                                sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                                $CatalogInfoOut=$S2DCatalogInfo
-                                }
-                            Else{
-                                $Found=
-                                $S2DCatalogXMLDataFiltered|`
-                                Where-Object{$_.ComponentType.value -eq $Device.componentType}|`
-                                Where-Object{$_.SupportedDevices.Device.componentID -match $Device.componentID}|`
-                                sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                                $CatalogInfoOut=$S2DCatalogInfo
-                                }
-                            
-                    #Write-Host "S2D:" $Found.Name.Display."#cdata-section"
-                    # Check Catalog.xml if not found in special catalog
-                }
-                IF($SpecialCatalogNeeded -eq 'Precision'){
-                    $CatalogInfoOut=""
-                    #Added for iDRAC 4.40 weird chars
-                            IF($Device.deviceID.length -gt 0){
-                                $Found=$SpecialCatalogXMLDataFiltered|`
-                                Where-Object{$_.ComponentType.value -eq $Device.componentType}|`
-                                Where-Object{$_.SupportedDevices.Device.componentID -match $Device.componentID}|`
-                                Where-Object{(($_.SupportedDevices.Device.PCIInfo.deviceID -eq $Device.deviceID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.subDeviceID -eq $Device.subdeviceID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.subVendorID -eq $Device.subVendorID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.vendorID -eq $Device.vendorID))}|`
-                                sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                                $CatalogInfoOut=$SpecialCatalogInfo
-                                }
-                            Else{
-                                $Found=
-                                $SpecialCatalogXMLDataFiltered|`
-                                Where-Object{$_.ComponentType.value -eq $Device.componentType}|`
-                                Where-Object{$_.SupportedDevices.Device.componentID -match $Device.componentID}|`
-                                sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                                $CatalogInfoOut=$SpecialCatalogInfo
-                                }
-                }
-                IF(!$Found){
-                            $CatalogInfoOut=""
-                            #Added for iDRAC 4.40 weird chars
-                            IF($Device.deviceID.length -gt 0){
-                                $Found=
-                                $CatalogXMLDataFiltered|`
-                                Where-Object{$_.ComponentType.value -eq $Device.componentType}|`
-                                Where-Object{$_.SupportedDevices.Device.componentID -match $Device.componentID}|`
-                                Where-Object{(($_.SupportedDevices.Device.PCIInfo.deviceID -eq $Device.deviceID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.subDeviceID -eq $Device.subdeviceID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.subVendorID -eq $Device.subVendorID)-and`
-                                ($_.SupportedDevices.Device.PCIInfo.vendorID -eq $Device.vendorID))}|`
-                                sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                                $CatalogInfoOut=$CatalogInfo
-                                }
-                            Else{
-                                $Found=
-                                $CatalogXMLDataFiltered|`
-                                Where-Object{$_.ComponentType.value -eq $Device.componentType}|`
-                                Where-Object{$_.SupportedDevices.Device.componentID -match $Device.componentID}|`
-                                sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                                $CatalogInfoOut=$CatalogInfo
-                                }
-                            }
-                            #pause
-                #Write-Host "CAT:" $Found.Name.Display."#cdata-section"         
-                $allArray+=$Found|`
-                Select-object @{Label="ServiceTag";Expression={"$ServiceTag"}},`
-                @{Label="PowerEdge";Expression={"$ServerType"}},`
-                @{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}},`
-                @{Label="Type";Expression={If($Device.componentType -is [system.array])`
-                 {$Device.componentType[0]}Else{$Device.componentType}}},`
-                @{Label="Category";Expression={$_.LUCategory.value}},`
-                @{Label="Name";Expression={$_.Name.Display."#cdata-section"}},`
-                @{Label="InstalledVersion";Expression={`
-                    $DeviceVer=$Device.version
-                    $VVersion=$_.vendorVersion
-                    If($Device.version -is [system.array])`
-                        {$DeviceVer=$Device.version[0]}Else{$DeviceVer=$Device.version};`
-                    If($Device.version -match "OSC_")`
-                        {$DeviceVer=$Device.version -replace "OSC_"};`
-                    If($DeviceVer -is [System.Version])`
-                        {If([System.Version]$DeviceVer -lt [System.Version]$_.vendorVersion){"***"+$DeviceVer}Else{$DeviceVer}};`
-                    Try{
-                        If([Version]$DeviceVer -lt [Version]$_.vendorVersion){"***"+$DeviceVer}Else{$DeviceVer}}
-                    Catch{
-                          If($DeviceVer -lt $VVersion){"***"+$DeviceVer}Else{$DeviceVer}}
-                    Finally{}}},`
-                @{Label="AvailableVersion";Expression={$_.vendorVersion}},`
-                @{Label="CatalogInfo";Expression={$CatalogInfoOut}},`
-                @{Label="Criticality";Expression={$_.Criticality.Display."#cdata-section" -replace '\d\-'}},`
-                @{Label="ReleaseDate";Expression={($_.dateTime -split "T")[0]}},`
-                @{Label="URL";Expression={$DellURL+$_.path}},`
-                @{Label="Details";Expression={$_.ImportantInfo.URL}}|`
-                sort-object Type,Category,Name
-                
-            }
-            
-          }
-          #pause
-  IF($InstalledOS -imatch "Windows" -and $S2DCatalogNeeded -eq "YES"){
-    #Gathering Certified CPLD version for Ready Nodes
-        Write-Host "Checking for Certified CPLD version for AX/Ready Nodes..."
-        $CPLDURL='https://www.dell.com/support/kbdoc/en-us/000127931/firmware-and-driver-update-catalog-for-dell-emc-solutions-for-microsoft-azure-stack-hci'
-        IF(-not($CPLDRequest)){
-        $CPLDRequest = Invoke-WebRequest -Uri $CPLDURL}
-
-    #Find table in the website
-        $CPLDtableHeader = $CPLDRequest.AllElements | Where-Object {$_.tagname -eq 'th'}
-        $CPLDtableData = $CPLDRequest.AllElements | Where-Object {$_.tagname -eq 'td'}
-
-    #Table header and data
-        $CPLDthead = $CPLDtableHeader.innerText
-        $CPLDtdata = $CPLDtableData.innerText
-
-    #Break table data into smaller chuck of data.
-        $CPLDdataResult = New-Object System.Collections.ArrayList
-        for ($i = 0; $i -le $CPLDtdata.count; $i+= ($CPLDthead.count - 1))
-        {
-            if ($CPLDtdata.count -eq $i)
-            {
-                break
-            }        
-            $CPLDgroup = $i + ($CPLDthead.count - 1)
-            [void]$CPLDdataResult.Add($CPLDtdata[$i..$CPLDgroup])
-            $i++
-        }
-
-    #Html data into powershell table format
-        $CPLDfinalResult = @()
-        foreach ($CPLDdata in $CPLDdataResult)
-        {
-            $CPLDnewObject = New-Object psobject
-            for ($i = 0; $i -le ($CPLDthead.count - 1); $i++) {
-                $CPLDnewObject | Add-Member -Name $CPLDthead[$i] -MemberType NoteProperty -value $CPLDdata[$i]
-            }
-            $CPLDfinalResult += $CPLDnewObject
-        }
-        #$CPLDfinalResult | ft -AutoSize
-
-        $CPLDFW = $CPLDfinalResult | Select Component,Type,Category,'Software Bundle',@{L='Version';E={($_.'Minimum Supported Version' -split ' -')[0]}},@{L='ServerType';E={(($_.'Minimum Supported Version' -split ' - ')[-1]).Trim() -replace ' Ready Node',''}},@{L='Documentation';E={"https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid="+$_.'Software Bundle'}}
-        $AXServerType=$ServerType -replace 'R64','AX-64'-replace 'R740XD','AX-740XD' -replace 'R6515','AX-6515' -replace 'R7525','AX-7525'
-        $CPLD4ServerType=($CPLDFW | Where-Object{$_.ServerType -ilike $AXServerType})
-    $FoundCPLD=@()
-    $FoundCPLD=$InstalledHardwareUnique | Where-Object{$_.Display -imatch "CPLD"}
-    IF($FoundCPLD){
-        IF($CPLD4ServerType){
-            IF(-not($CPDLDetails)){
-            $CPDLDetails=Invoke-WebRequest -Uri $CPLD4ServerType.Documentation}
-            #Lookup the dowhnload link
-            $DLLink=""
-            $DLLink=$CPDLDetails.links.href | Where-Object{$_ -imatch "$($CPLD4ServerType.'Software Bundle')"+"_WN64"} | Where-Object {$_ -imatch ".EXE"}
-            $DLLinkVersion=""
-            $DLLinkVersion=(($DLLink -split '/')[-1] -split '_')[-2]
-            $CPLDURI=($CPLDFW | Where-Object{$_.ServerType -imatch $ServerType}).Documentation
-            $CPLD= $CPLD4ServerType|Select-Object `
-                     @{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                    ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                    ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                    ,@{Label="Type";Expression={"FRMW"}}`
-                    ,@{Label="Category";Expression={$_.Category}}`
-                    ,@{Label="Name";Expression={($CPDLDetails.ParsedHtml.IHTMLDocument3_documentElement.getElementsBytagName('h1')| Select-Object innertext).innertext}}`
-                    ,@{Label="InstalledVersion";Expression={If([System.Version]$FoundCPLD.Version -lt [System.Version]$DLLinkVersion){"***"+$FoundCPLD.Version}Else{$FoundCPLD.Version}}}`
-                    ,@{Label="AvailableVersion";Expression={$DLLinkVersion}}`
-                    ,@{Label="CatalogInfo";Expression={"support.dell.com"}}`
-                    ,@{Label="Criticality";Expression={((($CPDLDetails.ParsedHtml.IHTMLDocument3_documentElement.getElementsByClassName("h4")|Where-Object {$_.getAttributeNode('Id').Value -eq 'driverImportanceForDriver'}).parentElement.innerText) -split "`n")[-1]}}`
-                    ,@{Label="ReleaseDate";Expression={(($CPDLDetails.ParsedHtml.IHTMLDocument3_documentElement.getElementsByClassName('h4')|Where-Object {$_.getAttributeNode('Id').Value -eq 'driverRDFordriver'}).parentElement.textContent -replace 'Release date ').trim()}}`
-                    ,@{Label="URL";Expression={$DLLink}}`
-                    ,@{Label="Details";Expression={$_.Documentation}}`
-                    | sort-object Type,Category,Name
-                $allArray+= $CPLD|sort-object URl -Unique
-                
-        }
-    }#IF($FoundCPLD
+    [PSCustomObject]@{
+        MainRows      = $mainRows
+        AshciRows     = $ashciRows
+        PrecisionRows = @()
+        AllRows       = @($allRows)
+        MainInfo      = (Format-DriFTCatalogInfo -CatalogName 'Catalog.xml' -CatalogVersion $CatalogSet.MainVersion)
+        AshciInfo     = (Format-DriFTCatalogInfo -CatalogName 'ASHCI-Catalog.xml' -CatalogVersion $CatalogSet.AshciVersion)
+        PrecisionInfo = $null
+        ActiveInfo    = $activeInfo
+    }
 }
-IF($InstalledOS -imatch "Windows"){
-    #Chipset Driver
-        IF(!($allArray|Where-Object{($_.ServiceTag -eq $ServiceTag)-and($_.Type -eq 'DRVR')-and($_.Category -eq 'Chipset')})){
-            $ChpsDrv=@()
-            $ChpsNoUsb=@()
-            $Chps=@()
-            Write-host "Checking for Chipset Driver in Catalog...."
-            $ChpsDrv=$S2DCatalogXMLDataFiltered|Where-Object{$_.LUCategory.value -eq "Chipset"}|`
-                     Where-Object{$_.ComponentType.value -eq "DRVR"}|`
-                     Where-Object{$_.SupportedOperatingSystems.OperatingSystem.majorVersion -eq $OSMjrVer}|`
-                     Where-Object{$_.SupportedOperatingSystems.OperatingSystem.minorVersion -eq $OSMinVer};`
-                     $CatalogInfoOut=$S2DCatalogInfo
-            # Check Catalog.xml if not found in special catalog
-            If(!$ChpsDrv){
-                         $ChpsDrv=$CatalogXMLDataFiltered|Where-Object{$_.LUCategory.value -eq "Chipset"}|`
-                         Where-Object{$_.ComponentType.value -eq "DRVR"}|`
-                         Where-Object{$_.SupportedOperatingSystems.OperatingSystem.majorVersion -eq $OSMjrVer}|`
-                         Where-Object{$_.SupportedOperatingSystems.OperatingSystem.minorVersion -eq $OSMinVer};`
-                         $CatalogInfoOut=$CatalogInfo
-                         }
-            $ChpsNoUsb=$ChpsDrv | Where-Object {$_.Name.Display."#cdata-section" -notlike "*USB*"}
-            $Chps=$ChpsNoUsb |sort-Object {[DateTime]$_.releaseDate} | Select-object -last 1 `
-                 @{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                ,@{Label="Type";Expression={"DRVR"}}`
-                ,@{Label="Category";Expression={$_.LUCategory.value}}`
-                ,@{Label="Name";Expression={$_.Name.Display."#cdata-section"}}`
-                ,@{Label="InstalledVersion";Expression={"NA"}}`
-                ,@{Label="AvailableVersion";Expression={$_.vendorVersion}}`
-                ,@{Label="CatalogInfo";Expression={$CatalogInfoOut}}`
-                ,@{Label="Criticality";Expression={$_.Criticality.Display."#cdata-section" -replace '\d\-'}}`
-                ,@{Label="ReleaseDate";Expression={($_.dateTime -split "T")[0]}}`
-                ,@{Label="URL";Expression={$DellURL+$_.path}}`
-                ,@{Label="Details";Expression={$_.ImportantInfo.URL}}`
-                | sort-object Type,Category,Name
-            $allArray+= $Chps|sort-object URl -Unique
-        }# end of Chipset Driver
-    #Fibre Channel Driver
-        IF(!($allArray|Where-Object{($_.ServiceTag -eq $ServiceTag)-and($_.Type -eq 'DRVR')-and($_.Category -eq 'Fibre Channel')})){
-            $FCDrv=@()
-            $FCDevice=@()
-            $FoundFCDrv=@()
-            $InstalledNICs=@()
-            Write-host "Checking for Fibre Channel Driver in Catalog...."
-            $FoundFCDrv=$InstalledHardwareUnique|Where-Object{($_.Display -Like 'FC.*')}
-            ForEach ($FCDevice in $FoundFCDrv){
-                $FoundFCDrv=$S2DCatalogXMLDataFiltered|Where-Object{$_.LUCategory.value -eq "Fibre Channel"}|`
-                            Where-Object{$_.ComponentType.value -eq "DRVR"}|`
-                            Where-Object{$_.SupportedOperatingSystems.OperatingSystem.majorVersion -eq $OSMjrVer}|`
-                            Where-Object{$_.SupportedOperatingSystems.OperatingSystem.minorVersion -eq $OSMinVer}|`
-                            sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                            $CatalogInfoOut=$S2DCatalogInfo
-                # Check Catalog.xml if not found in special catalog
-                If(!$FoundFCDrv){
-                     $FoundFCDrv=$CatalogXMLDataFiltered|Where-Object{$_.LUCategory.value -eq "Fibre Channel"}|`
-                     Where-Object{$_.ComponentType.value -eq "DRVR"}|`
-                     Where-Object{$_.SupportedOperatingSystems.OperatingSystem.majorVersion -eq $OSMjrVer}|`
-                     Where-Object{$_.SupportedOperatingSystems.OperatingSystem.minorVersion -eq $OSMinVer}|`
-                     sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                     $CatalogInfoOut=$CatalogInfo 
-                     }
-                $FCDrv+=$FoundFCDrv|`
-                 Select-Object @{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                ,@{Label="Type";Expression={"DRVR"}}`
-                ,@{Label="Category";Expression={$_.LUCategory.value}}`
-                ,@{Label="Name";Expression={$_.Name.Display."#cdata-section"}}`
-                ,@{Label="InstalledVersion";Expression={"NA"}}`
-                ,@{Label="AvailableVersion";Expression={$_.vendorVersion}}`
-                ,@{Label="CatalogInfo";Expression={$CatalogInfoOut}}`
-                ,@{Label="Criticality";Expression={$_.Criticality.Display."#cdata-section" -replace '\d\-'}}`
-                ,@{Label="ReleaseDate";Expression={($_.dateTime -split "T")[0]}}`
-                ,@{Label="URL";Expression={$DellURL+$_.path}}`
-                ,@{Label="Details";Expression={$_.ImportantInfo.URL}}`
-                | sort-object Type,Category,Name
-            }
-            $allArray+=$FCDrv|sort-object URl -Unique
-        }
- 
-    #Network Driver
-        IF(!($allArray|Where-Object{($_.ServiceTag -eq $ServiceTag)-and($_.Type -eq 'DRVR')-and($_.Category -eq 'Network')})){
-            $NICDrv=@()
-            $NDevice=@()
-            $InstalledNICs=@()
-            $FoundNICDrv=@()
-            Write-host "Checking for Network Driver in Catalog...."
-            $InstalledNICs=$InstalledHardwareUnique|`
-                Where-Object{($_.Display -Match 'NIC')`
-                -or($_.Display -Match 'Ethernet')`
-                -or($_.Display -Match 'giga')`
-                -or($_.Display -Match 'FastLinQ')`
-                -or($_.Display -Match 'QLogic')}
-            ForEach ($NDevice in $InstalledNICs){
-                $FoundNICDrv=$S2DCatalogXMLDataFiltered|`
-                            Where-Object{$_.ComponentType.value -eq 'DRVR'}|`
-                            Where-Object{$_.LUCategory.value -eq 'Network'}|`
-                            Where-Object{
-                                (($_.SupportedDevices.Device.PCIInfo.deviceID -eq $NDevice.deviceID)`
-                                -and`
-                                ($_.SupportedDevices.Device.PCIInfo.vendorID -eq $NDevice.vendorID))`
-                                -or` # Added to make sure the Intel X710 gets added to the report as PCI IDs are missing for this driver
-                                (($_.SupportedSystems.Brand.Model.SystemID -eq $SystemID)`
-                                -and`
-                                ($_.Description.Display.'#cdata-section' -Like "*Intel(R) Ethernet 10G X710 rNDC*"))}|`
-                            sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                            $CatalogInfoOut=$S2DCatalogInfo 
-                # Check Catalog.xml if not found in special catalog
-                IF(!$FoundNICDrv){
-                                 $FoundNICDrv=$CatalogXMLDataFiltered|`
-                                 Where-Object{$_.ComponentType.value -eq 'DRVR'}|`
-                                 Where-Object{$_.LUCategory.value -eq 'Network'}|`
-                                 Where-Object{
-                                    (($_.SupportedDevices.Device.PCIInfo.deviceID -eq $NDevice.deviceID)`
-                                    -and`
-                                    ($_.SupportedDevices.Device.PCIInfo.vendorID -eq $NDevice.vendorID))`
-                                    -or` # Added to make sure the Intel X710 gets added to the report as PCI IDs are missing for this driver
-                                    (($_.SupportedSystems.Brand.Model.SystemID -eq $SystemID)`
-                                    -and`
-                                    ($_.Description.Display.'#cdata-section' -Like "*Intel(R) Ethernet 10G X710 rNDC*"))}|`
-                                 sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                                 $CatalogInfoOut=$CatalogInfo
-                                 }
-                $NICDrv+=$FoundNICDrv|`
-                 Select-Object @{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                ,@{Label="Type";Expression={"DRVR"}}`
-                ,@{Label="Category";Expression={$_.LUCategory.value}}`
-                ,@{Label="Name";Expression={$_.Name.Display."#cdata-section"}}`
-                ,@{Label="InstalledVersion";Expression={"NA"}}`
-                ,@{Label="AvailableVersion";Expression={$_.vendorVersion}}`
-                ,@{Label="CatalogInfo";Expression={$CatalogInfoOut}}`
-                ,@{Label="Criticality";Expression={$_.Criticality.Display."#cdata-section" -replace '\d\-'}}`
-                ,@{Label="ReleaseDate";Expression={($_.dateTime -split "T")[0]}}`
-                ,@{Label="URL";Expression={$DellURL+$_.path}}`
-                ,@{Label="Details";Expression={$_.ImportantInfo.URL}}`
-                | sort-object Type,Category,Name
-            }
-            $allArray+=$NICDrv|sort-object URl -Unique
-        }
-    #RAID Drivers
-        IF(!($allArray|Where-Object{($_.ServiceTag -eq $ServiceTag)-and($_.Type -eq 'DRVR')-and($_.Category -eq 'SAS RAID')})){
-            $RAIDDrv=@()
-            $RAIDDevice=@()
-            $InstalledRAID=@()
-            $FoundRAIDDrv=@()
-            Write-host "Checking for RAID Drivers in Catalog...."
-            #AHCI is for BOSS card
-            $InstalledRAID=$InstalledHardwareUnique|Where-Object{(($_.Display -Match 'RAID')-or($_.Display -Match 'AHCI'))}
-            ForEach ($RAIDDevice in $InstalledRAID){
-                $FoundRAIDDrv=$S2DCatalogXMLDataFiltered|`
-                              Where-Object{$_.ComponentType.value -eq "DRVR"}|`
-                              Where-Object{$_.LUCategory.value -match 'RAID'}|`
-                              Where-Object{$_.SupportedOperatingSystems.OperatingSystem.majorVersion -eq $OSMjrVer}|`
-                              Where-Object{$_.SupportedOperatingSystems.OperatingSystem.minorVersion -eq $OSMinVer}|`
-                              Where-Object{(($_.SupportedDevices.Device.PCIInfo.deviceID -eq $RAIDDevice.deviceID)`
-                              -and($_.SupportedDevices.Device.PCIInfo.subDeviceID -eq $RAIDDevice.subdeviceID)`
-                              -and($_.SupportedDevices.Device.PCIInfo.subVendorID -eq $RAIDDevice.subVendorID)`
-                              -and($_.SupportedDevices.Device.PCIInfo.vendorID -eq $RAIDDevice.vendorID))}|`
-                              sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                              $CatalogInfoOut=$S2DCatalogInfo
-                IF(!$FoundRAIDDrv){
-                                   $FoundRAIDDrv=$CatalogXMLDataFiltered|`
-                                   Where-Object{$_.ComponentType.value -eq "DRVR"}|`
-                                   Where-Object{$_.LUCategory.value -match 'RAID'}|`
-                                   Where-Object{$_.SupportedOperatingSystems.OperatingSystem.majorVersion -eq $OSMjrVer}|`
-                                   Where-Object{$_.SupportedOperatingSystems.OperatingSystem.minorVersion -eq $OSMinVer}|`
-                                   Where-Object{(($_.SupportedDevices.Device.PCIInfo.deviceID -eq $RAIDDevice.deviceID)`
-                                   -and($_.SupportedDevices.Device.PCIInfo.subDeviceID -eq $RAIDDevice.subdeviceID)`
-                                   -and($_.SupportedDevices.Device.PCIInfo.subVendorID -eq $RAIDDevice.subVendorID)`
-                                   -and($_.SupportedDevices.Device.PCIInfo.vendorID -eq $RAIDDevice.vendorID))}|`
-                                   sort-Object {[DateTime]$_.releaseDate}| Select-Object -Last 1;`
-                                   $CatalogInfoOut=$CatalogInfo
-                                   }
 
-                $RAIDDrv+=$FoundRAIDDrv|`
-                 Select-Object @{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                ,@{Label="Type";Expression={"DRVR"}}`
-                ,@{Label="Category";Expression={$_.LUCategory.value}}`
-                ,@{Label="Name";Expression={$_.Name.Display."#cdata-section"}}`
-                ,@{Label="InstalledVersion";Expression={"NA"}}`
-                ,@{Label="AvailableVersion";Expression={$_.vendorVersion}}`
-                ,@{Label="CatalogInfo";Expression={$CatalogInfoOut}}`
-                ,@{Label="Criticality";Expression={$_.Criticality.Display."#cdata-section" -replace '\d\-'}}`
-                ,@{Label="ReleaseDate";Expression={($_.dateTime -split "T")[0]}}`
-                ,@{Label="URL";Expression={$DellURL+$_.path}}`
-                ,@{Label="Details";Expression={$_.ImportantInfo.URL}}`
-                | sort-object Type,Category,Name
-            }
-            $allArray+=$RAIDDrv|sort-object URl -Unique
-        }
-  }# $InstalledOS -imatch "Windows"
+function New-DriFTCatalogIndex {
+<#
+.SYNOPSIS
+    Builds lookup indexes from filtered catalog rows.
 
-  }# End of IF($SkipDriversandFirmware -eq "YES"
-  IF($InstalledOS -imatch "VMware"){
-    Write-Host "Gathering VMware supported driver versions from VMware.com..."
-    
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    # Find the VMware release number from the VMware.com with the Dell keyword
-        $VMwareCompatibilityGuideURL=""
-        $VMwareCompatibilityGuideURL="https://www.VMware.com/resources/compatibility/search.php?"
-        $VMwareCompatibilityGuidePage=""
-        IF(-not($VMwareCompatibilityGuidePage)){
-        $VMwareCompatibilityGuidePage=Invoke-WebRequest -Uri $VMwareCompatibilityGuideURL -UseDefaultCredentials}
-        $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-        $session.Cookies.Add($VMwareCompatibilityGuidePage.BaseResponse.Cookies)
-        IF(-not($VMwareCompatibilityGuidePage)){
-        $VMwareCompatibilityGuidePage=Invoke-WebRequest -Uri $VMwareCompatibilityGuideURL -WebSession $session -UseDefaultCredentials}
-        $VMwareReleases=""
-        $VMwareReleases=((($VMwareCompatibilityGuidePage -split "var releasesShortDesc")[1] -split "var VMwareProducts")[0]).ToString() -split "[`r`n]"
-        IF($VMwareReleases){
-            ForEach($VMWR in $VMwareReleases){
-                IF($VMWR -match $VMWOSVer){
-                    $Release=""
-                    $Release=((($VMWR -split ":")[0] -split '"').trim())[1]
+.DESCRIPTION
+    Improves speed and accuracy by replacing repeated Where-Object scans with
+    component and PCI identity indexes.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][object[]]$CatalogRows,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $byComponent = @{}
+    $byTypeComponent = @{}
+    $byPci = @{}
+    $byTypePci = @{}
+
+    foreach ($row in @($CatalogRows)) {
+        $componentType = Get-DriFTCatalogComponentTypeValue -CatalogObject $row
+
+        foreach ($componentId in Get-DriFTCatalogComponentIdValues -CatalogObject $row) {
+            if ([string]::IsNullOrWhiteSpace($componentId)) { continue }
+            Add-DriFTIndexValue -Index $byComponent -Key $componentId -Value $row
+            Add-DriFTIndexValue -Index $byTypeComponent -Key "$componentType|$componentId" -Value $row
+        }
+
+        foreach ($pci in Get-DriFTCatalogPciInfoObjects -CatalogObject $row) {
+            $pciKey = New-DriFTPciKey `
+                -VendorID $pci.vendorID `
+                -DeviceID $pci.deviceID `
+                -SubVendorID $pci.subVendorID `
+                -SubDeviceID $pci.subDeviceID
+
+            if ($pciKey) {
+                Add-DriFTIndexValue -Index $byPci -Key $pciKey -Value $row
+                Add-DriFTIndexValue -Index $byTypePci -Key "$componentType|$pciKey" -Value $row
+            }
+        }
+    }
+
+    [PSCustomObject]@{
+        ByComponent     = $byComponent
+        ByTypeComponent = $byTypeComponent
+        ByPci           = $byPci
+        ByTypePci       = $byTypePci
+    }
+}
+
+function Add-DriFTIndexValue {
+<#
+.SYNOPSIS
+    Adds one object to a hashtable index.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Index,
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)]$Value
+    )
+
+    if (-not $Index.ContainsKey($Key)) {
+        $Index[$Key] = @()
+    }
+
+    $Index[$Key] += @($Value)
+}
+
+#endregion Catalog Download / Import / Filtering
+
+#region Matching Engine
+
+function Compare-DriFTInventoryToCatalog {
+<#
+.SYNOPSIS
+    Compares normalized inventory to filtered catalog rows.
+
+.DESCRIPTION
+    Uses indexed exact component/PCI matching. Accuracy rules:
+      - Catalog rows must already be filtered by system/OS.
+      - ComponentID 0 is ignored.
+      - BIOS gets a component type exception because 17G reports BIOS as FRMW while Catalog.xml uses BIOS.
+      - Non-BIOS matches require compatible component type and exact ComponentID or full PCI identity.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][AllowEmptyCollection()][object[]]$Inventory,
+        [Parameter(Mandatory)]$CatalogIndex,
+        [Parameter(Mandatory)]$CatalogRows,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $Inventory = @($Inventory | Where-Object { $null -ne $_ })
+    $matches = @()
+
+    foreach ($device in @($Inventory)) {
+        if ($null -eq $device) { continue }
+
+        $candidateRows = Find-DriFTCatalogCandidates -Device $device -CatalogIndex $CatalogIndex
+        $best = $candidateRows |
+            Where-Object { Test-DriFTCatalogDeviceMatch -CatalogDevice $_ -Device $device } |
+            Sort-Object { ConvertTo-DriFTSafeDateTime $_.releaseDate } |
+            Select-Object -Last 1
+
+        $nameFallbackUsed = $false
+        if (-not $best) {
+            $nameFallback = Find-DriFTCatalogNameFallbackMatch -Device $device -CatalogRows $CatalogRows.AllRows
+            if ($nameFallback) {
+                $best = $nameFallback
+                $nameFallbackUsed = $true
+            }
+        }
+
+        $method = ''
+        $reason = ''
+
+        if ($best) {
+            $componentMatch = Test-DriFTCatalogComponentIdMatch -CatalogObject $best -ComponentId $device.ComponentID
+            $pciMatch = Test-DriFTCatalogPciIdentityMatch -CatalogObject $best -Device $device
+
+            if ($nameFallbackUsed) { $method = 'NameFallback' }
+            elseif ($componentMatch -and $pciMatch) { $method = 'ComponentID+PCI' }
+            elseif ($componentMatch) { $method = 'ComponentID' }
+            elseif ($pciMatch) { $method = 'PCI' }
+            else { $method = 'MatchedByCompatibilityFunction' }
+        }
+        else {
+            $hasComponent = Test-DriFTInstalledComponentIdIsValid -ComponentId $device.ComponentID
+            $hasPci = Test-DriFTDeviceHasPciIdentity -Device $device
+
+            if (-not $hasComponent -and -not $hasPci) { $reason = 'No valid componentID and no complete PCI identity' }
+            elseif (-not $hasComponent) { $reason = 'No valid componentID; PCI identity did not match filtered catalog' }
+            elseif (-not $hasPci) { $reason = 'componentID did not match filtered catalog; no complete PCI identity' }
+            else { $reason = 'componentID and PCI identity did not match filtered catalog' }
+        }
+
+        $matches += @([PSCustomObject]@{
+            Device          = $device
+            CatalogRow      = $best
+            Matched         = [bool]$best
+            MatchMethod     = $method
+            UnmatchedReason = $reason
+        })
+    }
+
+    return @($matches)
+}
+
+
+function Find-DriFTCatalogNameFallbackMatch {
+<#
+.SYNOPSIS
+    Finds a conservative catalog match by normalized device/catalog name.
+
+.DESCRIPTION
+    Used only after ComponentID and full PCI identity matching fail. This preserves
+    accuracy by requiring the catalog rows to already be filtered to the current
+    system/OS and requiring compatible ComponentType. This is needed for some 17G
+    Redfish firmware rows, especially drives, that expose a useful product name but
+    no catalog-ready ComponentID or complete PCI identity.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$Device,
+        [AllowEmptyCollection()][object[]]$CatalogRows
+    )
+
+    if ($null -eq $Device) { return $null }
+
+    $deviceType = Get-DriFTFirstNonEmpty $Device.ComponentType $Device.componentType
+    $deviceNames = Get-DriFTComparableNameValues @(
+        $Device.ElementName,
+        $Device.Display,
+        $Device.Name,
+        $Device.RelatedItem
+    )
+
+    if (-not $deviceNames -or @($deviceNames).Count -eq 0) { return $null }
+
+    $hits = @()
+
+    foreach ($row in @($CatalogRows | Where-Object { $null -ne $_ })) {
+        if (-not (Test-DriFTCatalogComponentTypeCompatible -CatalogObject $row -Device $Device)) { continue }
+
+        $catalogName = Get-DriFTFirstNonEmpty $row.Name.Display.'#cdata-section' $row.Name.Display $row.name
+        $catalogCategory = Get-DriFTFirstNonEmpty $row.LUCategory.value $row.LUCategory
+        $catalogNames = Get-DriFTComparableNameValues @($catalogName, $catalogCategory)
+
+        foreach ($dName in @($deviceNames)) {
+            foreach ($cName in @($catalogNames)) {
+                if ([string]::IsNullOrWhiteSpace($dName) -or [string]::IsNullOrWhiteSpace($cName)) { continue }
+
+                # Exact normalized name or strong contains match only. Avoid broad short tokens.
+                if (($dName.Length -ge 10 -and $cName.Length -ge 10) -and
+                    (($dName -eq $cName) -or ($cName.Contains($dName)) -or ($dName.Contains($cName)))) {
+                    $hits += @($row)
+                    break
+                }
+            }
+            if ($hits -contains $row) { break }
+        }
+    }
+
+    return @($hits | Sort-Object { ConvertTo-DriFTSafeDateTime $_.releaseDate } | Select-Object -Last 1)
+}
+
+function Get-DriFTComparableNameValues {
+<#
+.SYNOPSIS
+    Normalizes names for conservative device/catalog text fallback matching.
+#>
+    [CmdletBinding()]
+    param([Parameter(ValueFromRemainingArguments = $true)]$Values)
+
+    $out = @()
+
+    foreach ($value in @($Values)) {
+        foreach ($item in @($value)) {
+            if ($null -eq $item) { continue }
+
+            $text = ([string]$item)
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+            if ($text -match '/') {
+                $text = (($text.TrimEnd('/') -split '/')[-1])
+            }
+
+            $clean = $text `
+                -replace '\s+Firmware Inventory$', '' `
+                -replace '\s+Firmware$', '' `
+                -replace '\s+Controller$', '' `
+                -replace '\s+Adapter$', '' `
+                -replace '\s+Device$', '' `
+                -replace '\s+', ' '
+
+            $clean = $clean.Trim().ToUpperInvariant()
+
+            if ($clean.Length -ge 5) { $out += @($clean) }
+        }
+    }
+
+    return @($out | Sort-Object -Unique)
+}
+
+function Find-DriFTCatalogCandidates {
+<#
+.SYNOPSIS
+    Finds candidate catalog rows for a device from indexes.
+
+.DESCRIPTION
+    Returns a small candidate set before applying final compatibility checks.
+    Uses a seen-key map to avoid duplicate candidate expansion when component
+    and PCI indexes point to the same SoftwareComponent.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$Device,
+        [Parameter(Mandatory)]$CatalogIndex
+    )
+
+    if ($null -eq $Device) { return @() }
+
+    $rawCandidates = @()
+    $type = Get-DriFTFirstNonEmpty $Device.ComponentType
+    $componentId = Get-DriFTFirstNonEmpty $Device.ComponentID
+
+    if (Test-DriFTInstalledComponentIdIsValid -ComponentId $componentId) {
+        foreach ($key in @("$type|$componentId", $componentId)) {
+            if ($CatalogIndex.ByTypeComponent.ContainsKey($key)) {
+                foreach ($row in @($CatalogIndex.ByTypeComponent[$key])) { $rawCandidates += @($row) }
+            }
+
+            if ($CatalogIndex.ByComponent.ContainsKey($key)) {
+                foreach ($row in @($CatalogIndex.ByComponent[$key])) { $rawCandidates += @($row) }
+            }
+        }
+    }
+
+    $pciKey = New-DriFTPciKey -VendorID $Device.VendorID -DeviceID $Device.DeviceID -SubVendorID $Device.SubVendorID -SubDeviceID $Device.SubDeviceID
+    if ($pciKey) {
+        foreach ($key in @("$type|$pciKey", $pciKey)) {
+            if ($CatalogIndex.ByTypePci.ContainsKey($key)) {
+                foreach ($row in @($CatalogIndex.ByTypePci[$key])) { $rawCandidates += @($row) }
+            }
+
+            if ($CatalogIndex.ByPci.ContainsKey($key)) {
+                foreach ($row in @($CatalogIndex.ByPci[$key])) { $rawCandidates += @($row) }
+            }
+        }
+    }
+
+    $seen = @{}
+    $candidates = @()
+
+    foreach ($row in @($rawCandidates | Where-Object { $null -ne $_ })) {
+        $rowKey = Get-DriFTCatalogRowKey -CatalogRow $row
+        if ([string]::IsNullOrWhiteSpace($rowKey)) {
+            $rowKey = [string]([Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($row))
+        }
+
+        if (-not $seen.ContainsKey($rowKey)) {
+            $seen[$rowKey] = $true
+            $candidates += @($row)
+        }
+    }
+
+    return @($candidates | Sort-Object path, vendorVersion, releaseDate -Unique)
+}
+
+function Test-DriFTCatalogDeviceMatch {
+<#
+.SYNOPSIS
+    Tests whether a catalog device row matches an installed device.
+
+.DESCRIPTION
+    Final authoritative match check after indexed candidate lookup.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$CatalogDevice,
+        [AllowNull()]$Device
+    )
+
+    if (-not $CatalogDevice -or $null -eq $Device) { return $false }
+
+    if (-not (Test-DriFTCatalogComponentTypeCompatible -CatalogObject $CatalogDevice -Device $Device)) {
+        return $false
+    }
+
+    $componentMatch = $false
+    if (Test-DriFTInstalledComponentIdIsValid -ComponentId $Device.ComponentID) {
+        $componentMatch = Test-DriFTCatalogComponentIdMatch -CatalogObject $CatalogDevice -ComponentId $Device.ComponentID
+    }
+
+    $pciMatch = $false
+    if (Test-DriFTDeviceHasPciIdentity -Device $Device) {
+        $pciMatch = Test-DriFTCatalogPciIdentityMatch -CatalogObject $CatalogDevice -Device $Device
+    }
+
+    return ($componentMatch -or $pciMatch)
+}
+
+function Test-DriFTCatalogComponentTypeCompatible {
+<#
+.SYNOPSIS
+    Checks catalog/device component type compatibility.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$CatalogObject,
+        [Parameter(Mandatory)]$Device
+    )
+
+    if (Test-DriFTDeviceIsBiosFirmware -Device $Device) { return $true }
+
+    $catalogType = Get-DriFTCatalogComponentTypeValue -CatalogObject $CatalogObject
+    $deviceType = Get-DriFTFirstNonEmpty $Device.ComponentType $Device.componentType
+
+    if ([string]::IsNullOrWhiteSpace($catalogType) -or [string]::IsNullOrWhiteSpace($deviceType)) { return $true }
+    return ($catalogType -ieq $deviceType)
+}
+
+function Test-DriFTDeviceIsBiosFirmware {
+<#
+.SYNOPSIS
+    Detects BIOS inventory rows, including 17G BIOS reported as FRMW componentID 159.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Device)
+
+    $componentId = Get-DriFTFirstNonEmpty $Device.ComponentID $Device.componentID
+    $display = Get-DriFTFirstNonEmpty $Device.Display $Device.display
+    $elementName = Get-DriFTFirstNonEmpty $Device.ElementName $Device.Name
+    $relatedItem = Get-DriFTFirstNonEmpty $Device.RelatedItem
+
+    if ($componentId -eq '159') { return $true }
+    if ($display -imatch '^(Bios|BIOS|System BIOS|BIOS\.Setup)') { return $true }
+    if ($elementName -imatch '^(BIOS|System BIOS)$') { return $true }
+    if ($relatedItem -imatch '/Bios/?$') { return $true }
+
+    return $false
+}
+
+function Test-DriFTInstalledComponentIdIsValid {
+<#
+.SYNOPSIS
+    Determines if installed ComponentID can safely be used for matching.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$ComponentId)
+
+    $text = Get-DriFTFirstNonEmpty $ComponentId
+    if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+    if ($text.Trim() -eq '0') { return $false }
+    return $true
+}
+
+function Test-DriFTDeviceHasPciIdentity {
+<#
+.SYNOPSIS
+    Checks whether a device has a complete PCI identity.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Device)
+
+    return (
+        -not [string]::IsNullOrWhiteSpace((Convert-DriFTHexId $Device.VendorID)) -and
+        -not [string]::IsNullOrWhiteSpace((Convert-DriFTHexId $Device.DeviceID)) -and
+        -not [string]::IsNullOrWhiteSpace((Convert-DriFTHexId $Device.SubVendorID)) -and
+        -not [string]::IsNullOrWhiteSpace((Convert-DriFTHexId $Device.SubDeviceID))
+    )
+}
+
+#endregion Matching Engine
+
+#region Catalog Helpers
+
+function Get-DriFTCatalogComponentTypeValue {
+<#
+.SYNOPSIS
+    Gets ComponentType from a catalog object.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$CatalogObject)
+
+    return Get-DriFTFirstNonEmpty `
+        $CatalogObject.ComponentType.value `
+        $CatalogObject.ComponentType `
+        $CatalogObject.componentType.value `
+        $CatalogObject.componentType
+}
+
+function Get-DriFTCatalogComponentIdValues {
+<#
+.SYNOPSIS
+    Gets all component ID values surfaced in a catalog object.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$CatalogObject)
+
+    $values = @()
+
+    foreach ($obj in @($CatalogObject)) {
+        if ($null -eq $obj) { continue }
+
+        foreach ($candidate in @(
+            $obj.ComponentID.value,
+            $obj.componentID.value,
+            $obj.ComponentID,
+            $obj.componentID,
+            $obj.SupportedDevices.Device.ComponentID.value,
+            $obj.SupportedDevices.Device.componentID.value,
+            $obj.SupportedDevices.Device.ComponentID,
+            $obj.SupportedDevices.Device.componentID
+        )) {
+            foreach ($value in @($candidate)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                    $values += @(([string]$value).Trim())
                 }
             }
         }
-        IF(!($VMwareReleases)){Write-Host "    ERROR: Unable to pull supported versions from VMware.com Firmware ONLY." -ForegroundColor Red}
+    }
 
-    # Get the link to the js/data_io.js which has all the supported devices
-        # example: https://www.VMware.com/resources/compatibility/js/data_io.js?param=cbf961fd3ed631534c8b5cc61f8abd33
-        $VMwareCompatibilityGuideURL=""
-        $VMwareCompatibilityGuideURL="https://www.VMware.com/resources/compatibility/search.php?deviceCategory=io&details=1&keyword=dell"
-        $VMwareCompatibilityGuidePage=""
-        IF(-not($VMwareCompatibilityGuidePage)){
-        $VMwareCompatibilityGuidePage=Invoke-WebRequest -Uri $VMwareCompatibilityGuideURL -UseDefaultCredentials}
-        $data_ioLine=""
-        $data_ioLine=$VMwareCompatibilityGuidePage.ToString() -split "[`r`n]" | select-string "data_io"
-        $data_ioLink=($data_ioLine -split "src=")[1] -replace "></script>","" -replace '"',""
+    return @($values | Sort-Object -Unique)
+}
 
-    # Get contents of the js/data_io.js which is the VMware catalog
-        $data_ioURL=""
-        $data_ioURL="https://www.VMware.com/resources/compatibility/"+$data_ioLink
-        $data_ioContents=""
-        IF(-not($data_ioContents)){
-        $data_ioContents=Invoke-WebRequest -Uri $data_ioURL -UseDefaultCredentials}
-   
-    # Filter js/data_io.js for Dell devices
-        <#
-            window.col_product_id  = 0;
-            window.col_partner      = 1;
-            window.col_model        = 2;
-            window.col_device_type  = 3;
-            window.col_vid          = 4;
-            window.col_did          = 5;
-            window.col_svid         = 6;
-            window.col_ssid         = 7;
-            window.col_device_group_id = 8;
-            window.col_releases     = 9;
-            window.col_driver_ver   = 10;
-            window.col_VMware_async = 11;
-            window.col_driver_type  = 12;
-            window.col_vio_solution = 13;
-            window.col_solution_releases = 14;
-            window.col_solution = 15;
-            window.col_firmware     = 16;
-            window.col_no_of_port   = 17;
-            window.col_feature      = 18;
-            window.col_daterange    = 19;
-            window.col_DeviceChipset= 20;
-            window.col_devicedriver_model= 21;
-            window.col_releaseversion = 22;
-        #>
-        $AllDriversFromVMwareCompatibilityGuidePage=@()
-        $AllDriversFromVMwareCompatibilityGuidePage=($data_ioContents.RawContent -split '];')[0] -split "[`r`n]"
-        $DellDriversFromVMwareCompatibilityGuidePageByInstalledVMWOSVer=@()
+function Test-DriFTCatalogComponentIdMatch {
+<#
+.SYNOPSIS
+    Tests exact component ID match.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$CatalogObject,
+        [AllowNull()]$ComponentId
+    )
 
-        #Filter for all window.col_partner for Dell or 23
-        $pattern = ', "23",'
-        $DellDriversFromVMwareCompatibilityGuidePageByInstalledVMWOSVerforDellOnly = $AllDriversFromVMwareCompatibilityGuidePage | Select-String -Pattern $pattern
+    $componentIdText = Get-DriFTFirstNonEmpty $ComponentId
+    if (-not (Test-DriFTInstalledComponentIdIsValid -ComponentId $componentIdText)) { return $false }
 
-        ForEach($DDriver in $DellDriversFromVMwareCompatibilityGuidePageByInstalledVMWOSVerforDellOnly){
-        #ForEach($DDriver in $AllDriversFromVMwareCompatibilityGuidePage){
-            # 23=Dell
-            If($DDriver -imatch '"23",'){
-                IF($DDriver -imatch $VMWOSVer){
-                    $DellDriversFromVMwareCompatibilityGuidePageByInstalledVMWOSVer+=$DDriver
-                }
+    foreach ($candidate in Get-DriFTCatalogComponentIdValues -CatalogObject $CatalogObject) {
+        if ($candidate -ieq $componentIdText.Trim()) { return $true }
+    }
+
+    return $false
+}
+
+function Get-DriFTCatalogPciInfoObjects {
+<#
+.SYNOPSIS
+    Gets PCIInfo rows from a catalog object.
+
+.DESCRIPTION
+    Uses plain PowerShell arrays instead of generic lists to avoid PS 5.1 XML node
+    type-conversion issues while indexing Catalog.xml.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$CatalogObject)
+
+    $rows = @()
+
+    foreach ($obj in @($CatalogObject)) {
+        if ($null -eq $obj) { continue }
+
+        foreach ($pci in @($obj.PCIInfo)) {
+            if ($null -ne $pci) { $rows += @($pci) }
+        }
+
+        foreach ($device in @($obj.SupportedDevices.Device)) {
+            foreach ($pci in @($device.PCIInfo)) {
+                if ($null -ne $pci) { $rows += @($pci) }
             }
         }
-        Write-Host "    Found" $DellDriversFromVMwareCompatibilityGuidePageByInstalledVMWOSVer.count "Dell drivers for $VMWOSVer in VMWare catalog"
-        
-    #Match Installed Hardware to VMware Catalog
-        Write-host "Comparing Installed Hardware to VMware Compatibility Guide...."
-        If(($SupportAssistDataType -eq "SAEX")-or($SupportAssistDataType -eq "TSR")){
-            $InstalledHardwareUniqueWithDeviceInfo=@()
-            $InstalledHardwareUniqueWithDeviceInfo=$InstalledHardwareUnique | Where-Object{$_.SubDeviceID.length -gt 0}
-            #Write-Host "    Devices found"
-            ForEach ($Device in $InstalledHardwareUniqueWithDeviceInfo){
-                # Build search query
-                # Example "8086", "1523", "1028", "1F9B"
-                # We need two matchs because iDRAC data flips the SVID and SSID sometimes
-                    $TheMatch1=""
-                    $TheMatch1="'"""+$Device.VendorID+""", """+$Device.DeviceID+""", """+$Device.SubDeviceID+""", """+$Device.SubVendorID+"""'"
-                    $TheMatch1=$TheMatch1 -replace "'"
-                    #Write-Host $TheMatch1
-                    $TheMatch2=""
-                    $TheMatch2="'"""+$Device.VendorID+""", """+$Device.DeviceID+""", """+$Device.SubVendorID+""", """+$Device.SubDeviceID+"""'"
-                    $TheMatch2=$TheMatch2 -replace "'"
-                    #Write-Host $TheMatch2
-                # Search for SVID and SSID
-                $ActualVMWDriverVersion=@()
-                $ActualVMWDriverReleaseDate=@()
-                $Found=@()
-                $Found=$DellDriversFromVMwareCompatibilityGuidePageByInstalledVMWOSVer|Where-Object{($_ -imatch $TheMatch1 -or $_ -imatch $TheMatch2)}
-                IF($Found.length -gt 0){
-                    # Grab to download page link from the driver details page
-                        #Write-Host "    Getting the download page link..."
-                        $DriverDetailsLink=""
-                        $DriverDetailsLinkPage=""
-                        $ActualVMWDriverDetailsLink=""
-                        $productid=""
-                        $ActualVMWDriverDetailsLinkCheck=""
-                        $productid=(($Found -split ", ")[0] -replace "\[","" -replace '"',"").trim()
-                        $DriverDetailsLink="https://www.VMware.com/resources/compatibility/detail.php?deviceCategory=io&productid="+$productid+"&releaseid="+$Release+"&deviceCategory=io&details=1"
-                        #Write-Host "    Product Link: "$DriverDetailsLink
-                        $DriverDetailsLinkPage=Invoke-WebRequest -Uri $DriverDetailsLink -UseBasicParsing -UseDefaultCredentials -WebSession $session
-                        #Write-Host $DriverDetailsLink
-                        $ActualVMWDriverDetailsLinkCheck = ($DriverDetailsLinkPage.InputFields.value|Out-String).Split("`r`n")|Where-Object{$_ -imatch "ESXi $VMWOSVer"}
-                         # Get device type from driver details 
-                         #Write-Host "    Getting the device types from driver details..."
-                        $DriverDetailsDeviceType=""
-                        $DriverDetailsDeviceType=((((($DriverDetailsLinkPage -split "[`r`n]" | Where-Object{$_ -match 'Device Type :'}) -split 'Device Type :')[1] -split '</td>')[0] -split '<td>')[1]).trim()
-                        #Inbox Link
-                            #Write-Host "    Checking for Inbox link..."
-                            $ActualVMWDriverDetailsLinkInbox=""
-                            $ActualVMWDriverDetailsLinkCheckInbox1=""
-                            $ActualVMWDriverDetailsLinkCheckInbox1=$ActualVMWDriverDetailsLinkCheck|Where-Object{$_ -imatch "inbox"}|Select-Object -First 1
-                            #IF($ActualVMWDriverDetailsLinkCheckInbox1 -imatch "Download driver from"){
-                                If($ActualVMWDriverDetailsLinkCheckInbox1|Where-Object{$_ -inotmatch "http"}){$ActualVMWDriverDetailsLinkInbox="None"}
-                                #If($ActualVMWDriverDetailsLinkCheckInbox1|?{$_ -imatch "http"}){$ActualVMWDriverDetailsLinkInbox=((((($ActualVMWDriverDetailsLinkCheckInbox1|?{$_ -imatch "http"}) -split ",")[6]) -split "  ")[1]).trim() -replace '&amp;','&' -replace '&quot;',""}
-                            # Update contained in Patch
-                                If($ActualVMWDriverDetailsLinkCheckInbox1|Where-Object{$_ -imatch "http"}){$ActualVMWDriverDetailsLinkInbox=(([REGEX]::Match($ActualVMWDriverDetailsLinkCheckInbox1,'http.*.html')) -split '.html')[0]}
-                            # Normal Update
-                                If($ActualVMWDriverDetailsLinkCheckInbox1|Where-Object{$_ -imatch "http"}){$ActualVMWDriverDetailsLinkInbox=([REGEX]::Match($ActualVMWDriverDetailsLinkCheckInbox1,'http.*\:\/\/.*productId\=\d*')).value}
-                                #(($ActualVMWDriverDetailsLinkCheckInbox1|?{$_ -imatch "http"})|select-string 'http.*')
-                                #(([REGEX]::Match($ActualVMWDriverDetailsLinkCheckInbox1,'http.*.html')) -split '.html')[0]
-                            #}
-                            IF($ActualVMWDriverDetailsLinkInbox -imatch "productId"){
-                            $ActualVMWDriverDetailsLinkInbox=$ActualVMWDriverDetailsLinkInbox -replace 'amp\;',""
-                            # Grab the actual download link for the VMware driver
-                                IF($ActualVMWDriverDetailsLinkInbox -imatch 'productid'){
-                                    $ActualVMWDriverDetailsLinkInbox=$ActualVMWDriverDetailsLinkInbox -replace 'amp\;',""
-                                    $ActualVMWDriverDownloadPage=""
-                                    $ActualVMWDriverDownloadPageInbox = Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkInbox -UseBasicParsing -UseDefaultCredentials -WebSession $session
-                                    $ActualVMWDriverDownloadPagenb=Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkInbox -UseDefaultCredentials -WebSession $session
-                                    $ActualVMWDriverDownloadPageLink=""
-                                    $ActualVMWDriverDownloadPageLink=((($ActualVMWDriverDownloadPage.RawContent -split "[`r`n]"| Where-Object{$_ -match "fileId"}|Select-Object -First 1) -split "href=")[1] -split ">Download")[0] -replace '"'
-                                    If($ActualVMWDriverDetailsLinkInbox -imatch "http"){
-                                        $VMwarePublicSiteUrl1=""
-                                        $VMwarePublicSiteUrl2=""
-                                        $VMwarePublicSiteUrl1='https://my.vmware.com/channel/public/api/v1.0/dlg/details?locale=en_US&downloadGroup='
-                                        $VMwarePublicSiteUrl2=$ActualVMWDriverDetailsLinkInbox.Split('?') -replace "downloadGroup=",""|Select-Object -last 1
-                                        $ActualVMWDriverDetailsLinkInboxText="$VMwarePublicSiteUrl1$VMwarePublicSiteUrl2"
-                                        #https://my.vmware.com/channel/public/api/v1.0/dlg/details?locale=en_US&downloadGroup=
-                                        $ActualVMWDriverDetailsLinkInboxDownloadProductPage=""
-                                        $ActualVMWDriverDetailsLinkInboxDownloadProductPage=Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkInboxText -UseDefaultCredentials -WebSession $session
-                                        #Write-Host "    Inbox Link" $ActualVMWDriverDetailsLinkInbox
-                                        $ActualVMWDriverDownloadPageRawContent=@()
-                                        $ActualVMWDriverDetailsLinkInboxDownloadProductPageData=@()
-                                        $ActualVMWDriverDetailsLinkInboxDownloadProductPageData=($ActualVMWDriverDetailsLinkInboxDownloadProductPage.RawContent -split "['`r`n']" | Select-Object -last 1) -replace '\{' -replace '\}' -replace '^\"\D*\"\:\[' -replace '\]' -split ',' 
-                                        # Driver version
-                                            #$ActualVMWDriverDownloadPageRawContent | ?{$_ -imatch "Version"}
-                                            $ActualVMWDriverVersion+="Inbox: "+((($ActualVMWDriverDetailsLinkInboxDownloadProductPageData|Where-Object{$_ -match '\"version\"'})|Select-Object -First 1) -split '\:')[1] -replace '\"'
-                                        # Driver Release Date
-                                            $ActualVMWDriverReleaseDate+="Inbox: "+((($ActualVMWDriverDetailsLinkInboxDownloadProductPageData|Where-Object{$_ -match '\"releaseDate\"'})|Select-Object -First 1) -split '\:')[1] -replace '\"'
-                                    }
-                                }
-                            }
-                        #Native Link
-                           # Write-Host "    Checking for Native link..."
-                            $ActualVMWDriverDetailsLinkNative=""
-                            $ActualVMWDriverDetailsLinkCheckNative1=""
-                            $ActualVMWDriverDetailsLinkCheckNative1=$ActualVMWDriverDetailsLinkCheck|Where-Object{$_ -imatch "native"}|Select-Object -First 1
-                            If($ActualVMWDriverDetailsLinkCheckNative1|Where-Object{$_ -inotmatch "http"}|Select-Object -First 1){$ActualVMWDriverDetailsLinkNative="None"}
-                            #If($ActualVMWDriverDetailsLinkCheckNative1|?{$_ -imatch "http"}){$ActualVMWDriverDetailsLinkNative=((((($ActualVMWDriverDetailsLinkCheckNative1|?{$_ -imatch "http"}) -split ",")[6]) -split "  ")[1]).trim() -replace '&amp;','&' -replace '&quot;',""}
-                            # Update contained in Patch
-                            If($ActualVMWDriverDetailsLinkCheckNative1|Where-Object{$_ -imatch "http"}){$ActualVMWDriverDetailsLinkNative=(([REGEX]::Match( $ActualVMWDriverDetailsLinkCheckNative1,'http.*.html')) -split '.html')[0]}
-                            # Normal Update
-                            If($ActualVMWDriverDetailsLinkCheckNative1|Where-Object{$_ -imatch "http"}){$ActualVMWDriverDetailsLinkNative=([REGEX]::Match( $ActualVMWDriverDetailsLinkCheckNative1,'http.*\:\/\/.*productId\=\d*')).value}
-                            #$ActualVMWDriverDetailsLinkNative
-                            IF($ActualVMWDriverDetailsLinkNative -imatch "productid"){
-                                #$ActualVMWDriverDownloadLinkVmLinux=GetVmwDriverDownloadLink $ActualVMWDriverDetailsLinkVmkLinux
-                            # Grab the actual download link for the VMware driver
-                                IF($ActualVMWDriverDetailsLinkNative -imatch 'productid'){
-                                    $ActualVMWDriverDetailsLinkNative=$ActualVMWDriverDetailsLinkNative -replace 'amp\;',""
-                                    $ActualVMWDriverDownloadPage=""
-                                    $ActualVMWDriverDownloadPageNative = Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkNative -UseBasicParsing -UseDefaultCredentials -WebSession $session
-                                    $ActualVMWDriverDownloadPagenb=Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkNative -UseDefaultCredentials -WebSession $session
-                                    $ActualVMWDriverDownloadPageLink=""
-                                    $ActualVMWDriverDownloadPageLink=((($ActualVMWDriverDownloadPage.RawContent -split "[`r`n]"| Where-Object{$_ -match "fileId"}|Select-Object -First 1) -split "href=")[1] -split ">Download")[0] -replace '"'
-                                    If($ActualVMWDriverDetailsLinkNative -imatch "http"){
-                                        $VMwarePublicSiteUrl1=""
-                                        $VMwarePublicSiteUrl2=""
-                                        $VMwarePublicSiteUrl1='https://my.vmware.com/channel/public/api/v1.0/dlg/details?locale=en_US&downloadGroup='
-                                        $VMwarePublicSiteUrl2=$ActualVMWDriverDetailsLinkNative.Split('?') -replace "downloadGroup=",""|Select-Object -last 1
-                                        $ActualVMWDriverDetailsLinkNativeText="$VMwarePublicSiteUrl1$VMwarePublicSiteUrl2"
-                                        #https://my.vmware.com/channel/public/api/v1.0/dlg/details?locale=en_US&downloadGroup=
-                                        $ActualVMWDriverDetailsLinkNativeDownloadProductPage=""
-                                        $ActualVMWDriverDetailsLinkNativeDownloadProductPage=Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkNativeText -UseDefaultCredentials -WebSession $session
-                                        #Write-Host "    Native Link" $ActualVMWDriverDetailsLinkNative
-                                        $ActualVMWDriverDownloadPageRawContent=@()
-                                        $ActualVMWDriverDetailsLinkNativeDownloadProductPageData=@()
-                                        $ActualVMWDriverDetailsLinkNativeDownloadProductPageData=($ActualVMWDriverDetailsLinkNativeDownloadProductPage.RawContent -split "['`r`n']" | Select-Object -last 1) -replace '\{' -replace '\}' -replace '^\"\D*\"\:\[' -replace '\]' -split ',' 
-                                        # Driver version
-                                            #$ActualVMWDriverDownloadPageRawContent | ?{$_ -imatch "Version"}
-                                            $ActualVMWDriverVersion+="Native: "+((($ActualVMWDriverDetailsLinkNativeDownloadProductPageData|Where-Object{$_ -match '\"version\"'})|Select-Object -First 1) -split '\:')[1] -replace '\"'
-                                        # Driver Release Date
-                                            $ActualVMWDriverReleaseDate+="Native: "+((($ActualVMWDriverDetailsLinkNativeDownloadProductPageData|Where-Object{$_ -match '\"releaseDate\"'})|Select-Object -First 1) -split '\:')[1] -replace '\"'
-                                    }
-                                }
-                            }
-                        #Vmk Link
-                            #Write-Host "    Checking for Linux link..."
-                            $ActualVMWDriverDetailsLinkVmkLinux=""
-                            $ActualVMWDriverDetailsLinkCheckVmkLinux1=""
-                            $ActualVMWDriverDetailsLinkCheckVmkLinux1=$ActualVMWDriverDetailsLinkCheck|Where-Object{$_ -imatch "VmkLinux"}|Select-Object -First 1
-                            If($ActualVMWDriverDetailsLinkCheckVmkLinux1|Where-Object{$_ -inotmatch "http"}|Select-Object -First 1){$ActualVMWDriverDetailsLinkVmkLinux="None"}
-                            #If($ActualVMWDriverDetailsLinkCheckVmkLinux1|?{$_ -imatch "http"}){
-                            #    $ActualVMWDriverDetailsLinkVmkLinux=(((($ActualVMWDriverDetailsLinkCheckVmkLinux1|?{$_ -imatch "http"}) -split ",")[6]) -split "  ")[1] -replace '&amp;','&' -replace '&quot;',""}
-                            # Update contained in Patch
-                            If($ActualVMWDriverDetailsLinkCheckVmkLinux1|Where-Object{$_ -imatch "http"}){$ActualVMWDriverDetailsLinkVmkLinux=(([REGEX]::Match($ActualVMWDriverDetailsLinkCheckVmkLinux1,'http.*.html')) -split '.html')[0]}
-                            # Normal Update
-                            If($ActualVMWDriverDetailsLinkCheckVmkLinux1|Where-Object{$_ -imatch "http"}){$ActualVMWDriverDetailsLinkVmkLinux=([REGEX]::Match($ActualVMWDriverDetailsLinkCheckVmkLinux1,'http.*\:\/\/.*productId\=\d*')).value}
-                            IF($ActualVMWDriverDetailsLinkVmkLinux -imatch "productid"){
-                                $ActualVMWDriverDetailsLinkVmkLinux=$ActualVMWDriverDetailsLinkVmkLinux -replace 'amp\;',""
-                                #$ActualVMWDriverDownloadLinkVmLinux=GetVmwDriverDownloadLink $ActualVMWDriverDetailsLinkVmkLinux
-                            # Grab the actual download link for the VMware driver
-                                    IF($ActualVMWDriverDetailsLinkVmkLinux -imatch 'productid'){
-                                    $ActualVMWDriverDetailsLinkVmkLinux=$ActualVMWDriverDetailsLinkVmkLinux -replace 'amp\;',""
-                                    $ActualVMWDriverDownloadPage=""
-                                    $ActualVMWDriverDownloadPageVmkLinux = Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkVmkLinux -UseBasicParsing -UseDefaultCredentials -WebSession $session
-                                    $ActualVMWDriverDownloadPagenb=Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkVmkLinux -UseDefaultCredentials -WebSession $session
-                                    $ActualVMWDriverDownloadPageLink=""
-                                    $ActualVMWDriverDownloadPageLink=((($ActualVMWDriverDownloadPage.RawContent -split "[`r`n]"| Where-Object{$_ -match "fileId"}|Select-Object -First 1) -split "href=")[1] -split ">Download")[0] -replace '"'
-                                    If($ActualVMWDriverDetailsLinkVmkLinux -imatch "http"){
-                                        $VMwarePublicSiteUrl1=""
-                                        $VMwarePublicSiteUrl2=""
-                                        $VMwarePublicSiteUrl1='https://my.vmware.com/channel/public/api/v1.0/dlg/details?locale=en_US&downloadGroup='
-                                        $VMwarePublicSiteUrl2=$ActualVMWDriverDetailsLinkVmkLinux.Split('?') -replace "downloadGroup=",""|Select-Object -last 1
-                                        $ActualVMWDriverDetailsLinkVmkLinuxText="$VMwarePublicSiteUrl1$VMwarePublicSiteUrl2"
-                                        #https://my.vmware.com/channel/public/api/v1.0/dlg/details?locale=en_US&downloadGroup=
-                                        $ActualVMWDriverDetailsLinkVmkLinuxDownloadProductPage=""
-                                        $ActualVMWDriverDetailsLinkVmkLinuxDownloadProductPage=Invoke-WebRequest -Uri $ActualVMWDriverDetailsLinkVmkLinuxText -UseDefaultCredentials -WebSession $session
-                                        #Write-Host "    VmkLinux Link" $ActualVMWDriverDetailsLinkVmkLinux
-                                        $ActualVMWDriverDownloadPageRawContent=@()
-                                        $ActualVMWDriverDetailsLinkVmkLinuxDownloadProductPageData=@()
-                                        $ActualVMWDriverDetailsLinkVmkLinuxDownloadProductPageData=($ActualVMWDriverDetailsLinkVmkLinuxDownloadProductPage.RawContent -split "['`r`n']" | Select-Object -last 1) -replace '\{' -replace '\}' -replace '^\"\D*\"\:\[' -replace '\]' -split ',' 
-                                        # Driver version
-                                            $ActualVMWDriverVersion+="VmkLinux: "+((($ActualVMWDriverDetailsLinkVmkLinuxDownloadProductPageData|Where-Object{$_ -match '\"version\"'})|Select-Object -First 1) -split '\:')[1] -replace '\"'
-                                        # Driver Release Date
-                                            $ActualVMWDriverReleaseDate+="VmkLinux: "+((($ActualVMWDriverDetailsLinkVmkLinuxDownloadProductPageData|Where-Object{$_ -match '\"releaseDate\"'})|Select-Object -First 1) -split '\:')[1] -replace '\"'
-                                    }
-                                }
-                            }
-                            #Pause
-                    # Add devices to report
-                        $allArray+=$Found|`
-                        Select-object @{Label="ServiceTag";Expression={"$ServiceTag"}},`
-                        @{Label="PowerEdge";Expression={"$ServerType"}},`
-                        @{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}},`
-                        @{Label="Type";Expression={"DRVR"}},`
-                        @{Label="Category";Expression={$DriverDetailsDeviceType}},`
-                        @{Label="Name";Expression={(($_ -split ",")[2] -replace '"',"").trim()}},`
-                        @{Label="InstalledVersion";Expression={"NA"}},`
-                        @{Label="AvailableVersion";Expression={IF($ActualVMWDriverVersion){$ActualVMWDriverVersion}Else{"No Data Found"}}},`
-                        @{Label="CatalogInfo";Expression={"VMware.com"}},`
-                        @{Label="Criticality";Expression={"No Data Found"}},`
-                        @{Label="ReleaseDate";Expression={IF($ActualVMWDriverReleaseDate){$ActualVMWDriverReleaseDate}Else{"No Data Found"}}},`
-                        @{Label="Details";Expression={
-                            $Details=@()
-                            IF($DriverDetailsLink -imatch "http"){$Details+="<a href='$($DriverDetailsLink)' target='_blank'>$("Driver List")</a><br>"}
-                            $Details
-                        }},@{Label="URL";Expression={
-                            $URLDetails=@()
-                            If($ActualVMWDriverDetailsLinkInbox -imatch "http"){
-                                IF($ActualVMWDriverDetailsLinkInboxText.Length -gt 0){$URLDetails+="InBox: <a href='$($ActualVMWDriverDetailsLinkInbox)' target='_blank'>$($ActualVMWDriverDetailsLinkInbox)</a><br>"}
-                                IF($ActualVMWDriverDetailsLinkInbox -inotmatch "productId"){$URLDetails+="InBox: <a href='$($ActualVMWDriverDetailsLinkInbox)' target='_blank'>$("Device Update Contained in OS Patch")</a><br>"}
-                            }
-                            If($ActualVMWDriverDetailsLinkNative -imatch "http"){
-                                IF($ActualVMWDriverDetailsLinkNativeText.Length -gt 0){$URLDetails+="Native: <a href='$($ActualVMWDriverDetailsLinkNative)' target='_blank'>$($ActualVMWDriverDetailsLinkNative)</a><br>"}
-                                IF($ActualVMWDriverDetailsLinkNative -inotmatch "productId"){$URLDetails+="Native: <a href='$($ActualVMWDriverDetailsLinkNative)' target='_blank'>$("Device Update Contained in OS Patch")</a><br>"}
-                            }
-                            If($ActualVMWDriverDetailsLinkVmkLinux -imatch "http"){
-                                IF($ActualVMWDriverDetailsLinkVmkLinuxText.Length -gt 0){$URLDetails+="VmkLinux: <a href='$($ActualVMWDriverDetailsLinkVmkLinux)' target='_blank'>$("$ActualVMWDriverDetailsLinkVmkLinux")</a><br>"}
-                                IF($ActualVMWDriverDetailsLinkVmkLinux -inotmatch "productId"){$URLDetails+="VmkLinux: <a href='$($ActualVMWDriverDetailsLinkVmkLinux)' target='_blank'>$("Device Update Contained in OS Patch")</a><br>"}
-                            }
-                            IF(-not $URLDetails){$URLDetails+="<a href='$($DriverDetailsLink)' target='_blank'>$("No Download Links Available, See Driver List")</a><br>"}
-                            $URLDetails -replace 'amp\;',""
-                        }}|sort-object Type,Category,Name
-                        #Pause
+
+        if ($obj.vendorID -or $obj.deviceID -or $obj.subVendorID -or $obj.subDeviceID) {
+            $rows += @([PSCustomObject]@{
+                vendorID    = Get-DriFTFirstNonEmpty $obj.vendorID.value $obj.vendorID
+                deviceID    = Get-DriFTFirstNonEmpty $obj.deviceID.value $obj.deviceID
+                subVendorID = Get-DriFTFirstNonEmpty $obj.subVendorID.value $obj.subVendorID
+                subDeviceID = Get-DriFTFirstNonEmpty $obj.subDeviceID.value $obj.subDeviceID
+            })
+        }
+    }
+
+    return @($rows)
+}
+
+function Test-DriFTCatalogPciIdentityMatch {
+<#
+.SYNOPSIS
+    Tests PCI identity match against catalog PCIInfo.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$CatalogObject,
+        [Parameter(Mandatory)]$Device
+    )
+
+    $deviceKey = New-DriFTPciKey -VendorID $Device.VendorID -DeviceID $Device.DeviceID -SubVendorID $Device.SubVendorID -SubDeviceID $Device.SubDeviceID
+    if (-not $deviceKey) { return $false }
+
+    foreach ($pci in Get-DriFTCatalogPciInfoObjects -CatalogObject $CatalogObject) {
+        $catalogKey = New-DriFTPciKey -VendorID $pci.vendorID -DeviceID $pci.deviceID -SubVendorID $pci.subVendorID -SubDeviceID $pci.subDeviceID
+        if ($catalogKey -and $catalogKey -eq $deviceKey) { return $true }
+    }
+
+    return $false
+}
+
+function New-DriFTPciKey {
+<#
+.SYNOPSIS
+    Creates a normalized full PCI identity key.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$VendorID,
+        [AllowNull()]$DeviceID,
+        [AllowNull()]$SubVendorID,
+        [AllowNull()]$SubDeviceID
+    )
+
+    $v = Convert-DriFTHexId $VendorID
+    $d = Convert-DriFTHexId $DeviceID
+    $sv = Convert-DriFTHexId $SubVendorID
+    $sd = Convert-DriFTHexId $SubDeviceID
+
+    if ([string]::IsNullOrWhiteSpace($v) -or
+        [string]::IsNullOrWhiteSpace($d) -or
+        [string]::IsNullOrWhiteSpace($sv) -or
+        [string]::IsNullOrWhiteSpace($sd)) {
+        return $null
+    }
+
+    return "$v|$d|$sv|$sd"
+}
+
+#endregion Catalog Helpers
+
+#region Report Generation
+
+function New-DriFTReportRows {
+<#
+.SYNOPSIS
+    Converts match objects to report rows.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][AllowEmptyCollection()][object[]]$Matches,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $rows = @()
+
+    foreach ($match in @($Matches | Where-Object { $null -ne $_ })) {
+        if (-not $match.Matched) { continue }
+        if ($null -eq $match.CatalogRow) { continue }
+        if ($null -eq $match.Device) { continue }
+
+        $catalog = $match.CatalogRow
+        $device = $match.Device
+
+        $installed = Compare-DriFTVersionForReport -InstalledVersion $device.Version -AvailableVersion $catalog.vendorVersion
+
+        $row = New-DriFTReportRow `
+            -ServiceTag $System.ServiceTag `
+            -PowerEdge $System.PowerEdge `
+            -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
+            -Type (Get-DriFTFirstNonEmpty $device.ComponentType) `
+            -Category $catalog.LUCategory.value `
+            -Name $catalog.Name.Display.'#cdata-section' `
+            -InstalledVersion $installed `
+            -AvailableVersion $catalog.vendorVersion `
+            -CatalogInfo (Get-DriFTCatalogSourceInfo -CatalogRow $catalog) `
+            -Criticality (ConvertTo-DriFTCriticality $catalog.Criticality.Display.'#cdata-section') `
+            -ReleaseDate (($catalog.dateTime -split 'T')[0]) `
+            -URL ($script:DriFTDellDownloadRoot + $catalog.path) `
+            -Details $catalog.ImportantInfo.URL `
+            -SourceType $System.SourceType
+
+        if ($null -ne $row) {
+            $rows += @($row)
+        }
+    }
+
+    $deduped = @()
+    foreach ($group in @($rows | Group-Object ServiceTag,PowerEdge,OS,Type,Category,Name,AvailableVersion,URL)) {
+        $best = @($group.Group | Sort-Object @{ Expression = {
+            try { [version]($_.InstalledVersion -replace '^__DRIFT_OUTDATED__','') }
+            catch { [version]'0.0' }
+        } } | Select-Object -Last 1)
+        if ($best) { $deduped += @($best) }
+    }
+
+    return @($deduped | Sort-Object Type,Category,Name)
+}
+
+
+
+function New-DriFTUnmatchedPciReportRows {
+<#
+.SYNOPSIS
+    Creates manual-check rows for installed PCI devices not found in the catalog.
+
+.DESCRIPTION
+    Some 17G Redfish/viewer.html collections expose valid PCI identity data for a
+    device, but the filtered Dell catalog may not contain a matching SoftwareComponent
+    or PCIInfo entry. Rather than silently dropping those devices, this adds an INFO
+    row to the report so the PCI identity and all useful discovered device details
+    can be manually checked against Dell Catalog.xml, ASHCI-Catalog.xml, BCG, or
+    other sources.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][AllowEmptyCollection()][object[]]$Matches,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $rows = @()
+    $seen = @{}
+
+    foreach ($match in @($Matches | Where-Object { $null -ne $_ })) {
+        if ($match.Matched) { continue }
+
+        $device = $match.Device
+        if ($null -eq $device) { continue }
+
+        $pciKey = New-DriFTPciKey `
+            -VendorID $device.VendorID `
+            -DeviceID $device.DeviceID `
+            -SubVendorID $device.SubVendorID `
+            -SubDeviceID $device.SubDeviceID
+
+        if ([string]::IsNullOrWhiteSpace($pciKey)) { continue }
+
+        $vendorId    = Convert-DriFTHexId $device.VendorID
+        $deviceId    = Convert-DriFTHexId $device.DeviceID
+        $subVendorId = Convert-DriFTHexId $device.SubVendorID
+        $subDeviceId = Convert-DriFTHexId $device.SubDeviceID
+
+        $deviceName = Get-DriFTFirstNonEmpty `
+            $device.ElementName `
+            $device.Display `
+            $device.RelatedItem `
+            $device.Name `
+            'Unknown PCI Device'
+
+        $partNumber = Get-DriFTFirstNonEmpty `
+            $device.PartNumber `
+            $device.PartNumberString `
+            $device.DevicePartNumber `
+            $device.SparePartNumber `
+            $device.MMPartNumber `
+            $device.PartID `
+            $device.ComponentID `
+            'Not Available'
+
+        $description = Get-DriFTFirstNonEmpty `
+            $device.Description `
+            $device.DeviceDescription `
+            $device.LongDescription `
+            $device.ProductName `
+            $device.Model `
+            $device.Caption `
+            $device.ElementName `
+            $device.Display `
+            'Not Available'
+
+        $dedupeKey = (@($System.ServiceTag, $vendorId, $deviceId, $subVendorId, $subDeviceId, $deviceName, $partNumber) -join '|').ToLowerInvariant()
+        if ($seen.ContainsKey($dedupeKey)) { continue }
+        $seen[$dedupeKey] = $true
+
+        $pciText = "VID=$vendorId; DID=$deviceId; SVID=$subVendorId; SSID=$subDeviceId"
+
+        # Preserve the original DellSoftwareInventory fields when they were carried
+        # from the PCI identity source. Do not let normalized placeholders like
+        # ElementName=NIC.Slot or ComponentID=0 replace the useful source values.
+        $originalElementName = Get-DriFTFirstNonEmpty $device.OriginalElementName $device.Description
+        $originalId = Get-DriFTFirstNonEmpty $device.OriginalId
+        $identityInfoValue = Get-DriFTFirstNonEmpty $device.IdentityInfoValue ("DCIM:firmware:{0}:{1}:{2}:{3}" -f $vendorId,$deviceId,$subVendorId,$subDeviceId)
+
+        $detailPairs = [ordered]@{
+            'Reason' = (Get-DriFTFirstNonEmpty $match.UnmatchedReason 'PCI identity was present but no matching catalog row was found')
+
+            'ElementName' = (Get-DriFTFirstNonEmpty `
+                $originalElementName `
+                $device.ElementName `
+                $device.Display `
+                'Not Available')
+
+            'Id' = (Get-DriFTFirstNonEmpty `
+                $originalId `
+                $device.Id `
+                'Not Available')
+
+            'IdentityInfoValue' = $identityInfoValue
+        }
+
+        $catalogInfo = @(
+            'PCI info could not be found in catalog(s). Manual check needed.'
+            ($detailPairs.GetEnumerator() | ForEach-Object { '"{0}":"{1}"' -f $_.Key, $_.Value })
+        ) -join ','
+
+        $row = New-DriFTReportRow `
+            -ServiceTag $System.ServiceTag `
+            -PowerEdge $System.PowerEdge `
+            -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
+            -Type 'INFO' `
+            -Category 'PCI Manual Check' `
+            -Name "$deviceName - PCI device not found in catalog(s)" `
+            -InstalledVersion (Get-DriFTFirstNonEmpty $device.Version 'Not Available') `
+            -AvailableVersion 'No Catalog Match' `
+            -CatalogInfo $catalogInfo `
+            -Criticality 'Manual Check' `
+            -ReleaseDate '' `
+            -URL '' `
+            -Details '' `
+            -SourceType $System.SourceType
+
+        if ($row) { $rows += @($row) }
+    }
+
+    if (@($rows).Count -gt 0) {
+        Write-DriFTLog -Context $Context -Message "Unmatched PCI manual-check rows added: $(@($rows).Count)" -Level Warn -Indent 1
+    }
+
+    return @($rows | Sort-Object Category,Name)
+}
+
+
+function ConvertTo-DriFTClusterReportRows {
+<#
+.SYNOPSIS
+    Converts normal report rows into cluster comparison rows.
+
+.DESCRIPTION
+    Legacy DriFT cluster mode groups updates by Type/Name/AvailableVersion and creates
+    one InstalledVersion column per ServiceTag. This makes node-to-node drift obvious.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][object[]]$Rows,
+        [string[]]$ServiceTags
+    )
+
+    $serviceTags = @($ServiceTags | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    if (@($serviceTags).Count -le 1) { return @($Rows) }
+
+    $out = @()
+
+    $groups = @($Rows | Where-Object { $null -ne $_ } | Group-Object Type,Name,AvailableVersion,URL,Details,Criticality,ReleaseDate,CatalogInfo)
+
+    foreach ($group in $groups) {
+        $first = @($group.Group)[0]
+        if ($null -eq $first) { continue }
+
+        $ordered = [ordered]@{
+            Type             = $first.Type
+            Name             = if ($first.Details) { New-DriFTHtmlLink -Url $first.Details -Text $first.Name } else { ConvertTo-DriFTHtmlText $first.Name }
+        }
+
+        foreach ($tag in $serviceTags) {
+            $rowForTag = @($group.Group | Where-Object { (($_.ServiceTag -replace '\*','') -eq ($tag -replace '\*','')) } | Select-Object -First 1)
+            if ($rowForTag) {
+                $ordered[$tag] = $rowForTag.InstalledVersion
+            }
+            else {
+                $ordered[$tag] = 'NA'
+            }
+        }
+
+        $ordered['AvailableVersion'] = if ($first.URL) { New-DriFTHtmlLink -Url $first.URL -Text $first.AvailableVersion } else { ConvertTo-DriFTHtmlText $first.AvailableVersion }
+        $ordered['Criticality']      = $first.Criticality
+        $ordered['ReleaseDate']      = $first.ReleaseDate
+        $ordered['CatalogInfo']      = $first.CatalogInfo
+
+        $out += @([PSCustomObject]$ordered)
+    }
+
+    return @($out | Sort-Object Type,Name)
+}
+
+function Test-DriFTShouldUseClusterReport {
+<#
+.SYNOPSIS
+    Determines whether to use cluster comparison report layout.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][object[]]$Rows,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $tags = @($Rows | Where-Object { $_.ServiceTag } | ForEach-Object { $_.ServiceTag -replace '\*','' } | Sort-Object -Unique)
+    if (@($tags).Count -gt 1) { return $true }
+
+    return $false
+}
+
+
+function Write-DriFTHtmlReport {
+<#
+.SYNOPSIS
+    Writes the DriFT HTML report.
+
+.DESCRIPTION
+    Keeps report rendering isolated. The table shape remains compatible with the
+    current DriFT report columns.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][object[]]$Rows,
+        [Parameter(Mandatory)]$Context,
+        [Parameter(Mandatory)]$CatalogSet
+    )
+
+    $outputRoot = if ($Context.OutputRoot) { $Context.OutputRoot } else { $PWD.Path }
+
+    # Prefer writing reports beside the source TSR/SupportAssist ZIP.
+    if ($Context.CurrentCollection -and $Context.CurrentCollection.SourcePath) {
+        $candidateRoot = Split-Path -Parent $Context.CurrentCollection.SourcePath
+
+        if ($candidateRoot -and (Test-Path -LiteralPath $candidateRoot)) {
+            $outputRoot = $candidateRoot
+        }
+    }
+    $tagPart = (@(@($Context.ServiceTags)) | Sort-Object -Unique) -join '_'
+    $path = Join-Path $outputRoot "$($Context.Version)_$($Context.DateStamp)_$tagPart.html"
+    $path = $path.Replace('*','')
+
+    if ($path.Length -gt 248) {
+        $path = Join-Path $outputRoot "$($Context.Version)_$($Context.DateStamp).html"
+    }
+
+    if (-not $Rows -or @($Rows).Count -eq 0) {
+        $Rows = @([PSCustomObject]@{
+            ServiceTag = ''
+            PowerEdge = ''
+            OS = ''
+            Type = 'INFO'
+            Category = 'No Report Rows'
+            Name = 'No firmware, driver, OS, or config rows were generated.'
+            InstalledVersion = 'Not Available'
+            AvailableVersion = 'Not Available'
+            CatalogInfo = 'DriFT'
+            Criticality = 'Informational'
+            ReleaseDate = ''
+            URL = ''
+            Details = ''
+        })
+    }
+
+    $header = Get-DriFTHtmlHeader
+    $generatedAt = Get-Date
+    $reportTags = (@(@($Context.ServiceTags)) | Sort-Object -Unique) -join ', '
+    if ([string]::IsNullOrWhiteSpace($reportTags)) { $reportTags = 'Not Available' }
+
+    $reportOs = Get-DriFTFirstNonEmpty `
+        ($Rows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.OS) } | Select-Object -First 1 -ExpandProperty OS) `
+        $OperatingSystem.DisplayName `
+        $OperatingSystem.RawName `
+        'NO OS Detected in TSR Data'
+
+    $reportOsVersion = Get-DriFTFirstNonEmpty $OperatingSystem.Version
+    if (-not [string]::IsNullOrWhiteSpace($reportOsVersion) -and $reportOs -notmatch [regex]::Escape($reportOsVersion)) {
+        $reportOs = "$reportOs $reportOsVersion".Trim()
+    }
+
+    $pre = @"
+<div class="drift-shell">
+  <header class="drift-topbar">
+    <div class="drift-brand">
+      <div class="drift-logo">DriFT</div>
+      <div>
+        <div class="drift-title">v$($Context.DisplayVer)</div>
+        <div class="drift-subtitle">Driver & Firmware Tool</div>
+      </div>
+    </div>
+    <div class="drift-toplinks">
+    </div>
+  </header>
+
+  <section class="drift-hero">
+    <div>
+      <div class="drift-eyebrow">Dell Support Report</div>
+      <h1>Driver and firmware drift summary</h1>
+      <p>Review applicable firmware, driver, catalog, and OS update recommendations for the selected SupportAssist collection.</p>
+    </div>
+    <div class="drift-meta-card">
+      <div class="drift-meta-row"><span>Generated</span><strong>$generatedAt</strong></div>
+      <div class="drift-meta-row"><span>Service Tag(s)</span><strong>$reportTags</strong></div>
+      <div class="drift-meta-row"><span>Platform</span><strong>$($Context.Platform.Type)</strong></div>
+      <div class="drift-meta-row"><span>Model</span><strong>$($System.PowerEdge)</strong></div>
+      <div class="drift-meta-row"><span>Operating System</span><strong>$reportOs</strong></div>
+    </div>
+  </section>
+
+  <section class="drift-legend">
+    <div class="drift-legend-card">
+      <span class="drift-status-dot drift-red"></span>
+      <div><strong>Red InstalledVersion</strong><br><span>Installed version is lower than available version.</span></div>
+    </div>
+    <div class="drift-legend-card">
+      <span class="drift-status-dot drift-yellow"></span>
+      <div><strong>Not Available</strong><br><span>Installed version was not contained in the SupportAssist collection.</span></div>
+    </div>
+    <div class="drift-legend-card">
+      <span class="drift-status-dot drift-blue"></span>
+      <div><strong>CatalogInfo</strong><br><span>Shows the catalog source and version/date used for the row.</span></div>
+    </div>
+  </section>
+"@
+
+
+    $isClusterReport = Test-DriFTShouldUseClusterReport -Rows $Rows -Context $Context
+
+    if ($isClusterReport) {
+        $clusterTags = @($Rows |
+            Where-Object { $_.ServiceTag } |
+            ForEach-Object { $_.ServiceTag -replace '\*','' } |
+            Sort-Object -Unique)
+
+        $htmlRows = ConvertTo-DriFTClusterReportRows -Rows $Rows -ServiceTags $clusterTags
+    }
+    else {
+        $htmlRows = $Rows |
+            Sort-Object ServiceTag,PowerEdge,Type,Category |
+            Select-Object Type,Category,Name,InstalledVersion,AvailableVersion,CatalogInfo,Criticality,ReleaseDate,
+                @{Label='Documentation';Expression={ New-DriFTHtmlLink -Url $_.Details -Text 'Link' }},
+                @{Label='Download Link';Expression={ New-DriFTHtmlLink -Url $_.URL -Text $_.URL }}
+    }
+
+    $post = "<footer class='drift-catalog-footer'>$($CatalogSet.CatVerInfo)</footer></div>"
+
+    $html = $htmlRows | ConvertTo-Html -Head $header -PreContent $pre -PostContent $post
+
+    $html = $html -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;', "'" `
+        -replace '<td>NA</td>','<td style="background-color: #ffff00">Not Available</td>' `
+        -replace '<td>Not Applicable</td>','<td style="background-color: #ffff00">Not Available</td>' 
+
+    $html = $html -replace '<td>__DRIFT_OUTDATED__([^<]+)</td>', '<td style="color: #ffffff; background-color: #ff0000">$1</td>'
+
+    $html | Out-File -FilePath $path -Encoding UTF8
+
+    return $path
+}
+
+function Get-DriFTHtmlHeader {
+<#
+.SYNOPSIS
+    Returns DriFT report CSS/header.
+#>
+    [CmdletBinding()]
+    param()
+
+@"
+<style TYPE="text/css">
+:root {
+    --dell-blue: #0672cb;
+    --dell-blue-dark: #01447e;
+    --dell-blue-soft: #eaf5ff;
+    --dell-cyan: #0d98ba;
+    --dell-ink: #0e0e0e;
+    --dell-text: #2b2b2b;
+    --dell-muted: #636363;
+    --dell-border: #d7d7d7;
+    --dell-bg: #f5f6f7;
+    --dell-card: #ffffff;
+    --dell-red: #bb2a33;
+    --dell-yellow: #fff4cc;
+    --dell-row: #fafafa;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: var(--dell-text);
+    background: var(--dell-bg);
+    margin: 0;
+    padding: 0;
+}
+
+.drift-shell {
+    max-width: 1720px;
+    margin: 0 auto;
+    padding: 0 28px 32px 28px;
+}
+
+.drift-topbar {
+    background: #ffffff;
+    border-bottom: 1px solid var(--dell-border);
+    min-height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 28px;
+    margin: 0 -28px;
+}
+
+.drift-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.drift-logo {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 2px solid var(--dell-blue);
+    color: var(--dell-blue);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+}
+
+.drift-title {
+    font-size: 20px;
+    font-weight: 650;
+    color: var(--dell-ink);
+}
+
+.drift-subtitle {
+    font-size: 13px;
+    color: var(--dell-muted);
+}
+
+.drift-toplinks {
+    display: flex;
+    align-items: center;
+    gap: 26px;
+    color: #4d4d4d;
+    font-size: 14px;
+}
+
+.drift-hero {
+    background: linear-gradient(90deg, #ffffff 0%, #f4faff 100%);
+    border: 1px solid var(--dell-border);
+    border-top: 4px solid var(--dell-blue);
+    border-radius: 2px;
+    margin-top: 24px;
+    padding: 30px;
+    display: grid;
+    grid-template-columns: minmax(320px, 1fr) 420px;
+    gap: 28px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.drift-eyebrow {
+    color: var(--dell-blue);
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+}
+
+.drift-hero h1 {
+    margin: 0 0 10px 0;
+    color: var(--dell-ink);
+    font-size: 34px;
+    font-weight: 620;
+    letter-spacing: -0.03em;
+}
+
+.drift-hero p {
+    margin: 0;
+    color: #4a4a4a;
+    max-width: 820px;
+    font-size: 16px;
+    line-height: 1.5;
+}
+
+.drift-meta-card {
+    background: #ffffff;
+    border: 1px solid var(--dell-border);
+    border-radius: 2px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.drift-meta-row {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 14px;
+    padding: 13px 16px;
+    border-bottom: 1px solid #ededed;
+    font-size: 13px;
+}
+
+.drift-meta-row:last-child {
+    border-bottom: 0;
+}
+
+.drift-meta-row span {
+    color: var(--dell-muted);
+}
+
+.drift-meta-row strong {
+    color: var(--dell-ink);
+    font-weight: 600;
+}
+
+.drift-legend {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    gap: 16px;
+    margin: 18px 0 22px 0;
+}
+
+.drift-legend-card {
+    background: #ffffff;
+    border: 1px solid var(--dell-border);
+    border-radius: 2px;
+    padding: 16px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+.drift-legend-card strong {
+    color: var(--dell-ink);
+    font-size: 14px;
+}
+
+.drift-legend-card span {
+    color: var(--dell-muted);
+    font-size: 13px;
+}
+
+.drift-status-dot {
+    width: 12px;
+    height: 12px;
+    min-width: 12px;
+    border-radius: 50%;
+    margin-top: 4px;
+    display: inline-block;
+}
+
+.drift-status-dot.drift-red { background: var(--dell-red); }
+.drift-status-dot.drift-yellow { background: #e6ac00; }
+.drift-status-dot.drift-blue { background: var(--dell-blue); }
+
+table {
+    margin-left: 0 !important;
+    width: 100%;
+    width: 100%;
+    margin: 0 0 30px 0;
+    border-collapse: collapse;
+    background: var(--dell-card);
+    border: 1px solid var(--dell-border);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+th {
+    cursor: pointer;
+    user-select: none;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #f2f2f2;
+    color: var(--dell-ink);
+    border-bottom: 2px solid var(--dell-border);
+    padding: 12px 10px;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: none;
+    white-space: nowrap;
+}
+
+th::after {
+    content: " ⇅";
+    color: #8a8a8a;
+    font-size: 10px;
+    font-weight: 400;
+}
+
+th.sort-asc::after {
+    content: " ▲";
+    color: var(--dell-blue);
+}
+
+th.sort-desc::after {
+    content: " ▼";
+    color: var(--dell-blue);
+}
+
+td {
+    border-bottom: 1px solid #e6e6e6;
+    padding: 10px;
+    font-size: 13px;
+    line-height: 1.35;
+    vertical-align: top;
+}
+
+tr:nth-child(even) td {
+    background-color: var(--dell-row);
+}
+
+tr:hover td {
+    background-color: var(--dell-blue-soft);
+}
+
+a {
+    color: var(--dell-blue);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+td[style*="background-color: #ff0000"],
+td[style*="background-color:#ff0000"] {
+    background-color: var(--dell-red) !important;
+    color: #ffffff !important;
+    font-weight: 700;
+}
+
+td[style*="background-color: #ffff00"],
+td[style*="background-color:#ffff00"] {
+    background-color: var(--dell-yellow) !important;
+    color: #5c4600 !important;
+    font-weight: 700;
+}
+
+.drift-cluster-note {
+    color: var(--dell-muted);
+    font-size: 13px;
+    margin: -6px 28px 18px 28px;
+}
+
+td:nth-child(12) a,
+td:nth-child(13) a {
+    display: inline-block;
+    border: 1px solid var(--dell-blue);
+    border-radius: 2px;
+    padding: 5px 9px;
+    background: #ffffff;
+}
+
+td:nth-child(12) a:hover,
+td:nth-child(13) a:hover {
+    background: var(--dell-blue);
+    color: #ffffff;
+    text-decoration: none;
+}
+
+body > br,
+body > a {
+    margin-left: 28px;
+}
+
+body > br:last-of-type {
+    display: none;
+}
+
+.drift-catalog-footer {
+    width: calc(100% - 56px);
+    margin: 0 28px 30px 28px;
+    background: #ffffff;
+    border: 1px solid var(--dell-border);
+    border-left: 4px solid var(--dell-blue);
+    padding: 16px 18px;
+    color: var(--dell-muted);
+    font-size: 13px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+.tooltip {
+    position: relative;
+    display: inline-block;
+    border-bottom: 1px dotted black;
+}
+
+.tooltip .tooltiptext {
+    visibility: hidden;
+    width: 160px;
+    background-color: #111827;
+    color: #fff;
+    text-align: center;
+    border-radius: 4px;
+    padding: 8px;
+    position: absolute;
+    z-index: 10;
+}
+
+.tooltip:hover .tooltiptext {
+    visibility: visible;
+}
+
+@media (max-width: 1000px) {
+    .drift-hero {
+        grid-template-columns: 1fr;
+    }
+
+    .drift-legend {
+        grid-template-columns: 1fr;
+    }
+
+    .drift-toplinks {
+        display: none;
+    }
+
+    table {
+        display: block;
+        overflow-x: auto;
+    }
+}
+
+.report-table,
+.report-table-container,
+.table-responsive,
+.drift-table-wrapper,
+.drift-table-container {
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+    width: 100% !important;
+    box-sizing: border-box;
+}
+
+.report-table table,
+.table-responsive table,
+.drift-table-wrapper table,
+.drift-table-container table {
+    margin-left: 0 !important;
+    width: 100% !important;
+}
+
+</style>
+
+<script type="text/javascript">
+document.addEventListener("DOMContentLoaded", function () {
+    const table = document.querySelector("table");
+    if (!table) { return; }
+
+    const headers = Array.from(table.querySelectorAll("th"));
+
+    function normalizeText(value) {
+        return (value || "").replace(/\s+/g, " ").trim();
+    }
+
+    function criticalityRank(value) {
+        const v = normalizeText(value).toLowerCase();
+        if (v.includes("urgent")) { return 1; }
+        if (v.includes("recommended")) { return 2; }
+        if (v.includes("optional")) { return 3; }
+        if (v.includes("not available") || v.includes("no data")) { return 4; }
+        return 5;
+    }
+
+    function parseVersion(value) {
+        const text = normalizeText(value);
+        const matches = text.match(/\d+|[a-zA-Z]+/g);
+        if (!matches) { return null; }
+
+        return matches.map(part => {
+            const n = Number(part);
+            return Number.isNaN(n) ? part.toLowerCase() : n;
+        });
+    }
+
+    function compareVersionLike(a, b) {
+        const av = parseVersion(a);
+        const bv = parseVersion(b);
+        if (!av || !bv) { return null; }
+
+        const max = Math.max(av.length, bv.length);
+        for (let i = 0; i < max; i++) {
+            const x = av[i] ?? 0;
+            const y = bv[i] ?? 0;
+
+            if (typeof x === "number" && typeof y === "number") {
+                if (x !== y) { return x - y; }
+            }
+            else {
+                const sx = String(x);
+                const sy = String(y);
+                if (sx !== sy) { return sx.localeCompare(sy); }
+            }
+        }
+
+        return 0;
+    }
+
+    function getCellValue(row, index) {
+        const cell = row.children[index];
+        return cell ? normalizeText(cell.innerText || cell.textContent) : "";
+    }
+
+    function sortTable(index, direction) {
+        const tbody = table.tBodies[0] || table;
+        const rows = Array.from(tbody.querySelectorAll("tr")).filter(row => row.querySelectorAll("td").length > 0);
+        const headerText = normalizeText(headers[index].innerText).toLowerCase();
+
+        rows.sort((rowA, rowB) => {
+            const a = getCellValue(rowA, index);
+            const b = getCellValue(rowB, index);
+
+            let result = 0;
+
+            if (headerText === "criticality") {
+                result = criticalityRank(a) - criticalityRank(b);
+            }
+            else if (headerText.includes("date")) {
+                const da = Date.parse(a);
+                const db = Date.parse(b);
+                if (!Number.isNaN(da) && !Number.isNaN(db)) {
+                    result = da - db;
+                }
+                else {
+                    result = a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
                 }
             }
-          }
-  }# End VMWare section
-                     # Analys sel log CurrentMBSel.txt for Warnings and Errors
-                #$e="C:\Users\jim_gandy\OneDrive - Dell Technologies\Documents\SRs\109739084\archive_04_22_2021_21_33_45\RDUAITSD01.APPINSTECH.local - 12 node\TSR20210421081924_HZ064Z2\TSR20210421081924_HZ064Z2.pl\tsr\hardware\CurrentMBSEL\CurrentMBSEL.txt"
-                #$MBSelLogWarnERR
-                #$MBSelLogWarnERR=""
-                Write-Host "Checking for SEL log Warnings and Errors in the last 30 days..."
-                $MBSelLogWarnERROut=@()
-                $CurrentMBSelFullNames=@()
-                $CurrentMBSelFullNames=Get-ChildItem -Path $E -Filter CurrentMBSel.txt -File -Recurse -Force | ForEach-Object{ $_.fullname }
-                if ($CurrentMBSelFullNames){
-                    ForEach($MBSelLog in $CurrentMBSelFullNames){
-                        $MBSelLogContent=Get-Content $MBSelLog -Delimiter '\ssdlkfjhaslodfhijasl\s'
-                        IF($MBSelLogContent -imatch 'Severity\s\:\s[3-4]'){
-                            $MBSelLogContentEntries=$MBSelLogContent -split '\-{60,}[\n]'
-                            ForEach($Entry in $MBSelLogContentEntries){
-                                IF($Entry -imatch 'Severity\s\:\s[3-4]'){
-                                    $MBSelLogContentEntriesLines=$Entry -split '[\n]'
-                                    $MBSelLogWarnERR+=[PSCustomObject]@{
-                                        Node = $ServiceTag -replace '\*{1,}'
-                                        Record = ($MBSelLogContentEntriesLines | Where-Object{$_ -imatch 'Record'}) -replace 'Record\s\:\s'
-                                        DateTime = ($MBSelLogContentEntriesLines | Where-Object{$_ -imatch 'Date\/Time'}) -replace 'Date\/Time\s\:\s'
-                                        Severity = ($MBSelLogContentEntriesLines | Where-Object{$_ -imatch 'Severity'}) -replace 'Severity\s\:\s'
-                                        Description = ($MBSelLogContentEntriesLines | Where-Object{$_ -imatch 'Description'}) -replace 'Description\s\:\s'
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }Else{
-                    Write-Host "    No SEL log found in TSR Data. Nothing to do."
-                    $ContinueOn="NO"
+            else if (headerText.includes("version")) {
+                const versionCompare = compareVersionLike(a, b);
+                result = versionCompare === null ? a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }) : versionCompare;
+            }
+            else {
+                result = a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+            }
+
+            return direction === "asc" ? result : -result;
+        });
+
+        headers.forEach(h => h.classList.remove("sort-asc", "sort-desc"));
+        headers[index].classList.add(direction === "asc" ? "sort-asc" : "sort-desc");
+
+        rows.forEach(row => tbody.appendChild(row));
+    }
+
+    headers.forEach((header, index) => {
+        header.setAttribute("title", "Click to sort");
+        header.addEventListener("click", function () {
+            const current = header.getAttribute("data-sort-direction") || "none";
+            const next = current === "asc" ? "desc" : "asc";
+
+            headers.forEach(h => h.removeAttribute("data-sort-direction"));
+            header.setAttribute("data-sort-direction", next);
+
+            sortTable(index, next);
+        });
+    });
+
+    const criticalityIndex = headers.findIndex(h => normalizeText(h.innerText).toLowerCase() === "criticality");
+    if (criticalityIndex >= 0) {
+        headers[criticalityIndex].setAttribute("data-sort-direction", "asc");
+        sortTable(criticalityIndex, "asc");
+    }
+});
+</script>
+
+<title>DriFT Report</title>
+"@
+}
+
+#endregion Report Generation
+
+#region Supplemental Capability Placeholders
+
+
+function Add-DriFTPrecisionWorkstationDriverRows {
+<#
+.SYNOPSIS
+    Adds Precision workstation driver rows not represented by firmware inventory.
+
+.DESCRIPTION
+    Precision TSR firmware inventory normally does not include installed OS driver
+    versions. For first-pass workstation parity, this adds latest applicable client
+    driver rows from the filtered Precision catalog and marks InstalledVersion as
+    Not Available.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Inventory,
+        [Parameter(Mandatory)]$CatalogRows,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    if (-not (Test-DriFTPrecisionSystem -System $System)) { return @() }
+    if ($OperatingSystem.Family -ne 'Windows') { return @() }
+
+    $rows = @()
+    $allCatalogRows = @($CatalogRows.AllRows | Where-Object { $null -ne $_ })
+
+    $driverCategories = @(
+        'Chipset',
+        'Video',
+        'Network',
+        'Audio',
+        'Serial ATA',
+        'Storage',
+        'Security',
+        'Mouse, Keyboard & Input Devices',
+        'Systems Management'
+    )
+
+    foreach ($category in $driverCategories) {
+        $driver = @($allCatalogRows | Where-Object {
+            (Get-DriFTCatalogComponentTypeValue -CatalogObject $_) -ieq 'DRVR' -and
+            $_.LUCategory.value -ieq $category
+        } | Sort-Object { ConvertTo-DriFTSafeDateTime $_.releaseDate } | Select-Object -Last 1)
+
+        if ($driver) {
+            $rows += @(New-DriFTReportRowFromCatalog `
+                -CatalogRow $driver `
+                -System $System `
+                -OperatingSystem $OperatingSystem `
+                -Type 'DRVR' `
+                -InstalledVersion 'NA' `
+                -CatalogInfo '' `
+                -SourceType $System.SourceType)
+        }
+    }
+
+    $rows = @($rows | Sort-Object Type,Category,Name,URL -Unique)
+
+    Write-DriFTLog -Context $Context -Message "Precision supplemental driver rows added: $(@($rows).Count)" -Level Info -Indent 1
+
+    return @($rows)
+}
+
+
+function Add-DriFTWindowsDriverRows {
+<#
+.SYNOPSIS
+    Adds Windows driver rows not always represented by installed firmware inventory.
+
+.DESCRIPTION
+    Adds supplemental Windows driver rows for devices discovered in inventory. 17G
+    Redfish firmware inventory contains firmware versions but not installed Windows
+    driver versions, so these rows intentionally show InstalledVersion as NA/Not
+    Available, matching the legacy DriFT behavior.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Inventory,
+        [Parameter(Mandatory)]$CatalogRows,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    if (Test-DriFTPrecisionSystem -System $System) {
+        return @(Add-DriFTPrecisionWorkstationDriverRows `
+            -Inventory $Inventory `
+            -CatalogRows $CatalogRows `
+            -System $System `
+            -OperatingSystem $OperatingSystem `
+            -Context $Context)
+    }
+
+    $rows = @()
+    $allCatalogRows = @($CatalogRows.AllRows | Where-Object { $null -ne $_ })
+
+    if ($OperatingSystem.Family -ne 'Windows') { return @() }
+    if (-not $OperatingSystem.DriverSupport) { return @() }
+
+    # Chipset driver: legacy DriFT adds the newest non-USB chipset driver for Windows.
+    $chipsetDriver = @($allCatalogRows | Where-Object {
+        (Get-DriFTCatalogComponentTypeValue -CatalogObject $_) -ieq 'DRVR' -and
+        $_.LUCategory.value -ieq 'Chipset' -and
+        $_.Name.Display.'#cdata-section' -inotmatch 'USB'
+    } | Sort-Object { ConvertTo-DriFTSafeDateTime $_.releaseDate } | Select-Object -Last 1)
+
+    if ($chipsetDriver) {
+        $rows += @(New-DriFTReportRowFromCatalog `
+            -CatalogRow $chipsetDriver `
+            -System $System `
+            -OperatingSystem $OperatingSystem `
+            -Type 'DRVR' `
+            -InstalledVersion 'NA' `
+            -CatalogInfo '' `
+            -SourceType $System.SourceType)
+    }
+
+    # Network drivers
+    $installedNetworkDevices = @($Inventory | Where-Object {
+        $_ -and (
+            $_.Display -imatch 'NIC|Ethernet|FastLinQ|QLogic|Intel|Mellanox|ConnectX|Network' -or
+            $_.ElementName -imatch 'NIC|Ethernet|FastLinQ|QLogic|Intel|Mellanox|ConnectX|Network' -or
+            $_.RelatedItem -imatch 'NIC|Ethernet|Network|Mellanox|ConnectX'
+        )
+    })
+
+    foreach ($device in $installedNetworkDevices) {
+        $driver = Find-DriFTBestDriverCatalogRow `
+            -Device $device `
+            -CatalogRows $allCatalogRows `
+            -Category 'Network' `
+            -OperatingSystem $OperatingSystem
+
+        if ($driver) {
+            $rows += @(New-DriFTReportRowFromCatalog `
+                -CatalogRow $driver `
+                -System $System `
+                -OperatingSystem $OperatingSystem `
+                -Type 'DRVR' `
+                -InstalledVersion 'NA' `
+                -CatalogInfo '' `
+                -SourceType $System.SourceType)
+        }
+    }
+
+    # SAS RAID driver: add only when a RAID/PERC/HBA/BOSS/AHCI-like controller is present.
+    $installedRaidDevices = @($Inventory | Where-Object {
+        $_ -and (
+            $_.Display -imatch 'RAID|PERC|HBA|BOSS|AHCI|H9[0-9]{2}|HBA[0-9]' -or
+            $_.ElementName -imatch 'RAID|PERC|HBA|BOSS|AHCI|H9[0-9]{2}|HBA[0-9]' -or
+            $_.RelatedItem -imatch 'RAID|PERC|HBA|BOSS|AHCI|Storage'
+        )
+    })
+
+    if ($installedRaidDevices) {
+        $raidDriver = $null
+
+        foreach ($device in $installedRaidDevices) {
+            $raidDriver = Find-DriFTBestDriverCatalogRow `
+                -Device $device `
+                -CatalogRows $allCatalogRows `
+                -Category 'SAS RAID' `
+                -OperatingSystem $OperatingSystem
+
+            if ($raidDriver) { break }
+        }
+
+        if (-not $raidDriver) {
+            # Some RAID driver catalog rows do not expose matching PCI identity.
+            # Legacy DriFT falls back to latest SAS RAID driver for the filtered model catalog.
+            $raidDriver = @($allCatalogRows | Where-Object {
+                (Get-DriFTCatalogComponentTypeValue -CatalogObject $_) -ieq 'DRVR' -and
+                $_.LUCategory.value -ieq 'SAS RAID'
+            } | Sort-Object { ConvertTo-DriFTSafeDateTime $_.releaseDate } | Select-Object -Last 1)
+        }
+
+        if ($raidDriver) {
+            $rows += @(New-DriFTReportRowFromCatalog `
+                -CatalogRow $raidDriver `
+                -System $System `
+                -OperatingSystem $OperatingSystem `
+                -Type 'DRVR' `
+                -InstalledVersion 'NA' `
+                -CatalogInfo '' `
+                -SourceType $System.SourceType)
+        }
+    }
+
+    return @($rows | Sort-Object URL -Unique | Sort-Object Type,Category,Name)
+}
+
+function Find-DriFTBestDriverCatalogRow {
+<#
+.SYNOPSIS
+    Finds the best Windows driver catalog row for an installed device.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Device,
+        [AllowEmptyCollection()][object[]]$CatalogRows,
+        [Parameter(Mandatory)][string]$Category,
+        [Parameter(Mandatory)]$OperatingSystem
+    )
+
+    $candidates = @($CatalogRows | Where-Object {
+        (Get-DriFTCatalogComponentTypeValue -CatalogObject $_) -ieq 'DRVR' -and
+        ($_.LUCategory.value -ieq $Category)
+    })
+
+    # Prefer exact PCI identity when available.
+    $pciMatches = @($candidates | Where-Object {
+        Test-DriFTCatalogPciIdentityMatch -CatalogObject $_ -Device $Device
+    })
+
+    if ($pciMatches) {
+        return @($pciMatches | Sort-Object { ConvertTo-DriFTSafeDateTime $_.releaseDate } | Select-Object -Last 1)
+    }
+
+    # Driver catalog entries sometimes only carry vendor/device or model-specific description.
+    $deviceVendor = Convert-DriFTHexId $Device.VendorID
+    $deviceId = Convert-DriFTHexId $Device.DeviceID
+
+    if ($deviceVendor -and $deviceId) {
+        $partialPciMatches = @($candidates | Where-Object {
+            $hit = $false
+            foreach ($pci in @(Get-DriFTCatalogPciInfoObjects -CatalogObject $_)) {
+                if ((Convert-DriFTHexId $pci.vendorID) -eq $deviceVendor -and
+                    (Convert-DriFTHexId $pci.deviceID) -eq $deviceId) {
+                    $hit = $true
+                    break
                 }
-                IF(!$ContinueOn){
-                    #$MBSelLogWarnERR | ft
-                    function Convert-DateString ([String]$Date, [String[]]$Format){
-                        $result = New-Object DateTime
-                    
-                        $convertible = [DateTime]::TryParseExact(
-                            $Date,
-                            $Format,
-                            [System.Globalization.CultureInfo]::InvariantCulture,
-                            [System.Globalization.DateTimeStyles]::None,
-                            [ref]$result)
-                    
-                        if ($convertible) { $result }
-                    }
-                    #$MBSelLogWarnERR|ft
-                    $MBSelLogWarnERR1=$MBSelLogWarnERR | Select-Object Node,@{L='DateTime';E={Convert-DateString -Date $_.DateTime -replace 'Date\/Time\s\:\s' -Format 'ddd MMM dd yyyy hh:mm:ss'}},Severity,Description
-                    # Filter for last 30 days
-                    $filterDate = [datetime]::Today.AddDays(-30)
-                    $MBSelLogWarnERROut+=$MBSelLogWarnERR1| Where-Object {$_.DateTime -ge $filterDate}
-                    IF(-not($MBSelLogWarnERROut)){Write-Host "    None found"}Else{Write-Host "$MBSelLogWarnERROut"}
-                }
-  #$allArray=@()
-  #$allArray
-  #Pause
-    #Latest OS CU for 2008r2 - 2022
-    IF($SkipDriversandFirmware -eq "NO"){
-        If(($OSCheck -match '20')){
-            $WSLCU=@()
-            $WSLCUout=@()
-            #$OSCheck='2019'
-            Write-host "Found Microsoft $OSCheck Installed."
-            Write-host "Checking for Latest Microsoft Windows Server Update...."
-            # Get the latest OS Build KBs
-            
-#region Recommended updates and hotfixes for Windows Server 
-        $dstart=Get-Date
-#Returns the download link of KB from Microsoft catalog
-Add-Type @"
+            }
+            $hit
+        })
+
+        if ($partialPciMatches) {
+            return @($partialPciMatches | Sort-Object { ConvertTo-DriFTSafeDateTime $_.releaseDate } | Select-Object -Last 1)
+        }
+    }
+
+    return $null
+}
+
+function New-DriFTReportRowFromCatalog {
+<#
+.SYNOPSIS
+    Creates a DriFT report row directly from a catalog SoftwareComponent.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$CatalogRow,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)][string]$Type,
+        [Parameter(Mandatory)][string]$InstalledVersion,
+        [AllowEmptyString()][string]$CatalogInfo,
+        [string]$SourceType = 'Unknown'
+    )
+
+    $effectiveCatalogInfo = Get-DriFTFirstNonEmpty $CatalogInfo (Get-DriFTCatalogSourceInfo -CatalogRow $CatalogRow)
+
+    return New-DriFTReportRow `
+        -ServiceTag $System.ServiceTag `
+        -PowerEdge $System.PowerEdge `
+        -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
+        -Type $Type `
+        -Category $CatalogRow.LUCategory.value `
+        -Name $CatalogRow.Name.Display.'#cdata-section' `
+        -InstalledVersion $InstalledVersion `
+        -AvailableVersion $CatalogRow.vendorVersion `
+        -CatalogInfo $effectiveCatalogInfo `
+        -Criticality (ConvertTo-DriFTCriticality $CatalogRow.Criticality.Display.'#cdata-section') `
+        -ReleaseDate (($CatalogRow.dateTime -split 'T')[0]) `
+        -URL ($script:DriFTDellDownloadRoot + $CatalogRow.path) `
+        -Details $CatalogRow.ImportantInfo.URL `
+        -SourceType $SourceType
+}
+
+function Add-DriFTKbDownloadLinkType {
+<#
+.SYNOPSIS
+    Adds the GetKBDLLink C# helper used to resolve Microsoft Catalog download URLs.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Context)
+
+    if ('GetKBDLLink' -as [type]) { return }
+
+    try {
+        Add-Type @"
 using System.Net;
 using System.IO;
 using System.Text.RegularExpressions;
-//using System; //for console writeline
 
 public static class GetKBDLLink
 {
@@ -2026,671 +5350,1610 @@ public static class GetKBDLLink
         string kbGUID = "";
         string kbDLUriSource = "";
 
-        // Search for URI to retrieve the latest KB information
-        // Extracting the KBGUID from the KBPage
         var webRequest = WebRequest.Create("https://www.catalog.update.microsoft.com/Search.aspx?q=" + KBNumber);
         webRequest.Method = "GET";
         var webResponse = webRequest.GetResponse();
         var responseStream = webResponse.GetResponseStream();
         var streamReader = new StreamReader(responseStream);
         string responseContent = streamReader.ReadToEnd();
-        //Console.WriteLine("Content is "+responseContent);
-        var kbMatches=Regex.Matches(responseContent, @"id=(?:""|')(.*?)(?=_link)([^\/]*)");
-        //Console.WriteLine(kbMatches.Count);
+
+        var kbMatches = Regex.Matches(responseContent, @"id=(?:""|')(.*?)(?=_link)([^\/]*)");
+
         foreach (Match ItemMatch in kbMatches)
         {
-        //Console.WriteLine(Product);
-        //Console.WriteLine(ItemMatch.Groups[2].Value);
-            if (ItemMatch.Groups[2].Value.Contains(Product))
+            if (ItemMatch.Groups[2].Value.ToLower().Contains(Product.ToLower()))
             {
-                 kbGUID = ItemMatch.Groups[1].Value;
+                kbGUID = ItemMatch.Groups[1].Value;
+                break;
             }
         }
-        //Console.WriteLine(kbGUID);
 
-        // Use the KBGUID to find the actual download link for the KB
+        if (string.IsNullOrWhiteSpace(kbGUID))
+        {
+            return "";
+        }
+
         string post1 = "https://www.catalog.update.microsoft.com/DownloadDialog.aspx?updateIDs=[{%22size%22%3A0%2C%22languages%22%3A%22%22%2C%22uidInfo%22%3A%22";
         string post2 = "%22%2C%22updateID%22%3A%22";
         string post3 = "%22}]&updateIDsBlockedForImport=&wsusApiPresent=&contentImport=&sku=&serverName=&ssl=&portNumber=&version=";
+
         string postText = post1 + kbGUID + post2 + kbGUID + post3;
-        //Console.WriteLine(postText);
+
         webRequest = WebRequest.Create(postText);
         webRequest.Method = "GET";
         webResponse = webRequest.GetResponse();
         responseStream = webResponse.GetResponseStream();
         streamReader = new StreamReader(responseStream);
         responseContent = streamReader.ReadToEnd();
+
         kbDLUriSource = Regex.Match(responseContent, @"(?<=downloadInformation\[0\].files\[0\].url = '|"")(.*?)(?='|"";)").Groups[1].Value;
 
         return kbDLUriSource;
     }
 }
-"@ 
-
-
-
-#$KBNumber = "123456"
-#$Product = "Windows 10"
-#$downloadLink = [GetKBDLLink]::GetDownloadLink($KBNumber, $Product)
-#Write-Host "Download link: $downloadLink"
-
-
-        $KBLatest=''
-$KBList=''
-$KBItemsToShow = 6
-
-        #Lastest hotfix for Windows Server from the respective KB pages
-            $OSType=$OSCheck
-            If($OSCheck -imatch '2008r2'-or $OSCheck -imatch '2008 r2'){\
-                $OSCheck ='2008 r2'
-                # Download the HTML content
-                $url = "https://support.microsoft.com/en-us/help/4009469"
-                $webClient = New-Object System.Net.WebClient
-                $htmlpage = $webClient.DownloadString($url)
-
-                # Find all elements with the "supLeftNavLink" class
-                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")[^>]*>(.*?)(KB\d{7})(.*?)<\/a>')
-
-                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
-                    @{L='KBNumber';E={$_.Groups[3].Value}},`
-                    @{L='Date';E={($_.Groups[2].Value -split "&#x2014;")[0]}},`
-                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[4].Value}},
-                    @{L="OS Build";E={"6.1.7601"}},
-                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
-                    @{L="DownloadLink";E={""}}
-            }
-
-            If($OSCheck -imatch '2012r2'-or $OSCheck -imatch '2012 r2'){
-                $OSCheck ='2012 r2'
-                # Download the HTML content
-                $url = "https://support.microsoft.com/en-us/help/4009470"
-                $webClient = New-Object System.Net.WebClient
-                $htmlpage = $webClient.DownloadString($url)
-
-                # Find all elements with the "supLeftNavLink" class
-                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")[^>]*>(.*?)(KB\d{7})(.*?)<\/a>')
-
-                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
-                    @{L='KBNumber';E={$_.Groups[3].Value}},`
-                    @{L='Date';E={($_.Groups[2].Value -split "&#x2014;")[0]}},`
-                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[4].Value}},
-                    @{L="OS Build";E={"6.3.9600"}},
-                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
-                    @{L="DownloadLink";E={""}}
-            }
-    
-            If($OSCheck -imatch '2016'){
-                # Download the HTML content
-                $url = "https://support.microsoft.com/en-us/help/4000825"
-                $webClient = New-Object System.Net.WebClient
-                $htmlpage = $webClient.DownloadString($url)
-
-                # Find all elements with the "supLeftNavLink" class
-                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)14393.*?)\)(?:(?!Preview).)*<\/a>')
-
-                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
-                    @{L='KBNumber';E={$_.Groups[3].Value}},`
-                    @{L='Date';E={($_.Groups[2].Value -replace "&#x2014;"," ")}},`
-                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
-                    @{L="OS Build";E={$_.Groups[4].Value.Trim()}},
-                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
-                    @{L="DownloadLink";E={""}}
-            }
-
-            If($OSCheck -imatch '2019'){
-                # Download the HTML content
-                $url = "https://support.microsoft.com/en-us/help/4464619/windows-10-update-history"
-                $webClient = New-Object System.Net.WebClient
-                $htmlpage = $webClient.DownloadString($url)
-
-                # Find all elements with the "supLeftNavLink" class
-                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)17763.*?)\)(?:(?!Preview).)*<\/a>')
-
-                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
-                    @{L='KBNumber';E={$_.Groups[3].Value}},`
-                    @{L='Date';E={($_.Groups[2].Value -replace "&#x2014;"," ")}},`
-                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
-                    @{L="OS Build";E={$_.Groups[4].Value.Trim()}},
-                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
-                    @{L="DownloadLink";E={""}}
-            }
-
-            If($OSCheck -imatch '22H2|21H2|20H2'){
-                # Download the HTML content
-                #$url = "https://support.microsoft.com/en-us/help/5018894"
-                $url = "https://support.microsoft.com/en-us/topic/release-notes-for-azure-stack-hci-version-23h2-018b9b10-a75b-4ad7-b9d1-7755f81e5b0b"
-                $webClient = New-Object System.Net.WebClient
-                $htmlpage = $webClient.DownloadString($url)
-
-                # Find all elements with the "supLeftNavLink" class
-                $divs=[regex]::Matches($htmlpage,'(?s)supLeftNavCategory((?:.*?)(<\/div>)){2}')
-                Foreach ($match in $divs) {
-                    If ($match.Groups[1].Value -match $OSCheck) {
-                        $links=[regex]::Matches($match.Groups[1].Value,'supLeftNavLink.*?(href=\".*?\")[^>]*>((?:(?!preview).)*?)(KB\d{7})(.*?)<\/a>')
-                    }
-                }
-
-                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
-                    @{L='KBNumber';E={$_.Groups[3].Value}},`
-                    @{L='Date';E={($_.Groups[2].Value -split "\s")[0..2] -Join " "}},`
-                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
-                    @{L="OS Build";E={"20349"}},
-                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
-                    @{L="DownloadLink";E={""}}
-
-            }
-            If($OSCheck -imatch '2022'){
-                # Download the HTML content
-                $url = "https://support.microsoft.com/en-us/help/5005454"
-                $webClient = New-Object System.Net.WebClient
-                $htmlpage = $webClient.DownloadString($url)
-
-                # Find all elements with the "supLeftNavLink" class
-                $links=[regex]::Matches($htmlpage,'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)20348.*?)\)(?:(?!Preview).)*<\/a>')
-
-                #Set OS Type to find 22H2 updates
-                $OSType="22H2"
-
-                $KBList  = $Links[0..($KBItemsToShow-1)] | Select-Object -Property `
-                    @{L='KBNumber';E={$_.Groups[3].Value}},`
-                    @{L='Date';E={($_.Groups[2].Value -replace "&#x2014;"," ")}},`
-                    @{L="Description";E={($_.Groups[2].Value -replace "&#x2014;"," ")+$_.Groups[3].Value+$_.Groups[4].Value}},
-                    @{L="OS Build";E={"2022"}},
-                    @{L='InfoLink';E={"https://support.microsoft.com"+(($_.Groups[1].Value -split 'href="')[-1] -split '"')[0]}},
-                    @{L="DownloadLink";E={""}}
-            }
-
-
-#$KBList = $KBList | ? DownloadLink -like "https*"
-$KBLatest = $KBList[0]
-$KBDLUriSource = [GetKBDLLink]::GetDownloadLink($KBLatest.KBNumber,$OSType)
-
-        $dstop=Get-Date
-        #Write-Host "Total time taken is $(($dstop-$dstart).totalmilliseconds)"
-#endregion Recommended updates and hotfixes for Windows Server
-            
-                $WSLCU = New-Object -TypeName PSObject
-                #Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name Build -Value $Build
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name KBNumber -Value $KBLatest.KBNumber
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name LastUpdated -Value  ([DateTime]$KBLatest.Date).ToString("yyyy-MM-dd")
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name Title -Value $KBLatest.Description
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name URL -Value $KBDLUriSource
-                Add-Member -InputObject $WSLCU -MemberType NoteProperty -Name Details -Value $KBLatest.InfoLink
-                
-
-                
-          $WSLCUout=$WSLCU | Select-object @{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                ,@{Label="Type";Expression={"OS"}}`
-                ,@{Label="Category";Expression={"Microsoft Update"}}`
-                ,@{Label="Name";Expression={$WSLCU.Title}}`
-                ,@{Label="InstalledVersion";Expression={"NA"}}`
-                ,@{Label="AvailableVersion";Expression={$WSLCU.KBNumber}}`
-                ,@{Label="CatalogInfo";Expression={"catalog.update.microsoft.com"}}`
-                ,@{Label="Criticality";Expression={"Not Available"}}`
-                ,@{Label="ReleaseDate";Expression={$WSLCU.LastUpdated}}`
-                ,@{Label="URL";Expression={$WSLCU.URL}}`
-                ,@{Label="Details";Expression={$WSLCU.Details}}`
-                | sort-object Category,Firmware,Name
-            $allArray+= $WSLCUout
-        }
-    }  
-    IF($CluChkMode -eq "YES"){
-    # Switch port to Host map
-        Write-host "Checking for Switch Port Connection Info...." 
-        $SwPort2HostMap=@()
-        $SwitchPortsFromiDRAC=$DCIM_VIEM_Properties|Where-Object{$_.SwitchPortConnectionID -ne $NULL -and $_.SwitchConnectionID -match ":"}
-        ForEach($Inst in $SwitchPortsFromiDRAC){
-            #Filter out iDRAC becuase we only want to see host NICs
-            IF($INST.InstanceID -inotmatch 'iDRAC'){
-                $SwPort2HostMap+=$inst|Select-Object @{Label="HostName";Expression={(Split-Path -Path $HostName -Leaf).Split(".")[0]}},@{Label='SwitchMacAddress';Expression={($_.SwitchConnectionID -split '(?<=(?i)[0-9a-f]{4})')[0].substring(0,17) }},@{L="SwitchPortConnectionID";E={$SwitchPortConnectionID=($_.SwitchPortConnectionID -split '(?<=/[0-9A]+e)')[0];$SwitchPortConnectionID.substring(0,$SwitchPortConnectionID.length - 1)}},@{Label='HostNicSlotPort';Expression={$HNSP=($_.InstanceID -split '(?<=-[0-9A]N)')[0];$HNSP.substring(0,$HNSP.length - 1)}},@{Label='HostNICMacAddress';Expression={(($DCIM_VIEM_Properties|Where-Object{$_.PermanentMACAddress -ne $Null}|Where-Object{$_.InstanceID.startswith($Inst.InstanceID)}).PermanentMACAddress -split '(?<=(?i)[0-9a-f]{4})')[0].substring(0,17)}}
-            }
-        }
-        IF($SwPort2HostMap){
-            Write-Host ""
-            #$SwPort2HostMap | FT
-            $SwPort2HostMapAll+=$SwPort2HostMap
-        }
-            
-    #$BIOSandNICCFG=@()
-    #BIOS and iDRAC configuration recommendations for servers in a Dell EMC Ready Solution for Microsoft WSSD 
-        #From <https://www.dell.com/support/article/us/en/19/sln313842/bios-and-idrac-configuration-recommendations-for-servers-in-a-dell-emc-ready-solution-for-microsoft-wssd?lang=en> 
-        
-        
-        If(($IsNewS2DCatalog="YES") -or ($ServerType -Match "XD")){
-            $BIOSandiDRACCfg=@()
-            $BIOSandiDRACCfgTable=@()
-            Write-host "BIOS and iDRAC configuration recommendations for WSSD...."
-            Write-host "    Reference link: https://www.dell.com/support/kbdoc/en-us/000135856/bios-and-idrac-configuration-recommendations-for-servers-in-a-dell-emc-solutions-for-microsoft-azure-stack-hci"    
-                $BIOSandiDRACCfgTable+="Memory Settings,Node Interleaving,Disabled,BIOS.Setup.1-1,NodeInterleave,R640 R740XD,DCIM_BIOSEnumeration"
-
-                $BIOSandiDRACCfgTable+="Processor Settings,Logical Processor,Enabled,BIOS.Setup.1-1,LogicalProc,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,Virtualization Technology,Enabled,BIOS.Setup.1-1,ProcVirtualization,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,DCU Streamer Prefetcher,Enabled,BIOS.Setup.1-1,DcuStreamerPrefetcher,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,DCU IP Prefetcher,Enabled,BIOS.Setup.1-1,DcuIpPrefetcher,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,UPI Prefetcher,Enabled,BIOS.Setup.1-1,UpiPrefetch,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,Sub NUMA Cluster,Disabled,BIOS.Setup.1-1,SubNumaCluster,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,X2 APIC Mode,Enabled,BIOS.Setup.1-1,ProcX2Apic,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,Dell Controlled Turbo,Enabled,BIOS.Setup.1-1,ControlledTurbo,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="Processor Settings,Kernel DMA Protection,Enabled,BIOS.Setup.1-1,KernelDmaProtection,R650 R750 R7525,DCIM_BIOSEnumeration"
-                
-                $BIOSandiDRACCfgTable+="SATA Settings,Embedded SATA,AHCIMode,BIOS.Setup.1-1,EmbSata,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="SATA Settings,Security Freeze Lock,Enabled,BIOS.Setup.1-1,SecurityFreezeLock,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="SATA Settings,Write Cache,Disabled,BIOS.Setup.1-1,WriteCache,R640 R740XD,DCIM_BIOSEnumeration"
-                
-                $BIOSandiDRACCfgTable+="NVMe Settings,NVMe Mode,NonRAID,BIOS.Setup.1-1,NvmeMode,R640 R740XD,DCIM_BIOSEnumeration"
-                
-                $BIOSandiDRACCfgTable+="Boot Settings,Boot Mode,UEFI,BIOS.Setup.1-1,BootMode,R640 R740XD,DCIM_BIOSEnumeration"   
-                $BIOSandiDRACCfgTable+="Boot Settings,Boot Sequence Retry,Enabled,BIOS.Setup.1-1,BootSeqRetry,R640 R740XD,DCIM_BIOSEnumeration"
-
-                $BIOSandiDRACCfgTable+="Integrated Devices,SR-IOV Global Enable,Enabled,BIOS.Setup.1-1,SriovGlobalEnable,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-
-                #$BIOSandiDRACCfgTable+="System Profile Settings,System Profile,Custom,BIOS.Setup.1-1,SysProfile,R640 R740XD,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Profile Settings,System Profile,Performance PerfOptimized,BIOS.Setup.1-1,SysProfile,R640 R740XD2 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-                #$BIOSandiDRACCfgTable+="System Profile Settings,System Profile,PerfOptimized,BIOS.Setup.1-1,SysProfile,R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Profile Settings,CPU Power Management,MaxPerf,BIOS.Setup.1-1,ProcPwrPerf,R740XD R640,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Profile Settings,Memory Frequency,MaxPerf,BIOS.Setup.1-1,MemFrequency,R740XD R640,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Profile Settings,Turbo Boost,Enabled,BIOS.Setup.1-1,ProcTurboMode,R740XD2 R740XD R640 YES,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Profile Settings,C-States,Disabled,BIOS.Setup.1-1,ProcCStates,R740XD R640,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Profile Settings,C1E,Disabled,BIOS.Setup.1-1,ProcC1E,R740XD R640,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Profile Settings,Memory Patrol Scrub,Standard,BIOS.Setup.1-1,MemPatrolScrub,R740XD R640,DCIM_BIOSEnumeration"
-
-                $BIOSandiDRACCfgTable+="System Security,TPM Security,On,BIOS.Setup.1-1,TpmSecurity,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,Intel TXT,Off,BIOS.Setup.1-1,IntelTxt,R740XD R640,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,Intel TXT,On,BIOS.Setup.1-1,IntelTxt,R650 R750 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,AC Power Recovery,On,BIOS.Setup.1-1,AcPwrRcvry,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,AC Power Recovery Delay,Random,BIOS.Setup.1-1,AcPwrRcvryDelay,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,Secure Boot,Enabled,BIOS.Setup.1-1,SecureBoot,R640 R740XD R750 R650 R6515 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="System Security,Secure Boot Policy,Standard,BIOS.Setup.1-1,SecureBootPolicy,R740XD R640,DCIM_BIOSEnumeration"
-
-                $BIOSandiDRACCfgTable+="TPM Advanced Settings,    TPM PPI Bypass Provision,Enabled,BIOS.Setup.1-1,TpmPpiBypassProvision,R750 R650 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="TPM Advanced Settings,    TPM PPI Bypass Clear,Enabled,BIOS.Setup.1-1,TpmPpiBypassClear,R750 R650 R7525,DCIM_BIOSEnumeration"
-                $BIOSandiDRACCfgTable+="TPM Advanced Settings,    TPM2 Algorithm Selection,SHA256,BIOS.Setup.1-1,Tpm2Algorithm,R750 R650 R7525,DCIM_BIOSEnumeration"
-
-                $BIOSandiDRACCfgTable+="Power Configuration,Redundancy Policy,A/B Grid Redundant,System.Embedded.1:ServerPwr.1,PSRedPolicy,R640 R740XD R750 R650 R6515 R7525,DCIM_SystemEnumeration"
-                $BIOSandiDRACCfgTable+="Power Configuration,Enable Hot Spare,Enabled,System.Embedded.1:ServerPwr.1,PSRapidOn,R640 R740XD R750 R650 R6515 R7525,DCIM_SystemEnumeration"
-                $BIOSandiDRACCfgTable+="Power Configuration,Primary Power Supply Unit,PSU1,System.Embedded.1:ServerPwr.1,RapidOnPrimaryPSU,R640 R740XD R750 R650 R6515 R7525,DCIM_SystemEnumeration"
-
-                $BIOSandiDRACCfgTable+="Network Settings,Enable NIC,Enabled,iDRAC.Embedded.1:CurrentNIC.1,Enabled,R640 R740XD R750 R650 R6515 R7525,DCIM_iDRACCardEnumeration"
-                $BIOSandiDRACCfgTable+="Network Settings,NIC Selection,Dedicated,iDRAC.Embedded.1:CurrentNIC.1,Selection,R640 R740XD R750 R650 R6515 R7525,DCIM_iDRACCardEnumeration"
-
-                ForEach($Line In $BIOSandiDRACCfgTable){
-                    $Item=@()
-                    $Item=$Line -split ","
-                    IF($Item[5] -split " " -ieq $ServerType){
-                        $BIOSandiDRACCfgLookup=(($CIM_BIOSAttribute_Instances |`
-                                                Where-Object{($_.CLASSNAME -match $Item[6])}).PROPERTY|`
-                                                Where-Object{$_.VALUE -eq $Item[4]}).ParentNode.'PROPERTY.ARRAY' |`
-                                                Where-Object{$_.Name -match "CurrentValue"} |`
-                                                Select-Object @{Label="HostName";Expression={(Split-Path -Path $HostName -Leaf).Split(".")[0]}}`
-                                                ,@{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                                                ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                                                ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                                                ,@{Label="Type";Expression={"BIOS Config"}}`
-                                                ,@{Label="Setting Category";Expression={$Item[0]}}`
-                                                ,@{Label="Setting Name";Expression={$Item[1]}}`
-                                                ,@{Label="CurrentValue";Expression={IF($Item[2] -notmatch $_.'VALUE.ARRAY'.VALUE){"***"+$_.'VALUE.ARRAY'.VALUE}Else{$_.'VALUE.ARRAY'.VALUE}}}`
-                                                ,@{Label="DesiredValue";Expression={$Item[2]}}|`
-                                                sort-object Type,Category,Name
-                            $BIOSandiDRACCfg+=$BIOSandiDRACCfgLookup
-                        }
-                    }
-
-                    #$BIOSandiDRACCfg | Format-Table 
-                    $BIOSandNICCFG+=$BIOSandiDRACCfg  
-        }
-        IF($IsAZHub){
-        # Azure Stack HUB Bios setting
-            $BIOSCfg=@()
-            Write-host "BIOS and iDRAC configuration for Azure Stack Hub...."
-            # Setting JSON
-            $AZHURL="https://solutions.one.dell.com/sites/NAEnterprise/SST/Communities/DRiFT/DRiFT%20Docs/AZHubSettings.txt"
-            $AZHDownloadFile="$env:TEMP\AZHubSetting.json"
-            IF(-not($AZHSettings)){
-            $AZHSettings=Invoke-WebRequest -Uri $AZHURL -OutFile $AZHDownloadFile -UseDefaultCredentials}
-            $HubSetting=Get-Content -Path $AZHDownloadFile  | ConvertFrom-Json
-            Remove-Item -Path $AZHDownloadFile -Force
-            $AZBIOSSETTINGS=($HubSetting."PowerEdge $ServerType").BIOS_SETTINGS
-            $AZBIOSSETTINGS.PSObject.Properties|ForEach{
-                $AZBItem=$_
-                $BIOSCfgLookup=(($CIM_BIOSAttribute_Instances |`
-                    Where-Object{($_.CLASSNAME -match 'DCIM_BIOSEnumeration')}).PROPERTY|`
-                    Where-Object{$_.VALUE -eq $AZBItem.Name}).ParentNode.'PROPERTY.ARRAY' |`
-                    Where-Object{$_.Name -match "CurrentValue"} |`
-                    Select-Object @{Label="HostName";Expression={(Split-Path -Path $HostName -Leaf).Split(".")[0]}}`
-                    ,@{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                    ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                    ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                    ,@{Label="Type";Expression={"BIOS Config"}}`
-                    ,@{Label="Setting Category";Expression={($_.ParentNode.PROPERTY.Name -eq 'AttributeDisplayName').value}}`
-                    ,@{Label="Setting Name";Expression={$AZBItem.Name}}`
-                    ,@{Label="CurrentValue";Expression={IF($_.'VALUE.ARRAY'.VALUE -notmatch $AZBItem.Value){"***"+$_.'VALUE.ARRAY'.VALUE}Else{$_.'VALUE.ARRAY'.VALUE}}}`
-                    ,@{Label="DesiredValue";Expression={$AZBItem.Value}}|`
-                    sort-object Type,Category,Name
-                $BIOSCfg+=$BIOSCfgLookup
-            }
-            #$BIOSCfg|FT
-            $BIOSandNICCFG+=$BIOSCfg
-            $iDRACCfg=@()
-            $iDRACCfgLookup=@()
-            $AZiDRACSETTINGS=($HubSetting."PowerEdge $ServerType").iDRAC_SETTINGS
-            $AZiDRACSETTINGS.PSObject.Properties|ForEach{
-                $AZiItem=$_
-                $iDRACCfgLookup=($CIM_BIOSAttribute.CIM.MESSAGE.SIMPLEREQ."VALUE.NAMEDINSTANCE" |`
-                    Where-Object{$_.INSTANCENAME.KEYBINDING.KEYVALUE.'#text' -imatch ($AZiItem.Name)}).INSTANCE.'PROPERTY.ARRAY'|`
-                    Where-Object{$_.Name -match "CurrentValue"} |`
-                    Select-Object @{Label="HostName";Expression={(Split-Path -Path $HostName -Leaf).Split(".")[0]}}`
-                    ,@{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                    ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                    ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                    ,@{Label="Type";Expression={"iDRAC Config"}}`
-                    ,@{Label="Setting Category";Expression={(($AZiItem.Name -split '\#')[1])}}`
-                    ,@{Label="Setting Name";Expression={(($AZiItem.Name -split '\#')[2])}}`
-                    ,@{Label="CurrentValue";Expression={IF($_.'VALUE.ARRAY'.VALUE -notmatch $AZiItem.Value){"***"+$_.'VALUE.ARRAY'.VALUE}Else{$_.'VALUE.ARRAY'.VALUE}}}`
-                    ,@{Label="DesiredValue";Expression={$AZiItem.Value}}|`
-                    sort-object Type,Category,Name
-                $iDRACCfg+=$iDRACCfgLookup
-            }
-            #$iDRACCfg | FT    
-        }
-        $BIOSandNICCFG+=$iDRACCfg
-        #QLogic NIC configuration 
-        If(($IsNewS2DCatalog="YES")-and($NICDrv.name -imatch "QLogic")){
-            $QLogicNicCfg=@()
-            $QLogicNicCfgTable=@()
-            Write-host "Checking BIOS QLogic NIC configuration for WSSD...." 
-                $QLogicNicCfgTable+="BIOS QLogic NIC Config,Boot Protocol,None,NIC.Slot.,FWBootProtocol"
-                $QLogicNicCfgTable+="BIOS QLogic NIC Config,Link Speed,QLGC_SmartAN,NIC.Slot.,LnkSpeed"
-                $QLogicNicCfgTable+="BIOS QLogic NIC Config,DCBX Protocol,QLGC_Disabled,NIC.Slot.,QLGC_DCBXProtocol"
-                $QLogicNicCfgTable+="BIOS QLogic NIC Config,RDMA Operational Mode,QLGC_iWARP,NIC.Slot.,QLGC_RDMAOperationalMode"
-                $QLogicNicCfgTable+="BIOS QLogic NIC Config,NIC + RDMA Mode,Enabled,NIC.Slot.,RDMANICModeOnPort"
-                $QLogicNicCfgTable+="BIOS QLogic NIC Config,Virtualization Mode,NONE,NIC.Slot.,VirtualizationMode"
-                $QLogicNicCfgTable+="BIOS QLogic NIC Config,Virtual LAN Mode,Disabled,NIC.Slot.,VLanMode"
-                ForEach($Line In $QLogicNicCfgTable){
-                    $Item=@()
-                    $Item=$Line -split ","
-                        # Filter for QLogic RDMA NICs
-                        $NICSLOT=((($CIM_BIOSAttribute_Instances |`
-                                                Where-Object{($_.CLASSNAME -match "DCIM_NICEnumeration")}).PROPERTY|`
-                                                Where-Object{$_.VALUE -imatch "QLGC_RDMAOperationalModePort"}).ParentNode.PROPERTY|`
-                                                Where-Object{($_.Name -match "FQDD")}).VALUE
-                                                Where-Object{($_.Name -match "CurrentValue")}|Select-Object VALUE
-                                                #Where-Object{[regex]::Matches($_.VALUE,"\d-\d-\d:QLGC_RDMAOperationalModePort")}).Value -replace ":QLGC_RDMAOperationalModePort"
-
-                        ForEach($SNIC in $NICSLOT){
-                            $QLogicNicCfgLookup=((($CIM_BIOSAttribute_Instances |`
-                                                Where-Object{($_.CLASSNAME -match "DCIM_NICEnumeration")}).PROPERTY|`
-                                                Where-Object{$_.VALUE -imatch $SNIC}).ParentNode.PROPERTY|`
-                                                Where-Object{$_.VALUE -ieq $Item[4]}).ParentNode.'PROPERTY.ARRAY'|`
-                                                Where-Object{$_.Name -match "CurrentValue"}|`
-                                                Select-Object @{Label="HostName";Expression={(Split-Path -Path $HostName -Leaf).Split(".")[0]}}`
-                                                ,@{Label="ServiceTag";Expression={"$ServiceTag"}}`
-                                                ,@{Label="PowerEdge";Expression={"$ServerType"}}`
-                                                ,@{Label="OS";Expression={"$InstalledOS"+" "+"$OSVersion"}}`
-                                                ,@{Label="Type";Expression={"BIOS Config"}}`
-                                                ,@{Label="Setting Category";Expression={$Item[0]}}`
-                                                ,@{Label="Device";Expression={$SNIC}}`
-                                                ,@{Label="Setting Name";Expression={$Item[1]}}`
-                                                ,@{Label="CurrentValue";Expression={IF($_.'VALUE.ARRAY'.VALUE -ne $Item[2]){"***"+$_.'VALUE.ARRAY'.VALUE}Else{$_.'VALUE.ARRAY'.VALUE}}}`
-                                                ,@{Label="DesiredValue";Expression={$Item[2]}}|`
-                                                sort-object Type,Category,Name
-                                                $QLogicNicCfg+=$QLogicNicCfgLookup
-                                                }
-                             #$QLogicNicCfgLookup | Format-Table 
-                        }
-                    $QLogicNicCfg=$QLogicNicCfg | Sort-Object Device,'Setting Name' -Unique
-                    #$QLogicNicCfg | Format-Table  
-                    $BIOSandNICCFG+=$QLogicNicCfg
-        }
-        }
-        
-        
- #Links to download button
-    ForEach($aitem in $allArray){
-        If(($aitem.InstalledVersion -match [Regex]::Escape("***"))`
-        -or($aitem.InstalledVersion -match "NA")`
-        -or($aitem.InstalledVersion -match "Not Available")`
-        -or($aitem.InstalledVersion -match "Not Applicable")){
-            $Files2Download+="'"+$aitem.URL+"',"}
+"@ -ErrorAction Stop
     }
-    $Files2Download=($Files2Download | sort-object | Get-Unique) 
- 
- #Add seperator
-     IF($SkipDriversandFirmware -eq "NO"){
-         $Folder_Count=$DriFTFolders.GetDirectories | Measure-Object | ForEach-Object{$_.Count}
-         IF ($Folder_Count -gt 1){
-                $ReportSeperator=@()
-                $ReportSeperator = [PSCustomObject]@{
-                            ServiceTag=$ServiceTag
-                            PowerEdge=""
-                            OS=""
-                            Type=""
-                            Category=""
-                            Name=""
-                            InstalledVersion=""
-                            AvailableVersion=""
-                            Criticality=""
-                            ReleaseDate=""
-                            URL=""
-                            Details=""}
-                $allArray+=$ReportSeperator
-         }
-     }
-     # Filter for unique URLs and removes non http URLs
-     $allArrayout+=$allArray|sort-object URl -Unique|Select-Object ServiceTag,PowerEdge,OS,Type,Category,Name,InstalledVersion,AvailableVersion,CatalogInfo,Criticality,ReleaseDate,`
-        @{Label="URL";Expression={IF($_.URL -imatch "http"){$_.URL}Else{""}}},Details
-     $allArray=@()
+    catch {
+        Write-DriFTLog -Context $Context -Message "Unable to load KB download link helper: $($_.Exception.Message)" -Level Warn -Indent 1
+    }
 }
 
-<# Upload report data to Azure
-ForEach($row in $allArrayout){
-    $RowData=$row|Select-Object @{Label="ReportID";Expression={"$DReportID"}},PowerEdge,OS,Type,Category,Name,InstalledVersion,AvailableVersion,CatalogInfo,Criticality,ReleaseDate,URL,Details
-    
-    add-TableData -TableName "DriFTReportData" -PartitionKey "DriFT" -RowKey (new-guid).guid -data $RowData -sasWriteToken '?SECRET REMOVED'
-    }
+function Get-DriFTMicrosoftCatalogProductFilter {
+<#
+.SYNOPSIS
+    Returns the Microsoft Update Catalog product string used to choose a KB package.
+
+.DESCRIPTION
+    The catalog search can return multiple products for the same KB. The old DriFT
+    logic used "server operating system" for Windows Server. Keep that as the
+    default while allowing future special cases.
 #>
+    [CmdletBinding()]
+    param([AllowNull()][string]$OsText)
 
-$DateTime=Get-date
-$DTString=Get-Date -Format "yyyyMMdd_HHmmss_"
-$Title= "Latest Dell PowerEdge Firmware and Drivers"
-#Write-host "OS:" $InstalledOS
-#Displays the results
+    $text = [string]$OsText
 
-#Output location to the same place as the input file
-$SourcePath=@()
-If($TSRLoc.count -gt 1){
-    $SourcePath=([regex]::match($TSRLoc[0],'(.*\\).*')).Groups[1].value
-}Else{$SourcePath=([regex]::match($TSRLoc,'(.*\\).*')).Groups[1].value}
-
-#HTML Out
-If($OutputType -match "HTML") {
-$HTAOut=$SourcePath+$DriFTVer+"_"+$DTString+$ServiceTagList+".html"
-$HTAOut=$HTAOut.Replace("*","")
-IF ($HTAOut.Length -gt 248){
-    $HTAOut=$SourcePath+$DriFTVer+"_"+$DTString+".html"
-}
-Write-Host "Report Output location: "$HTAOut
-if (Test-Path "$HTAOut") {Remove-Item $HTAOut}
-$OutTitle=@()
-#$OutTitle+='<b><font size="4">Results</font></b><br>'
-$OutTitle+="DriFT v"+$DFTV
-$OutTitle+='<br>Date/Time: '+$DateTime 
-$OutTitle+='<br>*A <a style="background-color:Red;color:White;">red</a> InstalledVersion indicates the InstalledVersion is less than the AvailableVersion.'
-$OutTitle+='<br>**A <a style="background-color:Yellow;">Not Available</a> InstalledVersion indicates the InstalledVersion was NOT contained in the Support Assist Collection so the latest version is shown.'
-$Header = @"
-<style TYPE="text/css">
-TABLE {border-width: 1px;border-style: solid;border-color: black;border-collapse: collapse;}
-TH {border-width: 1px;padding: 3px;border-style: solid;border-color: black;background-color: #6495ED;}
-TD {border-width: 1px;padding: 3px;border-style: solid;border-color: black;}
-TR:Nth-Child(Even) {Background-Color: #dddddd;}
-TR:Hover TD {Background-Color: #C1D5F8;}
-.tooltip {
-    position: relative;
-    display: inline-block;
-    border-bottom: 1px dotted black;
-  }
-  .tooltip .tooltiptext {
-    visibility: hidden;
-    width: 120px;
-    background-color: black;
-    color: #fff;
-    text-align: center;
-    border-radius: 6px;
-    padding: 5px 0;
-    /* Position the tooltip */
-    position: absolute;
-    z-index: 1;
-  }
-  .tooltip:hover .tooltiptext {
-    visibility: visible;
-  }
-</style>
-<title>
-DriFT Report
-</title>
-"@
-$Footer=@()
-$FooterNote=@()
-IF(($allArrayout.PowerEdge | sort-object -Unique) -imatch 'Precision'){
-    $PrecisionNodes=$allArrayout.PowerEdge | sort-object -Unique
-    $DownloadsDellComUrl=@()
-    ForEach($PN in $PrecisionNodes){
-        IF($PN.Length -gt 2){
-            $PrecisionNumbers=$PN -replace 'Precision' -replace 'Rack' -replace ' ' -replace "r" -replace "7910","precision-r7910-workstation" -replace "7920","precision-7920r-workstation"
-            $DownloadsDellComUrl+="<a href='https://www.dell.com/support/home/en-us/product-support/product/$PrecisionNumbers/drivers' target='_blank'>https://www.dell.com/support/home/en-us/product-support/product/$PrecisionNumbers/drivers</a>"
-        }
+    if ($text -imatch 'Azure Stack HCI|Azure Local|23H2|22H2|21H2|20H2') {
+        return 'server operating system'
     }
-}Else{
-    $DownloadsDellComUrl="<a href='http://dl.dell.com/published/pages/poweredge-$ServerType.html' target='_blank'>http://dl.dell.com/published/pages/poweredge-$ServerType.html</a>"
+
+    if ($text -imatch 'Windows Server|Server|2016|2019|2022|2025|2012|2008') {
+        return 'server operating system'
+    }
+
+    return 'server operating system'
 }
-If($NoneSupportedDevices){
-$NoneSupportedDevices=$NoneSupportedDevices -replace ",","<br>"
-$FooterNote='<font color="red">The following device(s) are NOT listed as supported in the CATALOG.XML for this server type: <br>'
-$Footer+=$FooterNote
-$Footer+=$NoneSupportedDevices+"</font><br>"
-$Footer+="More Driver and FW may be found here: <br>"
-$Footer+=$DownloadsDellComUrl
-If($S2DCatalogNeeded -eq "YES"){$Footer+="***Storage Spaces Direct Ready Node(s) Found. Special S2D catalog used to determine certified drivers and firmware compliance.<br>"}
-$Footer+=$CatVerInfo
-}Else{
-$Footer="NOTES: <br>"
-If($S2DCatalogNeeded -eq "YES"){$Footer+="***Storage Spaces Direct Ready Node(s) Found. Special S2D catalog used to determine certified drivers and firmware compliance.<br>"}
-$Footer+="More Driver and FW information can be found here: <br>"
-$Footer+=$DownloadsDellComUrl
-#$Footer+=$CatVerInfo
-$Footer+="<br><a href='https://solutions.one.dell.com/sites/NAEnterprise/SST/Communities/DRiFT/_layouts/15/start.aspx#/Lists/DriFT%20Feedback/Default.aspx' target='_blank'>Got Feedback?</a>"
+
+function Get-DriFTKbDownloadLink {
+<#
+.SYNOPSIS
+    Resolves a direct Microsoft Update Catalog download URL for a KB.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$KBNumber,
+        [Parameter(Mandatory)][string]$Product,
+        [Parameter(Mandatory)]$Context
+    )
+
+    if ([string]::IsNullOrWhiteSpace($KBNumber)) { return '' }
+
+    try {
+        Add-DriFTKbDownloadLinkType -Context $Context
+
+        if (-not ('GetKBDLLink' -as [type])) { return '' }
+
+        $download = [GetKBDLLink]::GetDownloadLink($KBNumber, $Product)
+
+        if ([string]::IsNullOrWhiteSpace($download)) { return '' }
+
+        return $download.Replace('&amp;', '&')
+    }
+    catch {
+        Write-DriFTLog -Context $Context -Message "Microsoft Catalog download link lookup failed for ${KBNumber}: $($_.Exception.Message)" -Level Warn -Indent 1
+        return ''
+    }
 }
-    $AddURL=@()
-    $AddURL=$allArrayout | sort-object ServiceTag,PowerEdge,Type,Category | Select-Object ServiceTag,PowerEdge,OS,Type,Category,Name,InstalledVersion,AvailableVersion,CatalogInfo,`
-        @{Label="Criticality";Expression={
-                    IF($_.Criticality -match "-"){
-                        $CriticalityNote = $_.Criticality
-                        $SplitPos=$CriticalityNote.Indexof("-")
-                        $CriticalityNote0=$CriticalityNote.Substring(0,$SplitPos)
-                        $CriticalityNote1=$CriticalityNote.Substring($SplitPos+1)
-                        "<div class='tooltip'>$CriticalityNote0<span class='tooltiptext'>$CriticalityNote1</span>"
-                        }Else{$_.Criticality}
-                    }},`
-    ReleaseDate,`
-    @{Label="Documentation";Expression={IF($_.Details.length -gt 0){
-        If($_.Details -notmatch '<br>'){"<a href='$($_.Details)' target='_blank'>$("Link")</a>"}Else{$_.Details}}}},`
-    @{Label="Download Link";Expression={
-        IF(($_.URL.length -gt 0) -and ($_.URL -inotmatch "href")){"<a href='$($_.URL)'>$($_.URL)</a>"}
-        Else{$_.URL}
-        }}
-IF(($allArrayout.ServiceTag | sort -Unique).count -gt 1){
-    # New multi node report view for comparing nodes
-    $NewReportView = New-Object System.Data.DataTable "NodeCompare"
-    $NewReportView.Columns.add((New-Object System.Data.DataColumn("Type")))
-    $NewReportView.Columns.add((New-Object System.Data.DataColumn("Name")))
-    $NewReportView.Columns.add((New-Object System.Data.DataColumn("AvailableVersion")))
-    $NewReportView.Columns.add((New-Object System.Data.DataColumn("CatalogInfo")))
-    $NewReportView.Columns.add((New-Object System.Data.DataColumn("Criticality")))
-    $NewReportView.Columns.add((New-Object System.Data.DataColumn("ReleaseDate")))
-    ForEach ($a in ($allArrayout.ServiceTag | Sort-Object -Unique) -Replace '\*'){
-        $NewReportView.Columns.Add((New-Object System.Data.DataColumn([string]$a)))}
-        $a=$null
-        ForEach($b in ($allArrayout | Sort-Object name )){
-            IF($b.Name.length -gt 10 -and $b.Name.length -notmatch 'System.__ComObject'){
-                if ($b.name -ne $a) {
-                    $a=$b.name
-                    if ($null -ne $a) {
-                        IF($row.constructor -inotmatch 'System.__ComObject'){
-                        $NewReportView.rows.add($row)}}
-                    $row=$NewReportView.NewRow()
-                    $row["Type"]=$b.Type
-                    $row["name"]="<a href='$($b.Details)' target='_blank'>$($b.Name)</a>"
-                    $row["AvailableVersion"]="<a href='$($b.URL)'>$($b.AvailableVersion)</a>"
-                    $row["CatalogInfo"]=$b.CatalogInfo
-                    $BCriticality = IF($b.Criticality -match "-"){
-                        $CriticalityNote = $b.Criticality
-                        $SplitPos=$CriticalityNote.Indexof("-")
-                        $CriticalityNote0=$CriticalityNote.Substring(0,$SplitPos)
-                        $CriticalityNote1=$CriticalityNote.Substring($SplitPos+1)
-                        "<div class='tooltip'>$CriticalityNote0<span class='tooltiptext'>$CriticalityNote1</span>"
-                        }Else{$b.Criticality}
-                    $row["Criticality"]=$BCriticality
-                    $row["ReleaseDate"]=$b.ReleaseDate
+
+
+function Get-DriFTWindowsUpdateHistoryUrl {
+<#
+.SYNOPSIS
+    Maps detected Windows / Azure Local OS text to the Microsoft update history page.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$OsText)
+
+    $text = [string]$OsText
+
+    if ($text -imatch '2025|26100')       { return 'https://support.microsoft.com/en-us/help/5047442' }
+    if ($text -imatch '2022|20348')       { return 'https://support.microsoft.com/en-us/help/5005454' }
+    if ($text -imatch '2019|17763')       { return 'https://support.microsoft.com/en-us/help/4464619' }
+    if ($text -imatch '2016|14393')       { return 'https://support.microsoft.com/en-us/help/4000825' }
+    if ($text -imatch '2012\s*R2|9600')   { return 'https://support.microsoft.com/en-us/help/4009470' }
+    if ($text -imatch '2008\s*R2|7601')   { return 'https://support.microsoft.com/en-us/help/4009469' }
+
+    if ($text -imatch '23H2|25398')       { return 'https://support.microsoft.com/en-us/help/5031680' }
+    if ($text -imatch '22H2')             { return 'https://support.microsoft.com/en-us/help/5018894' }
+    if ($text -imatch '21H2')             { return 'https://support.microsoft.com/en-us/help/5004047' }
+    if ($text -imatch '20H2')             { return 'https://support.microsoft.com/en-us/help/4595086' }
+
+    return $null
+}
+
+function Get-DriFTWindowsUpdateBuildToken {
+<#
+.SYNOPSIS
+    Returns the OS build token used to filter Microsoft update history links.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$OsText)
+
+    $text = [string]$OsText
+
+    if ($text -imatch '26100') { return '26100' }
+    if ($text -imatch '25398') { return '25398' }
+    if ($text -imatch '20348') { return '20348' }
+    if ($text -imatch '17763') { return '17763' }
+    if ($text -imatch '14393') { return '14393' }
+    if ($text -imatch '9600')  { return '9600' }
+    if ($text -imatch '7601')  { return '7601' }
+
+    if ($text -imatch '2025')        { return '26100' }
+    if ($text -imatch '23H2')        { return '25398' }
+    if ($text -imatch '2022|21H2')   { return '20348' }
+    if ($text -imatch '2019')        { return '17763' }
+    if ($text -imatch '2016')        { return '14393' }
+    if ($text -imatch '2012\s*R2')   { return '9600' }
+    if ($text -imatch '2008\s*R2')   { return '7601' }
+
+    return ''
+}
+
+function Get-DriFTLatestWindowsUpdateFromMicrosoft {
+<#
+.SYNOPSIS
+    Scrapes the Microsoft update history page for the latest non-preview KB.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [AllowNull()][string]$BuildToken,
+        [int]$KBItemsToShow = 1,
+        [Parameter(Mandatory)]$Context
+    )
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+        $htmlpage = $webClient.DownloadString($Url)
+
+        if ([string]::IsNullOrWhiteSpace($htmlpage)) { return @() }
+
+        $safeBuild = if ([string]::IsNullOrWhiteSpace($BuildToken)) { '\d{4,5}' } else { [regex]::Escape($BuildToken) }
+
+        # Legacy DriFT-style pattern from 1.79.
+        $legacyPattern = 'supLeftNavLink.*?(href=\".*?\")>(.*?)(KB\d{7})\D+((?:(?!Preview).)' + $safeBuild + '.*?)(?:\)|<)'
+        $links = [regex]::Matches(
+            $htmlpage,
+            $legacyPattern,
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline
+        )
+
+        # Broader fallback for Microsoft page markup changes.
+        if (@($links).Count -eq 0) {
+            $fallbackPattern = '<a[^>]+href=\"(?<href>[^"]+)\"[^>]*>\s*(?<text>(?:(?!Preview).)*?(?<kb>KB\d{7})(?:(?!Preview).)*?' + $safeBuild + '.*?)</a>'
+            $links = [regex]::Matches(
+                $htmlpage,
+                $fallbackPattern,
+                [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline
+            )
+        }
+
+        $rows = @()
+
+        foreach ($link in @($links)) {
+            $rawText = ''
+            $kb = ''
+            $href = ''
+            $buildText = ''
+
+            if ($link.Groups['kb'] -and $link.Groups['kb'].Success) {
+                $kb = $link.Groups['kb'].Value
+                $rawText = $link.Groups['text'].Value
+                $href = $link.Groups['href'].Value
+                $buildText = $rawText
+            }
+            else {
+                $kb = $link.Groups[3].Value
+                $rawText = $link.Groups[2].Value
+                $buildText = $link.Groups[4].Value
+                $href = (($link.Groups[1].Value -split 'href="')[-1] -split '"')[0]
+            }
+
+            if ([string]::IsNullOrWhiteSpace($kb)) { continue }
+            if ($rawText -imatch 'Preview' -or $buildText -imatch 'Preview') { continue }
+
+            $dateText = (($rawText -replace '&#x2014;', ' ') -replace '<.*?>',' ' -replace '\s+',' ').Trim()
+            $buildClean = (($buildText -replace '<.*?>',' ') -replace '\s+',' ').Trim()
+            $desc = (($dateText + ' ' + $kb + ' ' + $buildClean) -replace '\s+',' ').Trim()
+
+            if ($href -notmatch '^https?://') {
+                if ($href.StartsWith('/')) {
+                    $href = "https://support.microsoft.com$href"
                 }
-                $row["$($b.ServiceTag -Replace '\*')"] = $b.installedversion
-            }#IF($b.Name.length -gt 10 
-        }#ForEach($b
+                else {
+                    $href = "https://support.microsoft.com/$href"
+                }
+            }
+
+            $rows += @([PSCustomObject]@{
+                KBNumber     = $kb
+                Date         = $dateText
+                Description  = $desc
+                BuildText    = $buildClean
+                InfoLink     = $href
+                DownloadLink = ''
+            })
+        }
+
+        return @($rows | Select-Object -First $KBItemsToShow)
     }
-    #$NewReportView|Sort-Object Type,Name| Format-Table -Property @{E="Name";width = 50},???????,AvailableVersion,Criticality,ReleaseDate,CatalogInfo
-    IF(($allArrayout.ServiceTag | sort-object -Unique).count -lt 2){
-        # Single Node report
-        $ResultConvert=$AddURL | ConvertTo-Html -Head $Header -PreContent $OutTitle -PostContent $Footer
-    }Else{
-        # Multi Node report
-        $ResultConvert=$NewReportView | Where-Object{$_.type -NotMatch '@{ServiceTag='} | Sort-Object Type,Name | Select-object -Property Type,Name,???????,AvailableVersion,Criticality,ReleaseDate,CatalogInfo -Exclude RowError, RowState, Table, ItemArray, HasErrors | ConvertTo-Html -Head $Header -PreContent $OutTitle -PostContent $Footer
+    catch {
+        Write-DriFTLog -Context $Context -Message "Microsoft update history lookup failed: $($_.Exception.Message)" -Level Warn -Indent 1
+        return @()
+    }
+}
+
+function Add-DriFTWindowsUpdateRows {
+<#
+.SYNOPSIS
+    Adds latest Windows cumulative update row.
+
+.DESCRIPTION
+    Dynamically scrapes the correct Microsoft update history page for the detected
+    Windows Server / Azure Local / Azure Stack HCI OS and adds the latest non-preview
+    KB row to the report.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    if ($OperatingSystem.Family -ne 'Windows') { return @() }
+
+    $osText = @(
+        $OperatingSystem.RawName,
+        $OperatingSystem.DisplayName,
+        $OperatingSystem.Version,
+        $OperatingSystem.Build,
+        $OperatingSystem.MajorVersion,
+        $OperatingSystem.MinorVersion
+    ) -join ' '
+
+    $osText = [string]$osText
+
+    $url = Get-DriFTWindowsUpdateHistoryUrl -OsText $osText
+    if ([string]::IsNullOrWhiteSpace($url)) {
+        Write-DriFTLog -Context $Context -Message "No Microsoft update history URL mapping found for OS: $osText" -Level Warn -Indent 1
+        return @()
     }
 
-    $ResultConvertOut=$ResultConvert -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'"`
-    -replace '<td>INSTALLED</td>','<td style="background-color: #00ff00">INSTALLED</td>'`
-    -replace '<td>MISSING</td>','<td style="color: #ffffff; background-color: #ff0000">MISSING</td>'`
-    -replace '<title">hTML TABLE</title>' ,'<title"></title>'`
-    -replace '<tr><th>STATUS</th><th>KB Number</th><th>LINK</th></tr>','<tr style="color: #ffffff; background-color: #0000ff"><th>STATUS</th><th>KB Number</th><th>LINK</th></tr>'`
-    -replace 'td">hy','td>hy'`
-    -replace [Regex]::Escape("<td>***"),'<td style="color: #ffffff; background-color: #ff0000">'`
-    -replace '<td>NA</td>','<td style="background-color: #ffff00">Not Available</td>'`
-    -replace '<td>Not Applicable</td>','<td style="background-color: #ffff00">Not Available</td>'
-    $HTAOut=$HTAOut.Replace("*","")
-    Out-File $HTAOut -InputObject $ResultConvertOut
-    IF($SkipDriversandFirmware -eq "NO"){
-        If($OutputType -ne "NO"){
-            Invoke-Item($HTAOut)
-            IF($IsAZHub -eq $True){
-                $DriFTCSVOut=$NewReportView|Where-Object{$_.type -iNotMatch 'System.__ComObject'} | Sort-Object Type,Name | Select-object -Property * -Exclude RowError, RowState, Table, ItemArray, HasErrors | ConvertTo-Csv
-                Out-File $SourcePath+$DriFTVer+"_"+$DTString+".csv" -InputObject $DriFTCSVOut
-            }
-            # Export BIOSandNICCFG to XML
-            If($BIOSandNICCFG.length -gt 0){
-                $BIOSandNICCFGOutPutPath=""
-                $BIOSandNICCFGOutPutPath=$SourcePath+"\"+$FileNameGuid+"_BIOSandNICCFG.xml"
-                Write-Host "BIOS and iDRAC configuration output to: $BIOSandNICCFGOutPutPath"
-                Do{$BIOSandNICCFG+$SwPort2HostMapAll+$MBSelLogWarnERROut | Export-Clixml -Path "$BIOSandNICCFGOutPutPath"}
-                Until(Test-Path "$BIOSandNICCFGOutPutPath" -PathType Leaf)
+    $buildToken = Get-DriFTWindowsUpdateBuildToken -OsText $osText
+    $catalogProduct = Get-DriFTMicrosoftCatalogProductFilter -OsText $osText
+
+    Write-DriFTLog -Context $Context -Message "Checking Microsoft update history: $url" -Level Info -Indent 1
+
+    $kbRows = @(Get-DriFTLatestWindowsUpdateFromMicrosoft `
+        -Url $url `
+        -BuildToken $buildToken `
+        -KBItemsToShow 1 `
+        -Context $Context)
+
+    if (@($kbRows).Count -eq 0) {
+        return @(
+            New-DriFTReportRow `
+                -ServiceTag $System.ServiceTag `
+                -PowerEdge $System.PowerEdge `
+                -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
+                -Type 'OS' `
+                -Category 'Microsoft Update' `
+                -Name "Microsoft update history lookup returned no non-preview KB for $osText" `
+                -InstalledVersion 'NA' `
+                -AvailableVersion 'Not Available' `
+                -CatalogInfo 'support.microsoft.com' `
+                -Criticality 'Not Available' `
+                -ReleaseDate '' `
+                -URL $url `
+                -Details $url `
+                -SourceType $System.SourceType
+        )
+    }
+
+    $rows = @()
+
+    foreach ($kb in $kbRows) {
+        $downloadLink = Get-DriFTFirstNonEmpty $kb.DownloadLink
+
+        if ([string]::IsNullOrWhiteSpace($downloadLink)) {
+            $downloadLink = Get-DriFTKbDownloadLink `
+                -KBNumber $kb.KBNumber `
+                -Product $catalogProduct `
+                -Context $Context
+        }
+
+        $rows += @(
+            New-DriFTReportRow `
+                -ServiceTag $System.ServiceTag `
+                -PowerEdge $System.PowerEdge `
+                -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
+                -Type 'OS' `
+                -Category 'Microsoft Update' `
+                -Name $kb.Description `
+                -InstalledVersion 'NA' `
+                -AvailableVersion $kb.KBNumber `
+                -CatalogInfo 'support.microsoft.com / catalog.update.microsoft.com' `
+                -Criticality 'Not Available' `
+                -ReleaseDate $kb.Date `
+                -URL (Get-DriFTFirstNonEmpty $downloadLink $kb.InfoLink) `
+                -Details $kb.InfoLink `
+                -SourceType $System.SourceType
+        )
+    }
+
+    return @($rows)
+}
+
+
+function Invoke-DriFTBroadcomIoCompatibility {
+<#
+.SYNOPSIS
+    Queries the Broadcom Compatibility Guide IO endpoint.
+
+.DESCRIPTION
+    Tries several ESXi release label formats because Broadcom's filter values can
+    vary between UI/API versions.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$VendorID,
+        [Parameter(Mandatory)][string]$DeviceID,
+        [Parameter(Mandatory)][string]$SubVendorID,
+        [Parameter(Mandatory)][string]$SubDeviceID,
+        [Parameter(Mandatory)][string]$EsxiVersion
+    )
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    $releaseCandidates = @(
+        "ESXi $EsxiVersion",
+        "VMware ESXi $EsxiVersion",
+        $EsxiVersion
+    )
+
+    if ($EsxiVersion -match '^(?<base>\d+\.\d+)\s+U(?<u>\d+)$') {
+        $releaseCandidates += @(
+            "ESXi $($Matches.base) Update $($Matches.u)",
+            "VMware ESXi $($Matches.base) Update $($Matches.u)"
+        )
+    }
+
+    $releaseCandidates = @($releaseCandidates | Sort-Object -Unique)
+
+    foreach ($release in $releaseCandidates) {
+        $body = @{
+            programId = 'io'
+            filters   = @(
+                @{ displayKey = 'vid';                   filterValues = @($VendorID) },
+                @{ displayKey = 'did';                   filterValues = @($DeviceID) },
+                @{ displayKey = 'svid';                  filterValues = @($SubVendorID) },
+                @{ displayKey = 'ssid';                  filterValues = @($SubDeviceID) },
+                @{ displayKey = 'productReleaseVersion'; filterValues = @($release) }
+            )
+            keyword = @()
+        } | ConvertTo-Json -Depth 8
+
+        try {
+            $result = Invoke-RestMethod `
+                -Uri 'https://compatibilityguide.broadcom.com/compguide/programs/viewResults?limit=50&page=1&sortBy=&sortType=ASC' `
+                -Method Post `
+                -ContentType 'application/json' `
+                -Body $body `
+                -UseBasicParsing `
+                -ErrorAction Stop
+
+            $rows = @(Get-DriFTBcgResultRows -BcgResponse $result)
+            if (@($rows).Count -gt 0) {
+                return $result
             }
         }
-    } 
-}
-Write-Host " "
-IF(!($CluChkMode -imatch "YES")){
-    If(!($args)){
-        $Run=Read-Host "Would you like to process another? [y/n]"
+        catch {
+            $lastError = $_.Exception.Message
+        }
     }
-}Else{$Run="n"}
-If($Run -notmatch "y"){EndScript}
-$allArrayout=@()
-$allArray=@()
-$ServiceTagList=@()
-}While($Run -eq "y")
 
-#Variable Cleanup
-#Remove-Variable * -ErrorAction SilentlyContinue
-
-# Cleanup files
-IF(Test-Path $DownloadFile){Remove-Item -Path $DownloadFile}
-IF(Test-Path $ExtracLoc){Remove-Item $ExtracLoc -Recurse}
+    return [PSCustomObject]@{
+        success = $false
+        data    = [PSCustomObject]@{ count = 0; fieldValues = @() }
+        error   = $lastError
+    }
 }
+
+function Get-DriFTBcgCompatibilityMatch {
+<#
+.SYNOPSIS
+    Gets the best Broadcom Compatibility Guide match for an installed PCI device.
+
+.DESCRIPTION
+    Tries exact VendorID/DeviceID/SubVendorID/SubDeviceID first. If no match is
+    returned, retries with SubVendorID and SubDeviceID swapped to preserve the legacy
+    DriFT workaround for devices whose subsystem IDs are reported in reverse order.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Device,
+        [Parameter(Mandatory)][string]$EsxiVersion
+    )
+
+    $vendorId    = Convert-DriFTHexId $Device.VendorID
+    $deviceId    = Convert-DriFTHexId $Device.DeviceID
+    $subVendorId = Convert-DriFTHexId $Device.SubVendorID
+    $subDeviceId = Convert-DriFTHexId $Device.SubDeviceID
+
+    if ([string]::IsNullOrWhiteSpace($vendorId) -or
+        [string]::IsNullOrWhiteSpace($deviceId) -or
+        [string]::IsNullOrWhiteSpace($subVendorId) -or
+        [string]::IsNullOrWhiteSpace($subDeviceId)) {
+        return $null
+    }
+
+    $found = Invoke-DriFTBroadcomIoCompatibility `
+        -VendorID $vendorId `
+        -DeviceID $deviceId `
+        -SubVendorID $subVendorId `
+        -SubDeviceID $subDeviceId `
+        -EsxiVersion $EsxiVersion
+
+    if (@(Get-DriFTBcgResultRows -BcgResponse $found).Count -eq 0) {
+        $found = Invoke-DriFTBroadcomIoCompatibility `
+            -VendorID $vendorId `
+            -DeviceID $deviceId `
+            -SubVendorID $subDeviceId `
+            -SubDeviceID $subVendorId `
+            -EsxiVersion $EsxiVersion
+    }
+
+    return $found
+}
+
+
+function Get-DriFTBcgResultRows {
+<#
+.SYNOPSIS
+    Normalizes Broadcom Compatibility Guide API response row shapes.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$BcgResponse)
+
+    if ($null -eq $BcgResponse) { return @() }
+
+    foreach ($candidate in @(
+        $BcgResponse.data.fieldValues,
+        $BcgResponse.data.results,
+        $BcgResponse.data.items,
+        $BcgResponse.fieldValues,
+        $BcgResponse.results,
+        $BcgResponse.items,
+        $BcgResponse.rows
+    )) {
+        $rows = @($candidate | Where-Object { $null -ne $_ })
+        if (@($rows).Count -gt 0) { return @($rows) }
+    }
+
+    return @()
+}
+
+
+
+function Get-DriFTBcgRowText {
+<#
+.SYNOPSIS
+    Flattens a Broadcom Compatibility Guide row to searchable text.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$Row)
+
+    if ($null -eq $Row) { return '' }
+
+    $parts = @()
+
+    try {
+        foreach ($prop in @($Row.PSObject.Properties)) {
+            if ($null -ne $prop.Value) {
+                $parts += @([string]$prop.Name)
+                $parts += @([string]$prop.Value)
+            }
+        }
+
+        if ($Row.model) {
+            foreach ($m in @($Row.model)) {
+                foreach ($prop in @($m.PSObject.Properties)) {
+                    if ($null -ne $prop.Value) { $parts += @([string]$prop.Value) }
+                }
+            }
+        }
+
+        if ($Row.hoverData) {
+            foreach ($h in @($Row.hoverData)) {
+                foreach ($prop in @($h.PSObject.Properties)) {
+                    if ($null -ne $prop.Value) { $parts += @([string]$prop.Value) }
+                }
+            }
+        }
+    }
+    catch { }
+
+    return (($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' | ')
+}
+
+function Get-DriFTBcgProductIdFromRow {
+<#
+.SYNOPSIS
+    Extracts the published productId from a BCG result row.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$Row)
+
+    if ($null -eq $Row) { return '' }
+
+    try {
+        if ($Row.model -and $Row.model[0]) {
+            $modelUrl = Get-DriFTFirstNonEmpty $Row.model[0].url
+            if ($modelUrl -match 'productId=([^&]+)') { return $Matches[1] }
+        }
+
+        foreach ($prop in @($Row.PSObject.Properties)) {
+            if ([string]$prop.Value -match 'productId=([^&]+)') { return $Matches[1] }
+        }
+
+        # Only use explicit productId fields, never generic row id.
+        return Get-DriFTFirstNonEmpty `
+            $Row.productId `
+            $Row.productID `
+            $Row.product.id `
+            $Row.product.productId
+    }
+    catch {
+        return ''
+    }
+}
+
+function Get-DriFTBcgRowScore {
+<#
+.SYNOPSIS
+    Scores a BCG result row against the installed device.
+
+.DESCRIPTION
+    Prevents the rewrite from picking the first returned BCG row when multiple
+    products share the same Broadcom DeviceID. Exact subsystem identity and model
+    text matches are preferred, which restores legacy DriFT behavior such as
+    BCM57414 selecting productId 43268 instead of unrelated/unpublished IDs.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Row,
+        [Parameter(Mandatory)]$Device
+    )
+
+    $score = 0
+    $text = Get-DriFTBcgRowText -Row $Row
+
+    $vendorId    = Convert-DriFTHexId $Device.VendorID
+    $deviceId    = Convert-DriFTHexId $Device.DeviceID
+    $subVendorId = Convert-DriFTHexId $Device.SubVendorID
+    $subDeviceId = Convert-DriFTHexId $Device.SubDeviceID
+
+    foreach ($id in @($vendorId, $deviceId, $subVendorId, $subDeviceId)) {
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+
+        if ($text -imatch "(^|[^0-9A-F])$([regex]::Escape($id))([^0-9A-F]|$)") {
+            $score += 25
+        }
+    }
+
+    $display = Get-DriFTFirstNonEmpty $Device.ElementName $Device.Display $Device.RelatedItem
+    if (-not [string]::IsNullOrWhiteSpace($display)) {
+        $tokens = @(([string]$display -split '[\s,;/\(\)\[\]\-]+' | Where-Object { $_.Length -ge 4 } | Sort-Object -Unique))
+        foreach ($token in $tokens) {
+            if ($text -imatch [regex]::Escape($token)) { $score += 3 }
+        }
+    }
+
+    $productId = Get-DriFTBcgProductIdFromRow -Row $Row
+    if (-not [string]::IsNullOrWhiteSpace($productId)) { $score += 10 }
+
+    # Prefer rows with a published model URL because legacy DriFT derived the
+    # correct detail links from model[0].url.
+    try {
+        $modelUrl = Get-DriFTFirstNonEmpty $Row.model[0].url
+        if ($modelUrl -match 'productId=') { $score += 20 }
+    }
+    catch { }
+
+    return $score
+}
+
+function Select-DriFTBestBcgResultRow {
+<#
+.SYNOPSIS
+    Selects the best BCG row for one installed device.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][object[]]$Rows,
+        [Parameter(Mandatory)]$Device
+    )
+
+    $scored = @()
+
+    foreach ($row in @($Rows | Where-Object { $null -ne $_ })) {
+        $score = Get-DriFTBcgRowScore -Row $row -Device $Device
+        $productId = Get-DriFTBcgProductIdFromRow -Row $row
+
+        $scored += @([PSCustomObject]@{
+            Score     = $score
+            ProductId = $productId
+            Row       = $row
+        })
+    }
+
+    # If rows are otherwise equal, choose the lowest numeric productId because
+    # Broadcom often returns newer/unpublished duplicate product records later.
+    return @($scored |
+        Sort-Object `
+            @{ Expression = 'Score'; Descending = $true },
+            @{ Expression = {
+                try { [int]$_.ProductId }
+                catch { [int]::MaxValue }
+            }; Descending = $false } |
+        Select-Object -First 1 -ExpandProperty Row)
+}
+
+
+
+function Add-DriFTEsxiReleaseToBcgUrl {
+<#
+.SYNOPSIS
+    Adds ESXi release selection parameters to a Broadcom Compatibility Guide detail URL.
+
+.DESCRIPTION
+    Broadcom detail pages default to the newest ESXi release. Adding
+    productReleaseVersion and redirectFrom causes the page to open with the ESXi
+    version detected from the TSR, such as ESXi 8.0 U3.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$Url,
+        [AllowNull()][string]$EsxiVersion
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $Url }
+    if ([string]::IsNullOrWhiteSpace($EsxiVersion)) { return $Url }
+
+    $cleanUrl = ([string]$Url).Replace('&amp;','&')
+
+    if ($cleanUrl -match 'productReleaseVersion=') {
+        return $cleanUrl
+    }
+
+    $releaseText = "ESXi $EsxiVersion"
+    $encodedProductRelease = [System.Uri]::EscapeDataString("[$releaseText]")
+    $encodedRedirect = [System.Uri]::EscapeDataString($releaseText)
+
+    $separator = if ($cleanUrl.Contains('?')) { '&' } else { '?' }
+
+    return "$cleanUrl${separator}productReleaseVersion=$encodedProductRelease&redirectFrom=$encodedRedirect"
+}
+
+
+function Get-DriFTBcgProductInfo {
+<#
+.SYNOPSIS
+    Extracts product display values from a Broadcom Compatibility Guide row.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$BcgResult)
+
+    $productId = Get-DriFTBcgProductIdFromRow -Row $BcgResult
+    $model = 'No Data Found'
+    $deviceType = 'No Data Found'
+    $detailsLink = ''
+
+    try {
+        if ($BcgResult.model -and $BcgResult.model[0]) {
+            $model = Get-DriFTFirstNonEmpty $BcgResult.model[0].name $model
+
+            $modelUrl = Get-DriFTFirstNonEmpty $BcgResult.model[0].url
+            if (-not [string]::IsNullOrWhiteSpace($modelUrl)) {
+                if ($modelUrl -match '^https?://') {
+                    $detailsLink = $modelUrl
+                }
+                elseif ($modelUrl.StartsWith('/')) {
+                    $detailsLink = "https://compatibilityguide.broadcom.com$modelUrl"
+                }
+            }
+        }
+
+        if ($BcgResult.deviceType -and $BcgResult.deviceType[0].name) {
+            $deviceType = $BcgResult.deviceType[0].name
+        }
+        elseif ($BcgResult.deviceTypes -and $BcgResult.deviceTypes[0].name) {
+            $deviceType = $BcgResult.deviceTypes[0].name
+        }
+        elseif ($BcgResult.hoverData) {
+            $hoverDeviceType = $BcgResult.hoverData |
+                Where-Object { $_.displayName -eq 'Device Type' } |
+                Select-Object -First 1
+
+            if ($hoverDeviceType -and $hoverDeviceType.value) {
+                $deviceType = $hoverDeviceType.value
+            }
+        }
+
+        if ($model -eq 'No Data Found') {
+            $model = Get-DriFTFirstNonEmpty `
+                $BcgResult.modelName `
+                $BcgResult.productName `
+                $BcgResult.name `
+                $BcgResult.displayName `
+                $model
+        }
+
+        if ($deviceType -eq 'No Data Found') {
+            $deviceType = Get-DriFTFirstNonEmpty `
+                $BcgResult.deviceTypeName `
+                $BcgResult.category `
+                $deviceType
+        }
+    }
+    catch { }
+
+    if ([string]::IsNullOrWhiteSpace($detailsLink)) {
+        if (-not [string]::IsNullOrWhiteSpace($productId)) {
+            $detailsLink = "https://compatibilityguide.broadcom.com/detail?persona=live&productId=$productId&program=io"
+        }
+        else {
+            $detailsLink = 'https://compatibilityguide.broadcom.com/search?program=io'
+        }
+    }
+
+    if ($detailsLink -match 'productId=([^&]+)') {
+        $productId = $Matches[1]
+        $detailsLink = "https://compatibilityguide.broadcom.com/detail?persona=live&productId=$productId&program=io"
+    }
+
+    [PSCustomObject]@{
+        ProductId   = $productId
+        Model       = $model
+        DeviceType  = $deviceType
+        DetailsLink = $detailsLink
+    }
+}
+
+function Get-DriFTVmwareCompatibilityDeviceRows {
+<#
+.SYNOPSIS
+    Filters installed inventory to devices useful for VMware/Broadcom IO lookup.
+#>
+    [CmdletBinding()]
+    param([AllowEmptyCollection()][object[]]$Inventory)
+
+    return @($Inventory |
+        Where-Object {
+            $_ -and
+            -not [string]::IsNullOrWhiteSpace((Convert-DriFTHexId $_.VendorID)) -and
+            -not [string]::IsNullOrWhiteSpace((Convert-DriFTHexId $_.DeviceID)) -and
+            -not [string]::IsNullOrWhiteSpace((Convert-DriFTHexId $_.SubVendorID)) -and
+            -not [string]::IsNullOrWhiteSpace((Convert-DriFTHexId $_.SubDeviceID))
+        } |
+        Sort-Object VendorID,DeviceID,SubVendorID,SubDeviceID -Unique)
+}
+
+
+function Add-DriFTVmwareCompatibilityRows {
+<#
+.SYNOPSIS
+    Adds VMware/vSAN Broadcom Compatibility Guide driver rows.
+
+.DESCRIPTION
+    Restores legacy DriFT behavior for ESXi/vSAN systems. The installed hardware
+    PCI identity is sent to Broadcom Compatibility Guide and matching IO device rows
+    are added to the report as DRVR rows with VMware/Broadcom support links.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Inventory,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    $osText = "$($OperatingSystem.RawName) $($OperatingSystem.DisplayName) $($OperatingSystem.Version)"
+    if ($OperatingSystem.Family -ne 'VMware' -and $osText -notmatch 'VMware|ESXi|vSAN') {
+        return @()
+    }
+
+    $esxiVersion = Get-DriFTEsxiVersionFromText -Text $OperatingSystem.Version
+    if ([string]::IsNullOrWhiteSpace($esxiVersion)) {
+        $esxiVersion = ConvertTo-DriFTVmwareVersion -OSName $OperatingSystem.RawName -OSVersion $OperatingSystem.Version
+    }
+    if ([string]::IsNullOrWhiteSpace($esxiVersion)) {
+        $esxiVersion = ConvertTo-DriFTVmwareVersion -OSName $OperatingSystem.DisplayName -OSVersion ''
+    }
+
+    if ([string]::IsNullOrWhiteSpace($esxiVersion)) {
+        Write-DriFTLog -Context $Context -Message 'VMware/vSAN compatibility lookup skipped: ESXi version could not be determined.' -Level Warn -Indent 1
+        return @()
+    }
+
+    Write-DriFTLog -Context $Context -Message "Gathering VMware/vSAN supported driver versions from Broadcom Compatibility Guide for ESXi $esxiVersion..." -Level Info -Indent 1
+
+    $rows = @()
+    $devices = @(Get-DriFTVmwareCompatibilityDeviceRows -Inventory $Inventory)
+    Export-DriFTDebugData -Context $Context -Name "$($System.ServiceTag)_VMware_BCG_InputDevices.csv" -InputObject $devices
+
+    foreach ($device in $devices) {
+        $found = Get-DriFTBcgCompatibilityMatch -Device $device -EsxiVersion $esxiVersion
+
+        $bcgRows = @(Get-DriFTBcgResultRows -BcgResponse $found)
+
+        if (@($bcgRows).Count -gt 0) {
+            $bcgResult = Select-DriFTBestBcgResultRow -Rows $bcgRows -Device $device
+
+            if (-not $bcgResult) { continue }
+
+            $bcgInfo = Get-DriFTBcgProductInfo -BcgResult $bcgResult
+            $bcgInfo.DetailsLink = Add-DriFTEsxiReleaseToBcgUrl -Url $bcgInfo.DetailsLink -EsxiVersion $esxiVersion
+
+            Write-DriFTLog -Context $Context -Message ("BCG selected for {0}: productId={1}; model={2}; score={3}; ESXi={4}" -f (Get-DriFTFirstNonEmpty $device.ElementName $device.Display), $bcgInfo.ProductId, $bcgInfo.Model, (Get-DriFTBcgRowScore -Row $bcgResult -Device $device), $esxiVersion) -Level Info -Indent 2
+
+            $rows += @(New-DriFTReportRow `
+                -ServiceTag $System.ServiceTag `
+                -PowerEdge $System.PowerEdge `
+                -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
+                -Type 'DRVR' `
+                -Category (Get-DriFTFirstNonEmpty $bcgInfo.DeviceType 'No Data Found') `
+                -Name (Get-DriFTFirstNonEmpty $bcgInfo.Model $device.ElementName $device.Display 'No Data Found') `
+                -InstalledVersion 'NA' `
+                -AvailableVersion 'See Broadcom Compatibility Guide' `
+                -CatalogInfo 'Broadcom Compatibility Guide' `
+                -Criticality 'No Data Found' `
+                -ReleaseDate 'No Data Found' `
+                -URL $bcgInfo.DetailsLink `
+                -Details $bcgInfo.DetailsLink `
+                -SourceType $System.SourceType)
+        }
+    }
+
+    $rows = @($rows | Sort-Object ServiceTag,Type,Category,Name,URL -Unique)
+
+    Write-DriFTLog -Context $Context -Message "VMware/vSAN Broadcom Compatibility Guide rows added: $(@($rows).Count)" -Level Info -Indent 1
+    if (@($rows).Count -eq 0) {
+        Write-DriFTLog -Context $Context -Message "No BCG rows were returned. Check ESXi version parsed as '$esxiVersion' and PCI identities in normalized inventory." -Level Warn -Indent 1
+    }
+
+    return @($rows)
+}
+
+function Get-DriFTSelHealthRows {
+<#
+.SYNOPSIS
+    Parses SEL warnings/errors from CurrentMBSel.txt.
+
+.DESCRIPTION
+    Port existing SEL parsing here. Keep it scoped to known SEL directories to avoid
+    recursive PathTooLong issues in extracted 17G Redfish trees.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$Context
+    )
+
+    return @()
+}
+
+function Get-DriFTBiosAndIdracConfigRows {
+<#
+.SYNOPSIS
+    Adds BIOS/iDRAC configuration compliance rows.
+
+.DESCRIPTION
+    Port existing Azure Stack HCI, Azure Stack Hub, and QLogic config checks here.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$OperatingSystem,
+        [Parameter(Mandatory)]$Context
+    )
+
+    return @()
+}
+
+function Get-DriFTSwitchPortMapRows {
+<#
+.SYNOPSIS
+    Builds CluChk switch-port-to-host map.
+
+.DESCRIPTION
+    Port existing SwitchPortConnectionID mapping here.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Collection,
+        [Parameter(Mandatory)]$System,
+        [Parameter(Mandatory)]$Context
+    )
+
+    return @()
+}
+
+function Write-DriFTCluChkOutputs {
+<#
+.SYNOPSIS
+    Writes CluChk supplemental XML outputs.
+
+.DESCRIPTION
+    Combines BIOS/iDRAC config rows, switch map rows, and SEL rows into the expected
+    CluChk output file.
+#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Context,
+        [AllowEmptyCollection()][object[]]$BiosConfigRows,
+        [AllowEmptyCollection()][object[]]$SwitchMapRows,
+        [AllowEmptyCollection()][object[]]$SelRows
+    )
+
+    if (-not $Context.FileNameGuid) { return }
+
+    $outputRoot = if ($Context.OutputRoot) { $Context.OutputRoot } else { $PWD.Path }
+    $path = Join-Path $outputRoot "$($Context.FileNameGuid)_BIOSandNICCFG.xml"
+
+    @($BiosConfigRows + $SwitchMapRows + $SelRows) | Export-Clixml -Path $path
+    Write-DriFTLog -Context $Context -Message "CluChk output written to: $path" -Level Success
+}
+
+#endregion Supplemental Capability Placeholders
+
+#region Generic Helpers
+
+
+function ConvertTo-DriFTSafeDateTime {
+<#
+.SYNOPSIS
+    Safely converts catalog release dates for sorting.
+
+.DESCRIPTION
+    Catalog data can occasionally have missing or malformed date values. This helper
+    prevents Sort-Object scriptblocks from throwing during matching or fallback
+    selection.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$Value)
+
+    try {
+        if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) {
+            return [datetime]::MinValue
+        }
+
+        return [datetime]$Value
+    }
+    catch {
+        return [datetime]::MinValue
+    }
+}
+
+function ConvertTo-DriFTHtmlText {
+<#
+.SYNOPSIS
+    HTML-encodes report text.
+
+.DESCRIPTION
+    Keeps report rendering safe if a catalog field or URL ever contains quotes,
+    ampersands, or other HTML-sensitive characters.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return '' }
+
+    Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+    return [System.Web.HttpUtility]::HtmlEncode([string]$Value)
+}
+
+function New-DriFTHtmlLink {
+<#
+.SYNOPSIS
+    Creates a HTML hyperlink for the DriFT report.
+
+.DESCRIPTION
+    Prevents Broadcom Compatibility Guide URLs from displaying '&amp;' in the
+    visible text while still remaining valid HTML links.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$Url,
+        [AllowNull()][string]$Text
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return ''
+    }
+
+    $safeUrl = ([string]$Url).Replace('&amp;','&')
+
+    $displayText = Get-DriFTFirstNonEmpty $Text $Url
+    if ($null -eq $displayText) {
+        $displayText = $safeUrl
+    }
+
+    $displayText = ([string]$displayText).Replace('&amp;','&')
+
+    # URL display text should remain human-readable and not show HTML entities.
+    if ($displayText -match '^https?://') {
+        $safeText = $displayText
+    }
+    else {
+        $safeText = ConvertTo-DriFTHtmlText $displayText
+    }
+
+    return "<a href='$safeUrl' target='_blank'>$safeText</a>"
+}
+
+
+function Get-DriFTFirstNonEmpty {
+<#
+.SYNOPSIS
+    Returns the first non-empty value from a candidate list.
+#>
+    [CmdletBinding()]
+    param([Parameter(ValueFromRemainingArguments = $true)]$Values)
+
+    foreach ($value in $Values) {
+        if ($null -eq $value) { continue }
+
+        foreach ($item in @($value)) {
+            if ($null -ne $item -and -not [string]::IsNullOrWhiteSpace([string]$item)) {
+                return [string]$item
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-DriFTObjectProperty {
+<#
+.SYNOPSIS
+    Safely reads a property from JSON/PSCustomObject/XML objects.
+
+.DESCRIPTION
+    Avoids PropertyNotFoundStrict errors when optional 17G metadata or Redfish
+    fields are missing.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$InputObject,
+        [Parameter(Mandatory)][string]$PropertyName
+    )
+
+    if ($null -eq $InputObject) { return $null }
+
+    try {
+        $prop = $InputObject.PSObject.Properties[$PropertyName]
+        if ($prop) { return $prop.Value }
+    }
+    catch { }
+
+    return $null
+}
+
+
+function Convert-DriFTHexId {
+<#
+.SYNOPSIS
+    Normalizes PCI IDs to uppercase hex without 0x or separators.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return '' }
+
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+
+    if ($text -match '0x([0-9a-fA-F]+)') { $text = $Matches[1] }
+
+    $text = $text -replace '[^0-9a-fA-F]', ''
+    if ($text.Length -eq 0) { return '' }
+
+    return $text.ToUpper()
+}
+
+function Get-DriFTCimPropertyValue {
+<#
+.SYNOPSIS
+    Gets a property value from a CIM XML INSTANCE node.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$Instance,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if (-not $Instance) { return $null }
+
+    return ($Instance.Property | Where-Object { $_.Name -eq $Name } | Select-Object -First 1).Value
+}
+
+function Get-DriFTCimArrayCurrentValue {
+<#
+.SYNOPSIS
+    Gets CurrentValue from a CIM XML INSTANCE node.
+#>
+    [CmdletBinding()]
+    param([AllowNull()]$Instance)
+
+    if (-not $Instance) { return $null }
+
+    $current = $Instance.'PROPERTY.ARRAY' |
+        Where-Object { $_.Name -eq 'CurrentValue' } |
+        Select-Object -First 1
+
+    if ($current.'VALUE.ARRAY'.VALUE) {
+        return @($current.'VALUE.ARRAY'.VALUE)[0]
+    }
+
+    return $null
+}
+
+function Get-DriFTMetadataJson {
+<#
+.SYNOPSIS
+    Loads TSR metadata.json if present.
+#>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Root)
+
+    $path = Get-ChildItem -Path $Root -Filter 'metadata.json' -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+
+    if (-not $path) { return $null }
+
+    try { return Get-Content -Raw -Path $path | ConvertFrom-Json }
+    catch { return $null }
+}
+
+function ConvertTo-DriFTServerModel {
+<#
+.SYNOPSIS
+    Normalizes Dell model strings to catalog model names.
+
+.DESCRIPTION
+    Handles PowerEdge, AX, S2D Ready Node, Precision, XR2, XC, and R320/NX400 cases.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$Model)
+
+    if ([string]::IsNullOrWhiteSpace($Model)) { return '' }
+
+    $serverType = $Model.Trim()
+
+    if ($serverType -match 'XR2') { return 'R440' }
+
+    if ($serverType -match 'AX-') {
+        return ($serverType -replace 'AX-', 'R' -split '\s+')[0]
+    }
+
+    if ($serverType -match 'Storage Spaces Direct') {
+        $serverType = $serverType -replace ' Storage Spaces Direct RN','' -replace ' Storage Spaces Direct R',''
+    }
+
+    if ($serverType -match 'Precision') {
+        return $serverType
+    }
+
+    if ($serverType.Length -gt 4) {
+        $parts = $serverType -split '\W'
+        if (@($parts).Count -gt 1) { $serverType = $parts[1] }
+    }
+
+    if (($serverType -like 'XC*') -and ((([regex]::Match($serverType, '\d+').Groups[0].Value).Trim()).Length -eq 4)) {
+        $serverType = $serverType -replace 'XC', 'C'
+    }
+    else {
+        $serverType = $serverType -replace 'XC', 'R'
+    }
+
+    if ($serverType -eq 'R320') { $serverType = 'R320/NX400' }
+
+    return $serverType
+}
+
+function Get-DriFTCatalogNeed {
+<#
+.SYNOPSIS
+    Determines whether special catalogs are needed.
+
+.DESCRIPTION
+    Keeps HCI/Precision detection in one place.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$Model,
+        [AllowNull()][string]$NormalizedModel
+    )
+
+    $special = 'NO'
+    $s2d = 'NO'
+
+    if ($Model -match 'Precision') {
+        $special = 'Precision'
+    }
+    elseif ($Model -imatch 'AX|Azure Stack HCI|Storage Spaces Direct') {
+        $special = 'HCI'
+        $s2d = 'YES'
+    }
+
+    [PSCustomObject]@{
+        SpecialCatalogNeeded = $special
+        S2DCatalogNeeded     = $s2d
+    }
+}
+
+function ConvertTo-DriFTOperatingSystemInfo {
+<#
+.SYNOPSIS
+    Normalizes OS name/version to DriFT OS object.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$OSName,
+        [AllowNull()][string]$OSVersion
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OSName)) {
+        return New-DriFTOperatingSystemInfo `
+            -RawName '' `
+            -Family 'Windows' `
+            -DisplayName 'NO OS Detected in TSR Data: Assuming Windows 64bit' `
+            -Version '' `
+            -MajorVersion 6 `
+            -MinorVersion 3 `
+            -Build ''
+    }
+
+    if ($OSName -imatch 'VMware|ESXi|vSAN' -or $OSVersion -imatch 'VMware|ESXi|vSAN|\d+\.\d+\s*U\d+') {
+        # vSAN Ready Node / vSAN OS strings should use the same VMware/Broadcom
+        # driver and firmware compatibility path as ESXi.
+        $vmw = ConvertTo-DriFTVmwareVersion -OSName $OSName -OSVersion $OSVersion
+
+        return New-DriFTOperatingSystemInfo `
+            -RawName $OSName `
+            -Family 'VMware' `
+            -DisplayName $OSName `
+            -Version $vmw `
+            -CatalogPackageType 'LW64' `
+            -DriverSupport $true
+    }
+
+    $year = ''
+    $major = ''
+    $minor = ''
+    $build = ''
+
+    switch -Regex ($OSName) {
+        '2008.*R2' { $year = '2008 R2'; $major = 6; $minor = 1; break }
+        '2008'     { $year = '2008';    $major = 6; $minor = 0; break }
+        '2012.*R2' { $year = '2012 R2'; $major = 6; $minor = 3; break }
+        '2012'     { $year = '2012';    $major = 6; $minor = 2; break }
+        '2016'     { $year = '2016';    $major = 10; $minor = 0; break }
+        '2019'     { $year = '2019';    $major = 10; $minor = 17763; $build = '17763'; break }
+        '2022'     { $year = '2022';    $major = 10; $minor = 0; $build = '20348'; break }
+        '20H2'     { $year = '20H2';    $major = 10; $minor = 0; $build = '17784'; break }
+        '21H2'     { $year = '21H2';    $major = 10; $minor = 0; $build = '20348'; break }
+        '22H2'     { $year = '22H2';    $major = 10; $minor = 0; $build = '20349'; break }
+        '23H2'     { $year = '23H2';    $major = 10; $minor = 0; $build = '25398'; break }
+        default    { $year = $OSName;   $major = ''; $minor = ''; break }
+    }
+
+    return New-DriFTOperatingSystemInfo `
+        -RawName $OSName `
+        -Family 'Windows' `
+        -DisplayName $OSName `
+        -Version $build `
+        -CatalogPackageType 'LW64' `
+        -MajorVersion $major `
+        -MinorVersion $minor `
+        -Build $build `
+        -DriverSupport $true
+}
+
+
+function Get-DriFTEsxiVersionFromText {
+<#
+.SYNOPSIS
+    Extracts an ESXi/vSAN version string suitable for Broadcom Compatibility Guide.
+
+.DESCRIPTION
+    Handles strings such as:
+      Dell-VMware ESXi 8.0 U3
+      VMware ESXi 8.0 Update 3
+      8.0.3
+      7.0 U3
+    and ignores image/profile strings such as Dell-ESXi when no version is present.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+
+    $value = ([string]$Text).Trim()
+
+    if ($value -match '(?<major>[678])\.(?<minor>[057])\s*(?:Update\s*|U\s*)?(?<update>[123])') {
+        return "$($Matches.major).$($Matches.minor) U$($Matches.update)"
+    }
+
+    if ($value -match '(?<major>[678])\.(?<minor>[057])\.(?<patch>[123])') {
+        return "$($Matches.major).$($Matches.minor) U$($Matches.patch)"
+    }
+
+    if ($value -match '(?<major>[678])\.(?<minor>[057])') {
+        return "$($Matches.major).$($Matches.minor)"
+    }
+
+    return ''
+}
+
+function Get-DriFTBestEsxiVersion {
+<#
+.SYNOPSIS
+    Finds the best ESXi/vSAN version from OS name/version fields.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$OSName,
+        [AllowNull()][string]$OSVersion,
+        [AllowNull()][string]$DisplayName
+    )
+
+    foreach ($candidate in @($OSName, $OSVersion, $DisplayName)) {
+        $version = Get-DriFTEsxiVersionFromText -Text $candidate
+        if (-not [string]::IsNullOrWhiteSpace($version)) { return $version }
+    }
+
+    return ''
+}
+
+
+function ConvertTo-DriFTVmwareVersion {
+<#
+.SYNOPSIS
+    Normalizes VMware ESXi/vSAN versions for compatibility lookup.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$OSName,
+        [AllowNull()][string]$OSVersion
+    )
+
+    $version = Get-DriFTBestEsxiVersion -OSName $OSName -OSVersion $OSVersion -DisplayName ''
+    if (-not [string]::IsNullOrWhiteSpace($version)) { return $version }
+
+    $value = Get-DriFTFirstNonEmpty $OSVersion $OSName
+    if ([string]::IsNullOrWhiteSpace($value)) { return '' }
+
+    $value = $value -replace 'VMware ', '' -replace 'ESXi ', '' -replace 'vSAN ', '' -replace 'VMware vSAN ', '' -replace ' Update ', ' U'
+    if ($value -match 'Build') { $value = ($value -split 'Build')[0] }
+    if ($value -match 'Patch') { $value = ($value -split ' Patch')[0] }
+    if ($value -match 'GA') { $value = ($value -split 'GA ')[0] }
+
+    $value = ($value -replace '\s{2,}', ' ').Trim()
+
+    # Avoid using Dell image/profile names such as Dell-ESXi as the ESXi release.
+    if ($value -notmatch '\d+\.\d+') { return '' }
+
+    return $value
+}
+
+function Compare-DriFTVersionForReport {
+<#
+.SYNOPSIS
+    Formats installed version for report output.
+
+.DESCRIPTION
+    If InstalledVersion is older than AvailableVersion, this function prefixes an
+    internal marker. The HTML renderer converts that marker into a red cell style
+    without displaying *** to the user.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$InstalledVersion,
+        [AllowNull()][string]$AvailableVersion
+    )
+
+    $installed = Get-DriFTFirstNonEmpty $InstalledVersion
+    $available = Get-DriFTFirstNonEmpty $AvailableVersion
+
+    if ([string]::IsNullOrWhiteSpace($installed)) { return 'NA' }
+
+    $installed = $installed -replace '^OSC_', ''
+
+    if ([string]::IsNullOrWhiteSpace($available)) { return $installed }
+
+    try {
+        if ([version]$installed -lt [version]$available) {
+            return "__DRIFT_OUTDATED__$installed"
+        }
+        return $installed
+    }
+    catch {
+        if ($installed -lt $available) {
+            return "__DRIFT_OUTDATED__$installed"
+        }
+        return $installed
+    }
+}
+
+function Get-DriFT17GFqddVariants {
+<#
+.SYNOPSIS
+    Builds FQDD variants for 17G Redfish identity correlation.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$Value)
+
+    $variants = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace($Value)) { return @() }
+
+    $base = $Value.Trim()
+    [void]$variants.Add($base)
+
+    $clean = $base `
+        -replace '^DCIM[:_]CURRENT_0x23_', '' `
+        -replace '^DCIM[:_]INSTALLED_0x23_', '' `
+        -replace '^DCIM[:_]PREVIOUS_0x23_', '' `
+        -replace '^DCIM_CURRENT#', '' `
+        -replace '^DCIM_INSTALLED#', '' `
+        -replace '^DCIM_PREVIOUS#', '' `
+        -replace '^DCIM_CURRENT_', '' `
+        -replace '^DCIM_INSTALLED_', '' `
+        -replace '^DCIM_PREVIOUS_', ''
+
+    if ($clean) { [void]$variants.Add($clean) }
+
+    # DellSoftwareInventory IDs often look like:
+    #   DCIM:INSTALLED_0x23_701__NIC.Slot.5-1-1
+    # After the DCIM prefix is removed, strip the numeric inventory class prefix
+    # so correlation can find the actual FQDD.
+    $cleanFqdd = $clean -replace '^\d+__', ''
+    if ($cleanFqdd -and $cleanFqdd -ne $clean) { [void]$variants.Add($cleanFqdd) }
+
+    if ($clean -match '/') {
+        [void]$variants.Add(($clean.TrimEnd('/') -split '/')[-1])
+    }
+
+    if ($clean -match '^(NIC\.Slot\.\d+)-') { [void]$variants.Add($Matches[1]) }
+    if ($clean -match '^(RAID\.[^-\/]+\.\d+(?:-\d+)?)') { [void]$variants.Add($Matches[1]) }
+    if ($clean -match '^(Disk\.[^-\/]+)') { [void]$variants.Add($Matches[1]) }
+    if ($clean -match '^(PSU\.Slot\.\d+)') { [void]$variants.Add($Matches[1]) }
+
+    return @($variants) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique
+}
+
+function Get-DriFT17GObjectKeys {
+<#
+.SYNOPSIS
+    Builds searchable keys for a Redfish JSON object.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$JsonObject,
+        [AllowNull()][string]$FilePath
+    )
+
+    $keys = New-Object System.Collections.Generic.List[string]
+
+    foreach ($candidate in @(
+        $JsonObject.'@odata.id',
+        $JsonObject.Id,
+        $JsonObject.Name,
+        $JsonObject.FQDD,
+        $JsonObject.SoftwareId,
+        $JsonObject.SoftwareID,
+        $JsonObject.DeviceId,
+        $JsonObject.DeviceID,
+        $JsonObject.FunctionId,
+        $JsonObject.FunctionID,
+        $JsonObject.Oem.Dell.DellNIC.FQDD,
+        $JsonObject.Oem.Dell.DellNIC.Id,
+        $JsonObject.Oem.Dell.DellNIC.InstanceID,
+        $JsonObject.Oem.Dell.DellNIC.ProductName,
+        $JsonObject.Oem.Dell.DellNIC.DeviceDescription,
+        $JsonObject.Oem.Dell.DellPCIeFunction.FQDD,
+        $JsonObject.Oem.Dell.DellPCIeFunction.Id,
+        $JsonObject.Oem.Dell.DellPCIeFunction.InstanceID,
+        $JsonObject.Oem.Dell.DellPCIeFunction.DeviceDescription
+    )) {
+        if ($candidate) { [void]$keys.Add(([string]$candidate).Trim()) }
+    }
+
+    if ($FilePath) {
+        try {
+            $parent = Split-Path -Path (Split-Path -Path $FilePath -Parent) -Leaf
+            if ($parent) { [void]$keys.Add($parent) }
+        } catch {}
+    }
+
+    foreach ($key in @($keys.ToArray())) {
+        if ($key -match '/') { [void]$keys.Add(($key.TrimEnd('/') -split '/')[-1]) }
+        if ($key -match '#') { [void]$keys.Add(($key -split '#')[-1]) }
+
+        foreach ($variant in Get-DriFT17GFqddVariants -Value $key) {
+            if ($variant) { [void]$keys.Add($variant) }
+        }
+    }
+
+    return @($keys) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique
+}
+
+function Get-DriFT17GPreferredFqdd {
+<#
+.SYNOPSIS
+    Chooses the best FQDD from a 17G Redfish JSON object.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$JsonObject,
+        [AllowNull()][string]$FilePath
+    )
+
+    $idVariants = @(Get-DriFT17GFqddVariants -Value ([string]$JsonObject.Id))
+    $folderVariants = @()
+
+    if ($FilePath) {
+        try {
+            $folderVariants = @(Get-DriFT17GFqddVariants -Value (Split-Path -Path (Split-Path -Path $FilePath -Parent) -Leaf))
+        } catch {}
+    }
+
+    $all = @(
+        $JsonObject.FQDD,
+        $JsonObject.Oem.Dell.FQDD,
+        $JsonObject.Oem.Dell.DellNIC.FQDD,
+        $JsonObject.Oem.Dell.DellNIC.Id,
+        $JsonObject.Oem.Dell.DellPCIeFunction.FQDD,
+        $JsonObject.Oem.Dell.DellPCIeFunction.Id
+    ) + $idVariants + $folderVariants
+
+    $preferred = @($all | Where-Object {
+        $_ -match '^(NIC\.Slot\.\d+(?:-\d+-\d+)?)$' -or
+        $_ -match '^(RAID\.[^\/]+)$' -or
+        $_ -match '^(Disk\.[^\/]+)$' -or
+        $_ -match '^(PSU\.Slot\.\d+)$'
+    } | Sort-Object { $_.Length } -Descending | Select-Object -First 1)
+
+    if ($preferred) { return $preferred }
+
+    return Get-DriFTFirstNonEmpty $JsonObject.FQDD $JsonObject.Oem.Dell.FQDD $idVariants $folderVariants
+}
+
+#endregion Generic Helpers
