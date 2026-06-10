@@ -552,7 +552,7 @@ function Write-DriFTTelemetry {
     Expected environment variable:
       DRIFT_TABLE_SAS_URL
 #>
-    Write-Host "Logging Telemetry Information..."
+Write-Host "Logging Telemetry Information..."
 
     function Add-TableData {
         [CmdletBinding()]
@@ -563,18 +563,10 @@ function Write-DriFTTelemetry {
             [Parameter(Mandatory=$true)]
             [string]$PartitionKey,
 
-            [Parameter(Mandatory=$false)]
-            [string]$RowKey,
-
-            [Parameter(Mandatory=$false)]
-            [string]$SasToken,
-            
             [Parameter(Mandatory=$true)]
-            $Data
+            [hashtable]$Data
         )
 
-        if (-not $uploadToAzure) { return }
-        try {$Data=[HashTable]$Data
 
         $RowKey = [guid]::NewGuid().Guid
         
@@ -596,7 +588,7 @@ function Write-DriFTTelemetry {
         $maxRetries = 3
         $attempt = 0
         $success = $false
-        } catch {return}
+
         while (-not $success -and $attempt -lt $maxRetries) {
 
             try {
@@ -617,6 +609,73 @@ function Write-DriFTTelemetry {
             }
         }
     }
+
+    function Write-Indent {
+        param(
+            [string]$Message,
+            [int]$Level = 1,
+            [string]$Color = "Gray"
+        )
+
+        $prefix = "  " * $Level
+        Write-Host "$prefix$Message" -ForegroundColor $Color
+    }
+
+    # Unique report id
+    $CReportID = [guid]::NewGuid().Guid
+
+
+    Write-Indent "Resolving Geo Location..."
+
+    try {
+        if (-not $global:GeoCache) {
+            $global:GeoCache = Invoke-RestMethod "https://ipwho.is/" -TimeoutSec 5
+        }
+
+        $response = $global:GeoCache
+
+        if ($response.success -eq $true) {
+
+            $country     = $response.country
+            $countryCode = $response.country_code
+            $region      = $response.region
+            $city        = $response.city
+            $latitude    = $response.latitude
+            $longitude   = $response.longitude
+            $timezone    = $response.timezone.id
+
+            Write-Indent "Country: $country" 2
+            Write-Indent "Region : $region" 2
+        }
+    }
+    catch {
+        Write-Indent "WARN: ipwho lookup failed" 2 Yellow
+    }
+
+    $data = @{
+        Region       = $region
+        DriftVersion = ($script:DriFTVersion -split "v")[-1]
+        ReportID     = $CReportID
+        country      = $country
+        countryCode  = $countryCode
+        geoRegion    = $region
+        city         = $city
+        lat          = $latitude
+        lon          = $longitude
+        timezone     = $timezone
+        Timestamp = (Get-Date).ToUniversalTime().ToString("o")
+        HostOS = [System.Environment]::OSVersion.VersionString
+        PSVersion = $PSVersionTable.PSVersion.ToString()
+    }
+
+    # We use tool name for this value
+    $PartitionKey = "DriFT"
+
+    Add-TableData `
+        -TableName "DriftTelemetryData" `
+        -PartitionKey $PartitionKey `
+        -Data $data 
+
 }
 
 #endregion Telemetry
