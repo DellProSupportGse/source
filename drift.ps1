@@ -42,7 +42,7 @@ Set-StrictMode -Off
 
 #region Constants / Types
 
-$script:DriFTVersion = 'DriFT_v2.00DEV'
+$script:DriFTVersion = 'DriFT_v2.01'
 $script:DriFTDellDownloadRoot = 'https://downloads.dell.com/'
 $script:DriFTDefaultWorkRoot = Join-Path $env:TEMP 'DriFT'
 
@@ -552,21 +552,71 @@ function Write-DriFTTelemetry {
     Expected environment variable:
       DRIFT_TABLE_SAS_URL
 #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory)]$Context)
+    Write-Host "Logging Telemetry Information..."
 
-    $sasUrl = [Environment]::GetEnvironmentVariable('DRIFT_TABLE_SAS_URL', 'User')
-    if (-not $sasUrl) {
-        $sasUrl = [Environment]::GetEnvironmentVariable('DRIFT_TABLE_SAS_URL', 'Machine')
+    function Add-TableData {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory=$true)]
+            [string]$TableName,
+
+            [Parameter(Mandatory=$true)]
+            [string]$PartitionKey,
+
+            [Parameter(Mandatory=$false)]
+            [string]$RowKey,
+
+            [Parameter(Mandatory=$false)]
+            [string]$SasToken,
+            
+            [Parameter(Mandatory=$true)]
+            $Data
+        )
+
+        if (-not $uploadToAzure) { return }
+        try {$Data=[HashTable]$Data
+
+        $RowKey = [guid]::NewGuid().Guid
+        
+        $TableSvcSasUrl = 'https://gsetools.table.core.windows.net/?sv=2024-11-04&ss=t&srt=so&sp=a&se=2028-03-11T21:32:20Z&st=2026-03-11T12:17:20Z&spr=https&sig=zYIhaiCnIiphMZLI38Uj6AcJ1WLJOKe4KRMl4WzX818%3D'
+
+        $uri = "https://gsetools.table.core.windows.net/$TableName$($TableSvcSasUrl.Substring($TableSvcSasUrl.IndexOf('?')))"
+
+        $headers = @{
+            "Accept"       = "application/json;odata=nometadata"
+            "Content-Type" = "application/json"
+            "x-ms-version" = "2019-02-02"
+        }
+
+        $Data["PartitionKey"] = $PartitionKey
+        $Data["RowKey"]       = $RowKey
+
+        $body = $Data | ConvertTo-Json -Depth 5
+
+        $maxRetries = 3
+        $attempt = 0
+        $success = $false
+        } catch {return}
+        while (-not $success -and $attempt -lt $maxRetries) {
+
+            try {
+                Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -Body $body | Out-Null
+                $success = $true
+                Write-Indent "Telemetry recorded successfully" 1 Green
+            }
+            catch {
+                $attempt++
+
+                if ($attempt -lt $maxRetries) {
+                    Write-Indent "Retrying telemetry upload ($attempt/$maxRetries)..." 1 Yellow
+                    Start-Sleep -Seconds 2
+                }
+                else {
+                    Write-Indent "Telemetry upload failed after $maxRetries attempts" 1 Yellow
+                }
+            }
+        }
     }
-
-    if (-not $sasUrl) {
-        Write-DriFTLog -Context $Context -Message 'Telemetry skipped: DRIFT_TABLE_SAS_URL is not configured.' -Level Warn -Indent 1
-        return
-    }
-
-    # Intentionally minimal in the foundation. Port existing Azure Table write logic here.
-    Write-DriFTLog -Context $Context -Message 'Telemetry configured. Upload logic should be ported into Write-DriFTTelemetry.' -Level Info -Indent 1
 }
 
 #endregion Telemetry
