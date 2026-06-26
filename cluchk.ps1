@@ -26,6 +26,14 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/06/26:v1.87 -  1. New Update: TP - New version 1.87 DEV
+                        2. Bug Fix: TP - For Physical Disks OperationalStatus, handle more than one status better.
+                        3. New Update: TP - Removed trailing _0000 on Nvme disks to better align with TSR serial number
+                        4. New Update: TP - Handle Storage Rack fault domain. No longer mark as RED since it is supported for new installations.
+                        5. New Update: TP - Added Updating Firmware to the list of OperationalStatus for physical disks
+                        6. New Update: TP - Added Azure Stack HCI to provide the Net QOS tables
+                        7. New Update: TP - Take out duplicate Invoke-AzStackHciSDNNCValidation related messages in the failed action plan list
+
     2026/06/05:v1.86 -  1. New Update: TP - New version 1.86 DEV
                         2. Bug Fix: TP - Fixed running cluchk agaist the alternate sddc collection method for customers that cannot use unsigned scripts.
                         3. New feature: TP - If dedup is running but disabled, shows which volumes still have compressed files in the Cluster Shared Volumes section
@@ -298,7 +306,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.86"
+$CluChkVer="1.87"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -844,6 +852,10 @@ If(!(Test-Path -Path (Join-Path $SDDCPath 0_CloudHealthSummary.log))){
             Copy-Item $_.fullname $destpath -Recurse
 
         }
+        $nodeDirs=gci "$hdir\node*"
+        $nodeDirs | %{Copy-Item "$SDDCPath\GetSolutionUpdate.xml" $_.FullName}
+        $nodeDirs | %{Copy-Item "$SDDCPath\GetStampInformation.xml" $_.FullName}
+        $nodeDirs | %{Copy-Item "$SDDCPath\GetSolutionUpdateEnvironment.xml" $_.FullName}
         $SDDCPath=$Hdir
         Write-Host -ForegroundColor Green "New SDDC Path is $SDDCPath"
         } else {     
@@ -1264,7 +1276,7 @@ $basePath = "content/en/docs/hci/SupportMatrix"
 $headers = @{ "User-Agent" = "PowerShell" }
 
 # Step 1: Get SupportMatrix versions
-$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing
+$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing -ErrorAction Continue
 $latestFolder = $topResponse | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d{4}$' } |
     Sort-Object name -Descending | Select-Object -First 1
 $latestVersion = $latestFolder.name
@@ -1293,11 +1305,11 @@ if (-not $mdUrl) {
 if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}
 
 # Step 4: Extract all HTML tables from _index.md
-$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
+$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing -ErrorAction Continue).Content
 If (!($mdText -match "<td>$($sysinfo[0].SysModel.replace('APEX MC','AX'))</td>")) {
 
 # Step 1: Get SupportMatrix versions N-1
-$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing
+$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing -ErrorAction Continue
 $latestFolder = $topResponse | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d{4}$' } |
     Sort-Object name -Descending | Select-Object -Skip 1 | Select-Object -First 1
 $latestVersion = $latestFolder.name
@@ -1325,13 +1337,13 @@ if (-not $mdUrl) {
 if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}
 
 # Step 4: Extract all HTML tables from _index.md
-$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
+$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing -ErrorAction Continue).Content
 
 }
 If (!($mdText -match "<td>$($sysinfo[0].SysModel.replace('APEX MC','AX'))</td>")) {
 
 # Step 1: Get SupportMatrix versions N-2
-$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing
+$topResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/contents/$basePath" -Headers $headers -UseBasicParsing -ErrorAction Continue
 $latestFolder = $topResponse | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d{4}$' } |
     Sort-Object name -Descending | Select-Object -Skip 2 | Select-Object -First 1
 $latestVersion = $latestFolder.name
@@ -1360,7 +1372,7 @@ if (-not $mdUrl) {
 if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {$mdUrl='https://raw.githubusercontent.com/dell/azurestack-docs/refs/heads/main/content/en/docs/hci/SupportMatrix/Archive/WS2016/_index.md'}
 
 # Step 4: Extract all HTML tables from _index.md
-$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing).Content
+$mdText = (Invoke-WebRequest -Uri $mdUrl -UseBasicParsing -ErrorAction Continue).Content
 
 }
 if ($OSVersionNodes -eq "2016" -or $OSVersionNodes -match "2012") {
@@ -3150,8 +3162,8 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
                     $html=$html -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
 				}
                 $html=$html -replace '<td>StorageEnclosure</td>','<td style="color: #ffffff; background-color: #ff0000">StorageEnclosure</td>'`
-                            -replace '<td>StorageChassis</td>','<td style="color: #ffffff; background-color: #ff0000">StorageChassis</td>'`
-                            -replace '<td>StorageRack</td>','<td style="color: #ffffff; background-color: #ff0000">StorageRack</td>'
+                            -replace '<td>StorageChassis</td>','<td style="color: #ffffff; background-color: #ff0000">StorageChassis</td>'#`
+                            #-replace '<td>StorageRack</td>','<td style="color: #ffffff; background-color: #ff0000">StorageRack</td>'
             }
             $html=$html `
              -replace '<td>Warning</td>','<td style="background-color: #ffff00">Warning</td>'`
@@ -3221,13 +3233,12 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
                 $html=$html -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
                             -replace '<td>PhysicalDisk</td>','<td style="color: #ffffff; background-color: #ff0000">PhysicalDisk</td>'`
                             -replace '<td>StorageEnclosure</td>','<td style="color: #ffffff; background-color: #ff0000">StorageEnclosure</td>'`
-                            -replace '<td>StorageChassis</td>','<td style="color: #ffffff; background-color: #ff0000">StorageChassis</td>'`
-                            -replace '<td>StorageRack</td>','<td style="color: #ffffff; background-color: #ff0000">StorageRack</td>'
+                            -replace '<td>StorageChassis</td>','<td style="color: #ffffff; background-color: #ff0000">StorageChassis</td>'#`
+                            #-replace '<td>StorageRack</td>','<td style="color: #ffffff; background-color: #ff0000">StorageRack</td>'
             } 
             $html=$html `
              -replace '<td>StorageEnclosure</td>','<td style="color: #ffffff; background-color: #ff0000">StorageEnclosure</td>'`
              -replace '<td>StorageChassis</td>','<td style="color: #ffffff; background-color: #ff0000">StorageChassis</td>'`
-             -replace '<td>StorageRack</td>','<td style="color: #ffffff; background-color: #ff0000">StorageRack</td>'`
              -replace '<td>Warning</td>','<td style="background-color: #ffff00">Warning</td>'`
              -replace '<td>Unhealthy</td>','<td style="color: #ffffff; background-color: #ff0000">Unhealthy</td>'`
              -replace '<td>Unknown</td>','<td style="color: #ffffff; background-color: #ff0000">Unknown</td>'`
@@ -3399,11 +3410,13 @@ $htmlout+=$html
                             $VDFaultDomainAwareness=$VD.FaultDomainAwareness
                     }
                 #Resiliency 
+                    $VDResiliency="Unknown"
                     IF($VD.ResiliencySettingName -eq 'Mirror' -and $VD.PhysicalDiskRedundancy -eq 1){
                         #2-way and 3+ nodes mark yellow as we can only have 1 fault
                         IF($ClusterNodeCount -ge 3){$VDResiliency="2-way Mirror"}
                         Else{$VDResiliency="2-way Mirror"}}
                     IF($VD.ResiliencySettingName -eq 'Mirror' -and $VD.PhysicalDiskRedundancy -eq 2){$VDResiliency="3-Way Mirror"}
+                    IF($VD.ResiliencySettingName -eq 'Mirror' -and $VD.PhysicalDiskRedundancy -eq 3 -and $VDFaultDomainAwareness -eq 'StorageRack'){$VDResiliency="2-Way Mirror per Rack"}
                     IF($VD.ResiliencySettingName -eq 'Parity' -and $VD.PhysicalDiskRedundancy -eq 1){$VDResiliency="Single Parity"}
                     IF($VD.ResiliencySettingName -eq 'Parity' -and $VD.PhysicalDiskRedundancy -eq 2){$VDResiliency="Dual Parity"}
                 #MirrorSize
@@ -3510,6 +3523,7 @@ $htmlout+=$html
         }
 
         #$VDROutput |Sort-Object VirtualDiskName |Format-Table
+        $VDROutput=$VDROutput | Sort VirtualDiskName
 
          #Azure Table
             $AzureTableData=@()
@@ -3539,7 +3553,6 @@ $htmlout+=$html
                 }
                 $html=$html -replace '<td>StorageEnclosure</td>','<td style="color: #ffffff; background-color: #ff0000">StorageEnclosure</td>'`
                             -replace '<td>StorageChassis</td>','<td style="color: #ffffff; background-color: #ff0000">StorageChassis</td>'`
-                            -replace '<td>StorageRack</td>','<td style="color: #ffffff; background-color: #ff0000">StorageRack</td>'`
                             -replace '<td>RREEDD','<td style="color: #ffffff; background-color: #ff0000">'`
                             -replace '<td>YYEELLLLOOWW','<td style="background-color: #ffff00">'
             }               
@@ -3571,7 +3584,7 @@ $htmlout+=$html
         Foreach ($CSVOut in $CSVOutPut) {
             If ($CSVOut.DedupVolume -match "RREEDD") {$CSVOut.Note="Dedup is disabled but volume still has compressed files"}
         }
-
+        $CSVOutPut=$CSVOutPut | Sort Name
         #HTML Report
         $html+='<H2 id="ClusterSharedVolumes">Cluster Shared Volumes (CSV)</H2>'
         If($CSVOutPut.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No CSVs found</span></h5>'}
@@ -3662,12 +3675,13 @@ $htmlout+=$html
     default {$_}
         }}},`
         @{Label='SerialNumber';Expression={
-            If($_.SerialNumber -imatch '^[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*.'){$_.AdapterSerialNumber -replace " ",""}
+            If($_.SerialNumber -imatch '^[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*.'){$_.AdapterSerialNumber -replace " ","" -replace "_0000$",""}
             Else{$_.SerialNumber -replace " ",""}
         }},@{Label="CannotPool";E={
            Switch ($_.CannotPoolReason)  {
            "2" {'In a pool'}
            "32771" {'RREEDDNot Compliant'}
+           "32770" {'RREEDDFirmware not compliant'}
            Default {"RREEDD$($_.CannotPoolReason)"}
            }
         
@@ -3676,11 +3690,14 @@ $htmlout+=$html
             @('','','','HDD','SSD','SCM')[$_.MediaType]
         }},@{Label='DriveCount';Expression={""}},CanPool,`
         @{Label='OperationalStatus';Expression={`
-        IF ($_.OperationalStatus -eq '53270') {'In Maintenance Mode'} elseif ($_.OperationalStatus -eq '53285') {'Threshold Exceeded'} elseif ([int]$_.OperationalStatus -gt 18) {'Unknown Error State'
+        $2ndOperStatus=-1
+        if ($_.OperationalStatus.gettype().basetype.name -eq "Array") {$2ndOperStatus=$_.OperationalStatus | Sort | Select -last 1}
+        IF ($2ndOperStatus -eq '53270') {'In Maintenance Mode'} elseif ($2ndOperStatus -eq '53285') {'RREEDDThreshold Exceeded'} elseif ($2ndOperStatus -eq '53286') {'RREEDDAbnormal Latency'} elseif ($2ndOperStatus -eq '53271') {'RREEDDUpdating Firmware'} elseif ([int]($2ndOperStatus) -gt 18) {"RREEDDUnknown-$2ndOperStatus"
         } else {
-             @('Unknown','Other','OK','Degraded','Stressed','Predictive Failure','Error','Non-Recoverable Error','Stopping',`
-             'Stopping','Stopped','In Service','No Contact','Lost Communication','Aborted','Dormant',`
-             'Supporting Entity in Error','Completed','Power Mode')[$_.OperationalStatus]
+             if ($_.OperationalStatus.gettype().basetype.name -eq "Array") {$OperStat=$_.OperationalStatus[0]} else {$OperStat=$_.OperationalStatus}
+             @('Unknown','Other','OK','RREEDDDegraded','RREEDDStressed','RREEDDPredictive Failure','RREEDDError','RREEDDNon-Recoverable Error','Stopping',`
+             'Stopping','Stopped','In Service','No Contact','RREEDDLost Communication','Aborted','Dormant',`
+             'Supporting Entity in Error','Completed','Power Mode')[$OperStat]
         }
         }},OperationalDetails,`
         @{Label='HealthStatus';Expression={`
@@ -3739,7 +3756,7 @@ $htmlout+=$html
         $GetStorageFaultDomain=foreach ($a in ($SDDCFiles.keys -like "*GetStorageFaultDomain")){ $SDDCFiles."$a"|`
             Where-Object {$_.SerialNumber -ne $null}| Select-Object @{Label='Node';Expression={$a.replace("GetStorageFaultDomain","")}},`
                 @{Label='SerialNumber';Expression={
-If($_.SerialNumber -imatch '^[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*.'){$_.AdapterSerialNumber -replace " ",""}
+If($_.SerialNumber -imatch '^[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*_[A-Z,0-9]*.'){$_.AdapterSerialNumber -replace " ","" -replace "_0000$",""}
                     Else{$_.SerialNumber -replace " ",""}}},`
 PhysicalLocation,FirmwareVersion,bustype}
         # Check for all NVMe
@@ -5124,7 +5141,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
         $ReadySUs=$SolutionUpdates | ? State -notmatch "Installed|Obsolete"
         If ($SysInfo[0].AzureLocalVersion -gt "") {
            $SupportedDate=Get-Date (Get-Date).AddMonths(-7) -Format "yyMM"
-           Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -ErrorAction Stop -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
+           Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
            $SUVersions=(([xml](Get-Content $env:temp\outfile.xml)).ASZSolutionBundleUpdates.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} 
            if (([version]$SysInfo[0].AzureLocalVersion).major -ne '12' -and (Get-Date) -lt (Get-Date "10/10/2025")) {$SUVersions=$SUVersions | ? {([version]$_.Version).major -ne '12'}}
            Invoke-WebRequest -Uri "https://aka.ms/AzureStackSBEUpdate/DellEMC" -UseBasicParsing -OutFile $env:temp\outfile.xml
@@ -5717,9 +5734,9 @@ Unable to add KV info to
         $errors=(Get-ChildItem -Path $SDDCPath -Filter "AzStackHciEnvironmentChecker.EVTX" -Recurse -Depth 2) | %{(Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{ Path = "$($_.fullname)"; Level = 2})}
         $errors | %{$_.Message=$_.Properties.Value}
         $errors=$errors | Select-Object MachineName,TimeCreated,Id,Message | Sort Timecreated
-        foreach ($err in $errors) {$err.Message=$err.Message -replace "ArcIntegration\\.*?\.",""} 
+        foreach ($err in $errors) {$err.Message=$err.Message -replace "ArcIntegration\\.*?\.","";$err.Message=$err.Message -replace "SDNNC\\.*?\.", ""} 
                ForEach ($thiserror in $errors) {
-                    If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $thiserror.Message -match '(Invoke-AzStackHciSBEHealthValidation)|(integrity check)') -and !($SolutionUpdates.InstalledDate.Date -match $thiserror.TimeCreated.Date)) {
+                    If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $ThisError.Message -match '(Invoke-AzStackHciSBEHealthValidation)|(integrity check)') -and !($SolutionUpdates.InstalledDate.Date -match $thiserror.TimeCreated.Date)) {
                         $resultObject +=     [PSCustomObject] @{
                             Target                  = $thiserror.MachineName
                             TimeStamp               = (Get-Date $thiserror.TimeCreated -Format "MM/dd/yyyy HH:mm")
@@ -6733,7 +6750,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $Name=""
        }
     #***ROCE ONLY***
- IF(($AllNVMe -eq $True) -or ($Mellanox.count) -or $SysInfo[0].SysModel -match "^APEX"){
+ IF(($AllNVMe -eq $True) -or ($Mellanox.count) -or $SysInfo[0].SysModel -match "^APEX" -or $SysInfo[0].OSName -imatch 'HCI'){
     If($AllNVMe -eq $True){
         $Name="DCB and QOS Configuration"
         $html+='<H2 id="DCBandQOSConfiguration">DCB and QOS Configuration</H2>'
