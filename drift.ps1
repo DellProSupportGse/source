@@ -42,7 +42,7 @@ Set-StrictMode -Off
 
 #region Constants / Types
 
-$script:DriFTVersion = 'DriFT_v2.02'
+$script:DriFTVersion = 'DriFT_v2.03'
 $script:DriFTDellDownloadRoot = 'https://downloads.dell.com/'
 $script:DriFTDefaultWorkRoot = Join-Path $env:TEMP 'DriFT'
 
@@ -4675,9 +4675,12 @@ function Write-DriFTHtmlReport {
     else {
         $htmlRows = $Rows |
             Sort-Object ServiceTag,PowerEdge,Type,Category |
-            Select-Object Type,Category,Name,InstalledVersion,AvailableVersion,CatalogInfo,Criticality,ReleaseDate,
+            Select-Object Type,Category,
+                @{Label='Name';Expression={ New-DriFTHtmlTruncatedText -Text $_.Name -MaxLength 72 }},
+                InstalledVersion,AvailableVersion,CatalogInfo,Criticality,
+                @{Label='ReleaseDate';Expression={ New-DriFTHtmlTruncatedText -Text $_.ReleaseDate -MaxLength 18 }},
                 @{Label='Documentation';Expression={ New-DriFTHtmlLink -Url $_.Details -Text 'Link' }},
-                @{Label='Download Link';Expression={ New-DriFTHtmlLink -Url $_.URL -Text $_.URL }}
+                @{Label='Download Link';Expression={ New-DriFTHtmlLink -Url $_.URL -Text 'Download' }}
     }
 
     $post = "<footer class='drift-catalog-footer'>$($CatalogSet.CatVerInfo)</footer></div>"
@@ -4965,6 +4968,11 @@ a {
 
 a:hover {
     text-decoration: underline;
+}
+
+.drift-truncated {
+    cursor: help;
+    border-bottom: 1px dotted #8a8a8a;
 }
 
 td[style*="background-color: #ff0000"],
@@ -5743,9 +5751,31 @@ function Get-DriFTLatestWindowsUpdateFromMicrosoft {
             if ([string]::IsNullOrWhiteSpace($kb)) { continue }
             if ($rawText -imatch 'Preview' -or $buildText -imatch 'Preview') { continue }
 
-            $dateText = (($rawText -replace '&#x2014;', ' ') -replace '<.*?>',' ' -replace '\s+',' ').Trim()
-            $buildClean = (($buildText -replace '<.*?>',' ') -replace '\s+',' ').Trim()
-            $desc = (($dateText + ' ' + $kb + ' ' + $buildClean) -replace '\s+',' ').Trim()
+            $cleanText = (($rawText -replace '&#x2014;', ' ') -replace '&nbsp;', ' ' -replace '<.*?>',' ' -replace '\s+',' ').Trim()
+            $cleanBuildText = (($buildText -replace '&#x2014;', ' ') -replace '&nbsp;', ' ' -replace '<.*?>',' ' -replace '\s+',' ').Trim()
+
+            # The Microsoft page can return a very large left-navigation block.
+            # Keep only the update date, KB number, and matching OS build instead of the whole history page.
+            $dateText = ''
+            $datePattern = '(?i)(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}'
+            $dateBeforeKb = [regex]::Match($cleanText, $datePattern + '.{0,120}?' + [regex]::Escape($kb))
+            if ($dateBeforeKb.Success) {
+                $dateOnly = [regex]::Match($dateBeforeKb.Value, $datePattern)
+                if ($dateOnly.Success) { $dateText = $dateOnly.Value }
+            }
+            if ([string]::IsNullOrWhiteSpace($dateText)) {
+                $dateOnly = [regex]::Match($cleanText, $datePattern)
+                if ($dateOnly.Success) { $dateText = $dateOnly.Value }
+            }
+            $dateText = ConvertTo-DriFTIsoDateText -DateText $dateText
+
+            $buildClean = ''
+            $buildPattern = '(?i)' + [regex]::Escape($kb) + '\s*(?<build>\(OS Build\s+[^\)]+\)|\d{5}\.\d+)'
+            $buildMatch = [regex]::Match($cleanText, $buildPattern)
+            if (-not $buildMatch.Success) { $buildMatch = [regex]::Match($cleanBuildText, '(?i)(?<build>\(OS Build\s+[^\)]+\)|\d{5}\.\d+)') }
+            if ($buildMatch.Success) { $buildClean = $buildMatch.Groups['build'].Value.Trim() }
+
+            $desc = (($kb + ' ' + $buildClean) -replace '\s+',' ').Trim()
 
             if ($href -notmatch '^https?://') {
                 if ($href.StartsWith('/')) {
@@ -5860,12 +5890,12 @@ function Add-DriFTWindowsUpdateRows {
                 -OS "$($OperatingSystem.DisplayName) $($OperatingSystem.Version)".Trim() `
                 -Type 'OS' `
                 -Category 'Microsoft Update' `
-                -Name $kb.Description `
+                -Name ((@($OperatingSystem.DisplayName, $kb.KBNumber, $kb.BuildText) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) -join ' ') `
                 -InstalledVersion 'NA' `
                 -AvailableVersion $kb.KBNumber `
                 -CatalogInfo 'support.microsoft.com / catalog.update.microsoft.com' `
                 -Criticality 'Not Available' `
-                -ReleaseDate $kb.Date `
+                -ReleaseDate (ConvertTo-DriFTIsoDateText -DateText $kb.Date) `
                 -URL (Get-DriFTFirstNonEmpty $downloadLink $kb.InfoLink) `
                 -Details $kb.InfoLink `
                 -SourceType $System.SourceType
@@ -6544,6 +6574,59 @@ function ConvertTo-DriFTHtmlText {
 
     Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
     return [System.Web.HttpUtility]::HtmlEncode([string]$Value)
+}
+
+
+function New-DriFTHtmlTruncatedText {
+<#
+.SYNOPSIS
+    HTML-encodes text and truncates long report cell values with a hover tooltip.
+#>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][string]$Text,
+        [int]$MaxLength = 70
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+
+    $plain = ([string]$Text -replace '<.*?>',' ' -replace '\s+',' ').Trim()
+    if ([string]::IsNullOrWhiteSpace($plain)) { return '' }
+
+    Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+    $safeFull = [System.Web.HttpUtility]::HtmlEncode($plain)
+    $safeTitle = [System.Web.HttpUtility]::HtmlAttributeEncode($plain)
+
+    if ($plain.Length -le $MaxLength) {
+        return $safeFull
+    }
+
+    $short = $plain.Substring(0, [Math]::Max(1, $MaxLength - 3)).TrimEnd() + '...'
+    $safeShort = [System.Web.HttpUtility]::HtmlEncode($short)
+
+    return "<span class='drift-truncated' title=""$safeTitle"">$safeShort</span>"
+}
+
+function ConvertTo-DriFTIsoDateText {
+<#
+.SYNOPSIS
+    Converts Microsoft update date text to yyyy-MM-dd when possible.
+#>
+    [CmdletBinding()]
+    param([AllowNull()][string]$DateText)
+
+    if ([string]::IsNullOrWhiteSpace($DateText)) { return '' }
+
+    $clean = ([string]$DateText -replace '<.*?>',' ' -replace '\s+',' ').Trim()
+    $match = [regex]::Match($clean, '(?i)(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}')
+    if ($match.Success) { $clean = $match.Value }
+
+    try {
+        return ([datetime]$clean).ToString('yyyy-MM-dd')
+    }
+    catch {
+        return $clean
+    }
 }
 
 function New-DriFTHtmlLink {
