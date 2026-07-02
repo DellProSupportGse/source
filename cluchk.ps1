@@ -26,6 +26,8 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/07/02:v1.89 -  1. New Update: JG - Removed AzureTableData uploads as they where not being used anyway
+    2026/07/01:v1.88 -  1. New Update: JG - Removed SAS tokens per Dell Cyber audit
     2026/06/26:v1.87 -  1. New Update: TP - New version 1.87 DEV
                         2. Bug Fix: TP - For Physical Disks OperationalStatus, handle more than one status better.
                         3. New Update: TP - Removed trailing _0000 on Nvme disks to better align with TSR serial number
@@ -104,193 +106,6 @@ Specifies to show debug information
                         7. New Feature: TP - Added AlertThreshold to Storage Pool and will highlight when an error would occur with fix command
                         8. Bug Fix: TP - Added Dell DC NVMe 7500 U.2 ISE RI series drives
 
-    2025/12/18:v1.78 -  1. New Update: TP - New version 1.78 DEV
-                        2. Bug Fix: TP - Apex MC models will now use the correct AX version of the Support Matrix
-                        3. Bug Fix: TP - v1.77 update 4 caused a drive table to show up because a variable was not cleared
-
-    2025/12/12:v1.77 -  1. New Update: TP - New version 1.77 DEV
-                        2. Bug Fix: TP - Fixed issue where duplicate cluster node entries are created
-                        3. Bug Fix: TP - Fixed issue where the archive Support Matrix was not used.
-                        4. Bug Fix: TP - Changed the SM data variable and related tables to work with the archive matrix.
-                        5. Bug Fix: TP - Removed ServerEnableSecuritySignature failure for Windows 2022+ systems
-                        6. Bug Fix: TP - Removed page file error for Azure Stack HCI/Local systems
-                        7. Bug Fix: SA - Added some Dell Ent NVME models
-                        8. Bug Fix: TP - Change Firmware in Charge yellow for Azure Local systems
-                        9. Bug Fix: TP - Removed driver check for Gigabit nics for Azure Local systems
-                        10. New Feature: TP - Added bios to update out of box drivers
-
-    2025/10/20:v1.76 -  1. New Update: TP - New version 1.76 DEV
-                        2. New Update: TP - Added Priority/Pri to the Cluster Groups and VM Info tables for both clustered and local VMs.
-                        3. Bug Fix: TP - JG noticed VD fault resiliency not longer marks parity volumes with a warning.
-                        4. Bug Fix: TP - 14g S2d ready nodes not showing driver vesion for N-1. Added check for N-2.
-                        5. Bug Fix: SA - Fix Memory warning
-
-    2025/10/03:v1.75 -  1. New Update: TP - New version 1.75 DEV
-                        2. New Update: TP - Added resolution for CauReport WSMan provider error in latest action plan
-                        3. New Update: TP - Added RPs not registered to latest action plan
-                        4. Bug Fix: TP - From JF, if a node is down it may show up multiple times in Cluster Node table.
-
-    2025/09/24:v1.74 -  1. New Update: TP - New version 1.74 DEV
-                        2. Bug Fix: SA - Fix for single node cluster
-                        3. Bug Fix: SA - Fix for OEM Support Provider check
-                        4. Bug Fix: SA - Physical disk in storagepool on a single node cluster
-                        5. Bug Fix: SA - Vitrual disk in storagepool on a single node cluster
-                        6. New Feature: TP - Searches latest ECE etl for SBE content issue
-                        7. New Feature: TP - Create DHealthTest junction in user profile to avoid long path errors
-                        8. New Feature: TP - If SU/SBE is not Installed or Obsolete then show latest as Next MS SU or Next SBE
-                        9. New Feature: TP - Request from LA, ProvisioningType for Virtual Disks
-                        10. New Feature: TP - LA Request, mark non-converged non-storage nics as yellow for enabled Net QOS
-
-    2025/09/15:v1.73 -  1. New Update: TP - New version 1.73 DEV
-                        2. Bug Fix: TP - Set date for 11.x to 12.x update to Oct 10th, 2025
-
-    2025/09/08:v1.72 -  1. New Update: TP - New version 1.72 DEV
-                        2. Bug Fix: SA - Remove trailing slash
-                        3. Bug Fix: SA - Removed hard PageFile check for 24h2
-                        4. Bug Fix: TP - Some systems were not finding the Compression module.
-                        5. Bug Fix: TP - Intel E810 driver version does not match. Support Matrix is 24, real driver is 1.17.73.0
-                        6. New Feature: TP - In Physical Disks show CannotPoolReason.
-
-    2025/08/28:v1.71 -  1. New Update: TP - New version 1.71 DEV
-                        2. Bug Fix: TP - When finding updates in the support matrix also restrict by server model.
-                        3. Bug Fix: TP - Broadcom 25gb SFP nics were no longer getting the correct driver version.
-                        4. Bug Fix: TP - Recommended updates for Azure systems without MS Solution Updates were incorrect
-                        5. New Update: TP - Mark SBE/SU version older than 6 months as an Error instead of a Warning and show correct next version.
-                        6. New Update: TP - Get Last AP Failure from all ECE zips and show Exception in the Latest Action Plan Failure table
-                        7. Bug Fix: TP - Remove APEX from showing errors on Update Out of Box drivers and show Mellanox driver version correctly.
-                        8. Bug Fix: TP - Ignore VMQ and Jumbo Frames issues if cluster is using a converged network.
-                        9. New Update: TP - Added Type column to NetworkATC table.
-
-    2025/08/19:v1.70 -  1. New Update: TP - New version 1.70 DEV
-                        2. New Update: TP - Added 24H2 to several areas. We'll have to double check this works as expected.
-                        3. New Update: TP - $GenerationNodes added AMD AX 15g systems
-                        4. New Update: TP - If system model not found in latest support matrix, tries the next one.
-                        5. Bug Fix: TP - If solution is on 11.x, then do not show 12.x MS solution updates until 9/15/2025.
-
-    2025/07/25:v1.69 -  1. New Update: TP - New version 1.69 DEV
-                        2. New Update: TP - Added test-environment check for Last Action Plan Failure
-                        3. New Feature: TP - Mark mismatched UBR build numbers as errors
-                        4. New Update: TP - Pull system information into the html table if using the MS version of the SDDC
-
-    2025/07/10:v1.68 -  1. New Update: TP - New version 1.68 DEV
-                        2. New Update: TP - If a vm switch has no virtual adapter will mark RED with Note about health checks failing
-                        3. New Update: TP - Reads GetActionPlanInstancesToComplete to find Errors. More to be done.gci 
-                        4. Bug Fix: TP - Fixed Update Out of Box drivers now that we use the new method for the support matrix.
-    
-    2025/06/23:v1.67 -  1. New Update: TP - New version 1.67 DEV
-                        2. New Update: JG - Rewrote the Support Matrix scrapter to use API instead of HTML parsing
-                        3. New Update: JG - Rewrote Convert-HtmlTableToPsObject to account for possible Null values
-                        4. New Update: JG - Physical Disks - Updated for all the changes to SM Scrapter & Convert-HtmlTableToPsObject
-                        5. New Update: JG - Physical Disks - Added Kioxia drives to the table
-                        6. New Update: JG - $GenerationNodes added AX740XD support
-                        7. New Update: TP - $GenerationNodes added R?40?? Storage Spaces Direct support
-                        8. New Feature: TP - Change all throw commands to Write-Warning so script will not stop
-                        9. New Feature: TP - Only Invoke HTML file if CluChk is run on a system with a browser
-
-
-    2025/05/16:v1.66 -  1. New Update: TP - New version 1.66 DEV
-                        2. New Feature: TP - New tables for updates on Azure local 23H2 and Apex
-                        3. New Feature: TP - Added new table Solution and SBE Updates
-                        4. New Feature: TP - Check for CAU Role Automatic Updates
-    
-    2025/05/14:v1.65 -  1. New Update: TP - New version 1.65 DEV
-                        2. Bug Fix: SA - Suppress remove old logfile error
-                        3. Bug Fix: SA - Only warn if pagefile is larger than expected
-                        4. Bug Fix: SA - Include FIPS disks in firmware check
-                        5. Bug Fix: SA - Fix Recommended Updates and Hotfixes sorting, first per node (Asc), then per KB (Desc)
-                        6. Bug Fix: SA - More minor sort fixes
-                        7. Bug Fix: SA - Added Windows Server 2025 version
-                        8. New Feature: SA - Add Azure Local version in Cluster node table
-                        9. New Feature: SA - Check if Azure version is same on all nodes
-                        10. New Feature: TP - Added check and error for mismatched time zones on nodes
-                        11. Bug Fix: JG - Repaired the Show Tech Report as is was not working and slow
-			
-    2025/04/29:v1.64 -  1. New Update: TP - New version 1.64 DEV
-                        2. Bug Fix: TP - Support Matrix changed link title from Azure Stack HCI to Azure Local. Updated the code.
-
-    2025/05/xx:v1.63 -  1. New Update: TP - New version 1.63 DEV
-                        2. New Feature: TP - If SysInfo cannot be gathered, still show the node in the Cluster Nodes table.
-                        3. New Feature: TP - Call out simple virtual disks.
-    
-    2025/04/02:v1.62 -  1. New Update: TP - New version 1.62 DEV
-                        2. Bug Fix: TP - Adding timeoutsec to all Invoke-WebRequests to 30 seconds.
-                        3. Bug Fix: TP - Do not show error for E810 adapters using RoCEv2
-    
-    2025/01/23:v1.61 -  1. New Update: TP - New version 1.61 DEV
-                        2. Bug Fix: SA - Corrected APEX ISM IP, should be 169.254.0.1
-                        3. New Update: JG - Added new FLTMCXml file processing
-                        4. Bug Fix: JL - Updated Jumbo Frames section
-                        5. Bug Fix: JL - Added fix and sorting to FLTMCXml processing
-
-    2024/12/11:v1.60 -  1. New Update: TP - New version 1.60 DEV
-                        2. Bug Fix: TP - Do not show Management network as Red for LM if it's a regular PowerEdge server.
-                        3. New Feature: TP - Cluster only networks show RED if excluded from live migration for Apex/HCI
-                        4. Bug Fix: SA - Added Dell Ent NVMe CM7 disk model
-                        5. Bug Fix: SA - Trim firmware results from support matrix
-                        
-
-    2024/10/31:v1.59 -  1. New Update: JG - New version 1.59 DEV
-                        2. Bug Fix: SA - Fixed sorting/label in Host Management VLAN table
-                        3. Bug Fix: SA - Fixed some more sorting issues
-                        4. Bug Fix: SA - Fixed SMB signing required for 23h2
-                        5. Bug Fix: SA - Fixed firmware catalog selection 14g/15g vs 16g
-                        6. Bug Fix: SA - Hack for Broadcom driver version
-                        7. Bug Fix: SA - Added warning for no SBE package validation on 23h2 and APEX
-                        8. Bug Fix: SA - Added AX-45?0 node types to generations
-                        9. Bug Fix: SA - Fixed catalog selection on unknown node generation
-                        10. Bug Fix: TP - Added "DvFlt","MdvFsFlt","applockerfltr" to show as MS FLTMC drivers.
-                        11. New Feature: SA - Added ISM IP checker
-                        12. Bug Fix: SA - Some RED fixes
-                        13. Bug Fix: SA - Suppress runspace output
-    
-    2024/08/21:v1.58 -  1. Bug Fix: TP - Fixed FileSystem field for Virtual Disks table
-                        2. Bug Fix: TP - Fixed Virtual Disk status not showing on updated systems.
-                        3. New Feature: TP - Show warning instead of failure when not able to down support matrix.
-                        4. Bug Fix TP - Change Drift run code due to errors on some systems.
-                        5. New Feature: TP - Set URL for 2016 HCI solutions to the archive support matrix page.
-                        6. Bug Fix: SA - Fixed some text
-                        7. New Feature: JG - NetAdapterAdvancedProperty - Exclude Host in Charge check for APEX
-                        8. New Feature: JG - Cluster Nodes - Added UBR
-    
-    2024/06/12:v1.57 -  1. Bug Fix: TP - Ignore NetATC overrides on 23H2
-                        2. Bug Fix: TP - Do not gather Windows updates for 23H2
-    
-    2024/05/09:v1.56 -  1. Bug Fix:JG - Added -UseBasicParsing to all Invoke-WebRequests for Server OS compatability
-                        2. Bug Fix:TP - If CSV name and Volume name does not match make file system type blank instead of NTFS
-    
-    2024/04/09:v1.55 -  1. New Feature:TP - Drift moved to GitHub
-
-    2024/04/05:v1.54 -  1. Bug Fix:TP - Fixed Computer Nodes section missing due to previous fix.
-
-    2024/04/03:v1.53 -  1. Bug Fix:TP - If IOV is enabled ignore the BandwidthReservationMode and BandwidthPercentage settings
-                        2. New Feature:TP - On LRs request, check for Mixed Mode clusters and show a problem in the Cluster Name object
-                        3. Bug Fix: Using GetComputerInfo.xml instead of SystemInfo.txt because it seems to gather more reliabily
-                        4. New Feature: JG - Added Invoke-RunCluChk
-
-    2024/03/13:v1.52 -  1. New Feature: TP - Change HTML Agility pack to only download if not in C:\ProgramData\Dell\htmlagilitypack
-                        2. New Feature: JG - Added APEX version to OSVersionNodes so that 23H2 will be red for non-APEX until we support it
-                        3. New Feature: JG/TP - Cluster Heartbeat Configuration - Added check for Stretch Cluster heartbeat settings
-                        4. Bug Fix: TP - Fixed an issue with System Page file that I caused in 1.51
-                        5. Bug Fix: TP - Net Qos Dcbx Property table was not flagging Firmware in Charge as an Error
-                        6. New Feature: TP - Added the file system to Cluster Shared Volumes
-                        7. Bug Fix: TP - Net QOS Traffic Class was calling out ETS as an error when it is configured correctly.
-                        8. New Feature: TP - Wrote PS Function to pull HTML tables. Removed downloading HTMLAgilityPack and changed sections using it.
-
-    2024/02/09:v1.51 -  1. New Feature: TP - Call out a warning for a Cluster network with an IP but the Cluster Role set to None
-                        2. New Feature: JG - Jumbo Frames: Changes Slot to Port and added Intel Nics for APEX support
-                        3. New Feature: JG - Net Adapter Qos: ONLY check if Quality Of Service for APEX support
-                        4. Bug Fix: TP - Qos DBCX settings did not show the Node name
-                        5. New Feature: JG - Cluster Name: Added 23H2 for APEX support
-                        6. New Feature: JG - Cluster Nodes: Added 25398 to OSBuild for APEX support
-                        7. Bug Fix: JG - Net Qos Dcbx Property: Do not show if no dhbxmode found
-
-    2024/01/25:v1.50 -  1. New Feature: JG - Cluster Nodes - Added check for EoL Operation Systems
-                        2. Bug Fix: TP - Fixed disk firmware showing older firmware preferred if two are in the support matrix
-                        3. Bug Fix: TP - Fixed Storage Network Cards and Node map due to changing to using jobs for all commands
-                        4. Bug Fix: TP - Net QOS traffic class not showing correctly
-                        5. New Feature: TP - Added unknown Net QOS Traffic Classes to the table
-                        6. Bug Fix: TP - Change OEM Support Provider to only call out if it does not contain 'dell'
-
     See previous version for update notes
   
 #>
@@ -306,7 +121,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.88"
+$CluChkVer="1.89"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -829,7 +644,9 @@ EndScript
 } # if $ProcessSTS
 #endregion
 
-#region $ProcessSDDC = Read-Host "Would you like to process SDDC? [y/n]"
+#region 
+#$ProcessSDDC = Read-Host "Would you like to process SDDC? [y/n]"
+$ProcessSDDC = "y"
 IF($ProcessSDDC -ieq "y"){
     Write-Host "Starting SDDC..."
     IF($ProcessPerformanceReport -ieq "y"){
@@ -1290,26 +1107,26 @@ If($SysInfo[0].OSName -imatch 'HCI'){
         }
     }
 } else {
-# regular Windows Server versions
-$OSVersionNodes = Switch ($SysInfo[0].OSBuildNumber) {
-'26100' {'2025'}
-'20348' {'2022'}
-'17763' {'2019'}
-'14393' {'2016'}
-Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
-}
+    # regular Windows Server versions
+    $OSVersionNodes = Switch ($SysInfo[0].OSBuildNumber) {
+    '26100' {'2025'}
+    '20348' {'2022'}
+    '17763' {'2019'}
+    '14393' {'2016'}
+    Default {"RREEDD"+$SysInfo[0].OSBuildNumber}
+    }
 }
 IF($SysInfo[0].SysModel -match "^APEX"){
 	$GenerationNodes = "16g"
-} elseif (($SysInfo[0].SysModel -like "AX-?60") -or ($SysInfo[0].SysModel -like "AX*45?0")){
-	$GenerationNodes = "16g"
-} elseif (($SysInfo[0].SysModel -like "AX-?50") -or ($SysInfo[0].SysModel -like "AX-?5?5")){
-	$GenerationNodes = "15g"
-} elseif (($SysInfo[0].SysModel -like "AX-?40") -or ($SysInfo[0].SysModel -like "AX-?40??") -or ($SysInfo[0].SysModel -like "R?40*Storage Spaces Direct*")){
-	$GenerationNodes = "14g"
-} else {
-	$GenerationNodes ="APEX"
-}
+    } elseif (($SysInfo[0].SysModel -like "AX-?60") -or ($SysInfo[0].SysModel -like "AX*45?0")){
+	    $GenerationNodes = "16g"
+    } elseif (($SysInfo[0].SysModel -like "AX-?50") -or ($SysInfo[0].SysModel -like "AX-?5?5")){
+	    $GenerationNodes = "15g"
+    } elseif (($SysInfo[0].SysModel -like "AX-?40") -or ($SysInfo[0].SysModel -like "AX-?40??") -or ($SysInfo[0].SysModel -like "R?40*Storage Spaces Direct*")){
+	    $GenerationNodes = "14g"
+    } else {
+	    $GenerationNodes ="APEX"
+    }
 }
 
 #region Gather the Support Matrix for Microsoft HCI Solutions
@@ -1858,7 +1675,7 @@ If($ProcessSDDC -ieq "y"){
  $Outputs3 = New-Object 'System.Management.Automation.PSDataCollection[PSObject]'
  $initialSessionState3 = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
  $addMessageSessionStateFunction=@()
- $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'add-TableData', $(Get-Content Function:\add-TableData -ErrorAction Stop)
+ #$addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'add-TableData', $(Get-Content Function:\add-TableData -ErrorAction Stop)
  $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'Convert-BytesToSize', $(Get-Content Function:\Convert-BytesToSize -ErrorAction Stop)
  $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'Set-ResultsSummary', $(Get-Content Function:\Set-ResultsSummary -ErrorAction Stop)
  $addMessageSessionStateFunction | % {$initialSessionState3.Commands.Add($_)}
@@ -1881,16 +1698,7 @@ If($ProcessSDDC -ieq "y"){
     #$LogEvents=$ClusLogFiles | %{"Node $((Split-Path $_.Directory -Leaf).Replace('Node_',''))" | Select-Object @{L="Line";E={$_}};" " | Select-Object @{L="Line";E={$_}};Get-Content $_.FullName -tail 100000 | Select-String -SimpleMatch "NetftTwoFifth" | Select-Object Line };$dstop2=Get-Date
     $LogEvents=$ClusLogFiles | %{"BBLLAACCKK";"BBLLAACCKK";"BBLLAACCKK";"Node $(($_.BaseName) -ireplace '_cluster','')" ;(Get-Content $_.FullName -tail 100000 | Select-String -SimpleMatch "NetftTwoFifth" | Select-Object Line).Line };$dstop2=Get-Date
     #Write-Host "Total time parsing cluster log $(($dstop2-$dstart2).totalseconds) secs"
-
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$LogEvents
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
-        # HTML Report
+    # HTML Report
     $html+='<H2 id="RecentClusterEvents">Recent Cluster Events</H2>'
     $html+="<h5><b>Key:</b></h5>"
     $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;These events indicate a possible node communication issue</h5>"
@@ -1931,7 +1739,7 @@ IF($SDDCPerf -imatch "YES"){
  $Outputs2 = New-Object 'System.Management.Automation.PSDataCollection[PSObject]'
  $initialSessionState2 = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
  $addMessageSessionStateFunction=@()
- $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'add-TableData', $(Get-Content Function:\add-TableData -ErrorAction Stop)
+ #$addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'add-TableData', $(Get-Content Function:\add-TableData -ErrorAction Stop)
  $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'Convert-BytesToSize', $(Get-Content Function:\Convert-BytesToSize -ErrorAction Stop)
  $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'Set-ResultsSummary', $(Get-Content Function:\Set-ResultsSummary -ErrorAction Stop)
  $addMessageSessionStateFunction | % {$initialSessionState2.Commands.Add($_)}
@@ -2152,22 +1960,6 @@ public class Counters
         Remove-Item -Path "$SDDCPath\Counters0.csv"
         $keepthese= $S2DStoragePerfData
         #Write-Host "Import and group objects total time $(((Get-Date)-$d2stop).TotalMilliseconds)"
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$keepthese|Select-Object -Property `
-                @{L='Node';E={[string]$_.Node}},
-                @{L='CNId';E={[string]$_.CNId}},
-                @{L='Object';E={[string]$_.Object}},
-                @{L='Counter';E={[string]$_.Counter}},
-                @{L='Avg';E={[string]$_.Avg}},
-                @{L='Min';E={[string]$_.Min}},
-                @{L='Max';E={[string]$_.Max}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
     #$div=Get-Random 10000
     #$html+='<H2 id="S2DDiskPerformanceData"><a onclick="toggle(''d{0}'',this)">&#8649;&nbsp;</a>S2D Disk Performance Data</H2>' -f $div
@@ -2634,7 +2426,7 @@ If($RunClusSum -ne "No"){
  $Outputs = New-Object 'System.Management.Automation.PSDataCollection[PSObject]'
  $initialSessionState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
  $addMessageSessionStateFunction=@()
- $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'add-TableData', $(Get-Content Function:\add-TableData -ErrorAction Stop)
+ #$addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'add-TableData', $(Get-Content Function:\add-TableData -ErrorAction Stop)
  $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'Convert-BytesToSize', $(Get-Content Function:\Convert-BytesToSize -ErrorAction Stop)
  $addMessageSessionStateFunction += New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList 'Set-ResultsSummary', $(Get-Content Function:\Set-ResultsSummary -ErrorAction Stop)
  $addMessageSessionStateFunction | % {$initialSessionState.Commands.Add($_)}
@@ -2716,14 +2508,6 @@ $Name=""
         ShutdownTimeoutInMinutes
         #$ClusterName | FT -AutoSize -Wrap
 
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterName| Select-Object *,@{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
             $html+='<H2 id="ClusterName">Cluster Name</H2>'
             $html+="<h5><b>Should be:</b></h5>"
@@ -2750,14 +2534,6 @@ $ResultsSummary+=Set-ResultsSummary -name $name -html $html
 
         #$ClusterIP | FT -AutoSize -Wrap
 
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterIP|select -Property @{L='ClusterObject';E={[string]$_.ClusterObject}},Name,Value,Prefix,@{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
             $html+='<H2 id="ClusterIP">Cluster IP</H2>'
 If($ClusterIP.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No Cluster IP found</span></h5>'}
@@ -2773,14 +2549,6 @@ If($ClusterIP.count -eq 0){$html+='<h5><span style="color: #ffffff; background-c
         $ClusterOwner=$SDDCFiles."GetClusterResource" |`
         Where-Object{$_.Name -eq 'Cluster IP Address'}|Select-Object Cluster,OwnerNode,State
         #$ClusterOwner | FT -AutoSize -Wrap
-
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterOwner|select -Property @{L='Cluster';E={[string]$_.Cluster}},@{L='OwnerNode';E={[string]$_.OwnerNode}},@{L='State';E={[string]$_.State}},@{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
 
         #HTML Report
             $html+='<H2 id="ClusterOwner">Cluster Owner</H2>'
@@ -2801,19 +2569,6 @@ If($ClusterOwner.count -eq 0){$html+='<h5><span style="color: #ffffff; backgroun
             IF([string]$_.State -inotmatch "Online"){"RREEDD"+[string]$_.State}Else{[string]$_.State}
                     }}
         #$ClusterWitness | FT -AutoSize -Wrap
-
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterWitness|Select-Object -Property `
-                @{L='Cluster';E={[string]$_.Cluster}},
-                @{L='Name';E={[string]$_.name}},
-                @{L='OwnerNode';E={[string]$_.OwnerNode}},
-                @{L='State';E={[string]$_.State}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
 
         #HTML Report
             $html+='<H2 id="ClusterWitness">ClusterWitness</H2>'
@@ -2876,22 +2631,6 @@ If($ClusterOwner.count -eq 0){$html+='<h5><span style="color: #ffffff; backgroun
 
         }}},Id,Priority
         #$ClusterGroup-Objects | FT -AutoSize -Wrap
-
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterGroup|Select-Object -Property `
-                @{L='GroupType';E={[string]$_.GroupType}},
-                @{L='Name';E={[string]$_.name}},
-                @{L='OwnerNode';E={[string]$_.OwnerNode}},
-                @{L='State';E={[string]$_.State}},
-                @{L='StatusInformation';E={[string]$_.StatusInformation}},
-                @{L='Id';E={[string]$_.Id}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
             $html+='<H2 id="ClusterGroups">Cluster Groups</H2>'
             $html+=$ClusterGroup | ConvertTo-html -Fragment 
@@ -2946,32 +2685,6 @@ If($ClusterOwner.count -eq 0){$html+='<h5><span style="color: #ffffff; backgroun
         
         #$VMInfo| FT -AutoSize -Wrap
         
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$VMInfo|Select-Object -Property `
-                @{L='Host';E={[string]$_.Host}},
-                @{L='VMName';E={[string]$_.VMName}},
-                @{L='State';E={[string]$_.State}},
-                @{L='CPUUsage';E={[string]$_.CPUUsage}},
-                @{L='ProcessorCount';E={[string]$_.ProcessorCount}},
-                @{L='MemoryAssigned';E={[string]$_.MemoryAssigned}},
-                @{L='Uptime';E={[string]$_.Uptime}},
-                @{L='Status';E={[string]$_.Status}},
-                @{L='ConfigurationVersion';E={[string]$_.ConfigurationVersion}},
-                @{L='Generation';E={[string]$_.Generation}},
-                @{L='IsClustered';E={[string]$_.IsClustered}},
-                @{L='NetworkAdapter';E={[string]$_.NetworkAdapter}},
-                @{L='MacAddressSpoofing';E={[string]$_.MacAddressSpoofing}},
-                @{L='SwitchName';E={[string]$_.SwitchName}},
-                @{L='HardDrives';E={[string]$_.HardDrives}},
-                @{L='LocalISOAttached';E={[string]$_.LocalISOAttached}},
-                @{L='ReplHealth';E={[string]$_.'Repl Health'}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
             $html+='<H2 id="VMInfo">Virtual Machine Information</H2>'
 If($VMInfo.count -eq 0){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;No Virtual Machines found</h5>"}
@@ -3075,14 +2788,6 @@ $ClusterNodesOut+=$ClusterNodes | Where-Object {!($Sysinfo.HostName -match $_.na
 $NewestUBR=($ClusterNodesOut | sort UBR)[-1].UBR
 #$ClusterNodesOut = $ClusterNodesOut | Select-Object Name,Model,SerialNumber,State,StatusInformation,Id,OSName,OSVersion,OSBuild,AzureLocal,@{L="UBR";E={"RREEDD"*($_.UBR -ne $NewestUBR)+$_.UBR}},'Time Zone'
 
-#Azure Table CluChkClusterNodes
-    $AzureTableData=@()
-    $AzureTableData=$ClusterNodesOut| Select-Object Name,Model,SerialNumber,Id,OSVersion,OSBuild,@{L='State';E={$_.State.value}},@{L='StatusInformation';E={$_.StatusInformation.value}},@{L='ReportID';E={$CReportID}}
-    $PartitionKey=$H2id
-    $TableName="CluChk$($H2id)"
-    $SasToken='?SECRET REMOVED'
-    $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
 #HTML Report
     $html+='<H2 id="ClusterNodes">Cluster Nodes</H2>'
     $html+="<h5><b>Should be:</b></h5>"
@@ -3175,26 +2880,6 @@ $InPlaceRepairFreeSpaceNeededInStoragePool=IF(($ClusterNodes|Measure-Object).cou
         @{Name="Note";Expression={$SPNote}}
         #$ClusterPool |FL #FT -AutoSize -Wrap
 
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterPool|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='FriendlyName';E={[string]$_.FriendlyName}},
-                @{L='FaultDomainAwarenessDefault';E={[string]$_.FaultDomainAwarenessDefault}},
-                @{L='OperationalStatus';E={[string]$_.OperationalStatus}},
-                @{L='HealthStatus';E={[string]$_.HealthStatus}},
-                @{L='IsPrimordial';E={$_.IsPrimordial}},
-                @{L='IsReadOnly';E={$_.IsReadOnly}},
-                @{L='FreeSpace';E={[string]$_.FreeSpace}},
-                @{L='UsedSpace';E={[string]$_.UsedSpace}},
-                @{L='Capacity';E={[string]$_.Capacity}},
-                @{L='Note';E={[string]$_.Note}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
             $html+='<H2 id="StoragePool">Storage Pool</H2>'
 If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No Storage Pools found</span></h5>'}
@@ -3246,22 +2931,6 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
          
         #$StorageTiers | FT -AutoSize -Wrap
 
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$StorageTiers|Select-Object -Property `
-                @{L='FriendlyName';E={[string]$_.FriendlyName}},
-                @{L='ResiliencySettingName';E={[string]$_.ResiliencySettingName}},
-                @{L='FaultDomainAwareness';E={[string]$_.FaultDomainAwareness}},
-                @{L='AllocatedSize';E={[string]$_.AllocatedSize}},
-                @{L='FootprintOnPool';E={$_.FootprintOnPool}},
-                @{L='NumberOfColumns';E={$_.NumberOfColumns}},
-                @{L='NumberOfDataCopies';E={[string]$_.NumberOfDataCopies}},
-                @{L='PhysicalDiskRedundancy';E={[string]$_.PhysicalDiskRedundancy}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
 
         #HTML Report
             $html+='<H2 id="StorageTiers">Storage Tiers</H2>'
@@ -3351,23 +3020,6 @@ If($ClusterPool.count -eq 0){$html+='<h5><span style="color: #ffffff; background
         IsSnapshot,@{Label='Access';Expression={If ($_.Access -match "\d") {@('Unknown', 'RREEDDRead Only', 'RREEDDWrite Only', 'Read/Write', 'RREEDDWrite Once')[$_.Access]} else {"RREEDD"*($_.Access -ne "Read/Write")+$_.Access}}},
         @{Label='Dedup Enabled';Expression={if ($DedupDisabled -and $DeDupTask -and $SysInfo[0].SysModel -notmatch "^APEX") {"RREEDD"+$_.IsDeduplicationEnabled} else {$_.IsDeduplicationEnabled}}},@{Label='DeDup Last Run';Expression={If ($DeDupTask) {$DeDupTask.TimeCreated.GetDateTimeFormats('s')}}}
         #$VirtualDisks | FT -AutoSize -Wrap
-
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$VirtualDisks|Select-Object -Property `
-                @{L='FriendlyName';E={[string]$_.FriendlyName}},
-                @{L='OperationalStatus';E={[string]$_.OperationalStatus}},
-                @{L='HealthStatus';E={[string]$_.HealthStatus}},
-                @{L='DetachedReason';E={[string]$_.DetachedReason}},
-                @{L='IsSnapshot';E={$_.IsSnapshot}},
-                @{L='IsReadOnly';E={$_.IsReadOnly}},
-                @{L='IsDeduplicationEnabled';E={[string]$_.IsDeduplicationEnabled}},
-                @{L='DeDup Last Rnn';E={[string]$_.'DeDup Last Run'}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
 
         #HTML Report
         $html+='<H2 id="VirtualDisks">Virtual Disks</H2>'
@@ -3567,25 +3219,6 @@ $htmlout+=$html
 
         #$VDROutput |Sort-Object VirtualDiskName |Format-Table
         $VDROutput=$VDROutput | Sort VirtualDiskName
-
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$VDROutput|Select-Object -Property `
-                @{L='VirtualDiskName';E={[string]$_.VirtualDiskName}},
-                @{L='TotalSize';E={[string]$_.TotalSize}},
-                @{L='PercentFree';E={[string]$_.'%Free'}},
-                @{L='PhysicalDiskRedundancy';E={[string]$_.PhysicalDiskRedundancy}},
-                @{L='FaultDomainAwareness';E={$_.FaultDomainAwareness}},
-                @{L='Resiliency';E={$_.Resiliency}},
-                @{L='MirrorSize';E={[string]$_.MirrorSize}},
-                @{L='ParitySize';E={[string]$_.ParitySize}},
-                @{L='StorageFootprint';E={[string]$_.StorageFootprint}},
-                @{L='Efficiency';E={[string]$_.Efficiency}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
 
         #HTML Report
             $html+=$VDROutput | ConvertTo-html -Fragment 
@@ -3906,26 +3539,6 @@ $DiskCountPerNodetbl.rows.add($row)
 
     #Write-Host "Physical Disk time is $(((Get-Date)-$dstop).totalmilliseconds)"
 
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$PhysicalDisks|Select-Object -Property `
-                @{L='Node';E={[string]$_.Node}},
-                @{L='ID';E={[string]$_.ID}},
-                @{L='FriendlyName';E={[string]$_.FriendlyName}},
-                @{L='UniqueID';E={[string]$_.UniqueID}},
-                @{L='SerialNumber';E={[string]$_.SerialNumber}},
-                @{L='Slot';E={$_.Slot}},
-                @{L='MediaType';E={$_.MediaType}},
-                @{L='CanPool';E={$_.CanPool}},
-                @{L='OperationalStatus';E={$_.OperationalStatus}},
-                @{L='HealthStatus';E={$_.HealthStatus}},
-                @{L='Usage';E={$_.Usage}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
         $html+='<H2 id="PhysicalDisks">Physical Disks</H2>'
 If($PhysicalDisks.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No Physical Disks found</span></h5>'}
@@ -3997,21 +3610,6 @@ $htmlout+=$html
           '5'{'Unknown'}`
         }}},NumberOfSlots,ElementTypesInError
         #$StorageEnclosure | FT -AutoSize -Wrap
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$StorageEnclosure|Select-Object -Property `
-                @{L='FriendlyName';E={[string]$_.FriendlyName}},
-                @{L='SerialNumber';E={[string]$_.SerialNumber}},
-                @{L='OperationalStatus';E={[string]$_.OperationalStatus}},
-                @{L='HealthStatus';E={[string]$_.HealthStatus}},
-                @{L='NumberOfSlots';E={$_.NumberOfSlots}},
-                @{L='ElementTypesInError';E={$_.ElementTypesInError}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
             $html+='<H2 id="StorageEnclosure">Storage Enclosure</H2>'
 If($StorageEnclosure.count -eq 0){
@@ -4104,21 +3702,6 @@ $htmlout+=$html
           '32768'{'CompletedWithWarnings'}`
         }}},PercentComplete,BytesProcessed,BytesTotal
         #$StorageJobs | FT -AutoSize -Wrap
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$StorageJobs|Select-Object -Property `
-                @{L='Name';E={[string]$_.Name}},
-                @{L='ElapsedTime';E={[string]$_.ElapsedTime}},
-                @{L='JobState';E={[string]$_.JobState}},
-                @{L='PercentComplete';E={[string]$_.PercentComplete}},
-                @{L='BytesProcessed';E={$_.BytesProcessed}},
-                @{L='BytesTotal';E={$_.BytesTotal}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
         $html+='<H2 id="StorageJobs">Storage Jobs</H2>'
 If($StorageJobs.count -eq 0){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;No Storage Jobs found</h5>"}
@@ -4152,20 +3735,6 @@ $htmlout+=$html
         ,Reason,`
         @{Label='RecommendedActions';Expression={$_.RecommendedActions -replace [regex]::match($_.OperationalStatus,"\\d+")}}
         #$DebugStorageSubsystem | FT -AutoSize -Wrap
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$DebugStorageSubsystem|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='FaultType';E={[string]$_.FaultType}},
-                @{L='PerceivedSeverity';E={[string]$_.PerceivedSeverity}},
-                @{L='Reason';E={[string]$_.Reason}},
-                @{L='RecommendedActions';E={$_.RecommendedActions}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
         $html+='<H2 id="DebugStorageSubsystem">Debug Storage Subsystem</H2>'
 If($DebugStorageSubsystem.count -eq 0){$html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;No Storage Debug entries found</h5>"}
@@ -4197,21 +3766,6 @@ $htmlout+=$html
                 IF($ClusterName.S2DEnabled -eq 1 -and $_.Address.length -ne 0 -and $_.Role -match 'None'){"If S2D/HCI Network is for Storage, Role should NOT be set to None."}
             }}
         #$ClusterNetworks | FT -AutoSize -Wrap
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterNetworks|Select-Object -Property `
-                @{L='Name';E={[string]$_.Name}},
-                @{L='State';E={[string]$_.State}},
-                @{L='Metric';E={[string]$_.Metric}},
-                @{L='Role';E={[string]$_.Role}},
-                @{L='Address';E={$_.Address}},
-                @{L='Note';E={IF($_.Note.length -le 3){$Null}Else{$_.Note}}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
         $html+='<H2 id="ClusterNetworks">Cluster Networks</H2>'
 If($ClusterNetworks.count -eq 0){$html+='<h5><span style="color: #ffffff; background-color: #ff0000">&nbsp;&nbsp;&nbsp;&nbsp;No Cluster Networks found</span></h5>'}
@@ -4239,21 +3793,6 @@ $htmlout+=$html
         }}},IPv4Address,IPv6Address
         }
         #$ClusterNodeIPAddresses | FT -AutoSize -Wrap
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterNodeIPAddresses|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='InterfaceAlias';E={[string]$_.InterfaceAlias}},
-                @{L='ifIndex';E={[string]$_.ifIndex}},
-                @{L='AddressState';E={[string]$_.AddressState}},
-                @{L='IPv4Address';E={$_.IPv4Address}},
-                @{L='IPv6Address';E={$_.IPv6Address}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
         $html+='<H2 id="ClusterNodeIPAddresses">Cluster Node IP Addresses</H2>'
         $html+=$ClusterNodeIPAddresses | ConvertTo-html -Fragment 
@@ -4413,15 +3952,6 @@ $htmlout+=$html
                 PlumbAllCrossSubnetRoutes,RouteHistoryLength,AutoAssignNodeSite,PreferredSite
         }
         #$ClusterHeartbeatConfigurationXml | FT -AutoSize -Wrap
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ClusterHeartbeatConfigurationXml | Select *,
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         #HTML Report
         $html+='<H2 id="ClusterHeartbeatConfiguration">Cluster Heartbeat Configuration</H2>'
         If($IsStretchedCluster){
@@ -4503,16 +4033,7 @@ Write-Progress -Activity "Parsing Cluster Logs" -Completed
                 IF((([regex]'\D\/\D\s[1-9]').Matches($_.HealthCounters)).Count -gt 0){"RREEDD"+$_.HealthCounters}
                 Else{$_.HealthCounters}}}
     #$SBLDisks|ft
-         #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$SBLDisks | Select *,
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s' -replace '\:'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
-        #HTML Report
+       #HTML Report
             $html+=$SBLDisks | ConvertTo-html -Fragment
             $html+="<h5><b>&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://jtpedersen.com/2017/11/how-to-rebind-mirror-or-performance-drives-back-to-s2d-cache-device/' target='_blank'>Ref: Repair-ClusterStorageSpacesDirect -RecoverUnboundDrives -Verbose</a></b></h5>"
             IF((($PhysicalDisks.mediatype | sort -Unique).count -eq 1) -and ($PhysicalDisks.mediatype -ne "HDD")){
@@ -4566,20 +4087,6 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://dellservices.lightning.force.com/lightning/r/Lightning_Knowledge__kav/ka02R000000Y5fSQAS/view' target='_blank'>How to Collect Diagnostic Logs for Azure Stack HCI(S2D)</a></h5>"
     }
     IF($StorageNics){
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$StorageNics|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='Name';E={[string]$_.name}},
-                @{L='InterfaceDescription';E={[string]$_.InterfaceDescription}},
-                @{L='ifIndex';E={[string]$_.ifIndex}},
-                @{L='MacAddress';E={[string]$_.MacAddress}},
-                @{L='LinkSpeed';E={[string]$_.LinkSpeed}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
         # HTML Report
             $html+="<h5><b>Should be:</b></h5>"
             $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Storage NICs 10 Gbps or faster</h5>"
@@ -4725,14 +4232,6 @@ $htmlout+='<H1 id="S2DValidation">S2D Validation</H1>'
 
 
              #$LiveMigrationNetworkPrioritiesOut
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$LiveMigrationNetworkPrioritiesOut|Select-Object *,
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
         # HTML Report
     $html+='<H2 id="LiveMigrationNetworkPriorities">Live Migration Network Priorities</H2>'
     $html+="<h5><b>Should be:</b></h5>"
@@ -5094,20 +4593,6 @@ $UpdateOutofBoxdriverstbl.rows.add($row)
 
     #$UpdateOutofBoxdriverstbl |Format-Table 
     $UpdateOutofBoxdriversOut = $UpdateOutofBoxdriverstbl|Where-Object{$_.Manufacturer -inotmatch 'System.__ComObject'}|Sort-Object Manufacturer, DeviceName | Select-object -Property * -Exclude RowError, RowState, Table, ItemArray, HasErrors
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$UpdateOutofBoxdrivers|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='DeviceName';E={[string]$_.DeviceName}},
-                @{L='DriverVersion';E={[string]$_.DriverVersion}},
-                @{L='AvailableVersion';E={[string]$_.AvailableVersion}},
-                @{L='Manufacturer';E={[string]$_.Manufacturer}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
     $html+='<H2 id="UpdateOutofBoxbiosanddrivers">Update Out of Box bios and drivers</H2>'
     $html+="&nbsp;&nbsp;&nbsp;&nbsp;Drivers should be listed once else drivers not same on all nodes"
@@ -5152,15 +4637,6 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
            } 
            $SolutionUpdates = $SolutionUpdates | Sort ResourceId 
            $HealthCheckIssues=$SolutionUpdateFiles | ? {$_ -ne $null} | ? {$_.State -le "" -and $_.Status -ne "SUCCESS" -and $_.Severity -ne "INFORMATIONAL" }
-            #Azure Table
-               $AzureTableData=@()
-               $AzureTableData=$SolutionUpdates | Select *,
-                   @{L='ReportID';E={$CReportID}}
-               $PartitionKey=$Name -replace '\s'
-               $TableName="CluChk$($PartitionKey)"
-               $SasToken='?SECRET REMOVED'
-               $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
            #HTML Report
            $html+='<H2 id="SolutionandSBEUpdates">Solution and SBE Updates</H2>'
            $html+=$SolutionUpdates | ConvertTo-html -Fragment
@@ -5962,14 +5438,6 @@ Unable to add KV info to
         }
 
         #$FirewallProfile | FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$FirewallProfile|Select-Object *,@{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="FirewallProfile">Firewall Profile</H2>'
         $html+=""
@@ -6212,23 +5680,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 IF($_.Name -match "RREEDD"){"This switch should have at least one VM or external virtual adapter attached. Health check will fail."}}}
 
         #$VMSwitchandAdapterconfiguration|FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$VMSwitchandAdapterconfiguration|Select-Object -Property `
-                @{L='ComputerName';E={[string]$_.ComputerName}},
-                @{L='Name';E={[string]$_.Name}},
-                @{L='EmbeddedTeamingEnabled';E={[string]$_.EmbeddedTeamingEnabled}},
-                @{L='BandwidthReservationMode';E={[string]$_.BandwidthReservationMode}},
-                @{L='BandwidthPercentage';E={[string]$_.BandwidthPercentage}},
-                @{L='SoftwareRscEnabled';E={[string]$_.SoftwareRscEnabled}},
-                @{L='NetAdapterInterfaceDescriptions';E={[string]$_.NetAdapterInterfaceDescriptions}},
-                @{L='Note';E={[string]$_.Note}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="VMSwitchandAdapterConfiguration">VM Switch and Adapter Configuration</H2>'
         $VMSwitchandAdapterconfigurationkey=""
@@ -6279,21 +5730,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 #>
         $VMNetworkAdaptersvLANs=$VMNetworkAdaptersvLANs|Select-Object ComputerName,AdapterName,OperationMode,VlanId,Band*
         #$VMNetworkAdaptersvLANs | FT
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$VMNetworkAdaptersvLANs|Select-Object -Property `
-                @{L='ComputerName';E={[string]$_.ComputerName}},
-                @{L='AdapterName';E={[string]$_.AdapterName}},
-                @{L='OperationMode';E={[string]$_.OperationMode}},
-                @{L='VlanId';E={[string]$_.VlanId}},
-                @{L='BandwidthSetting';E={[string]$_.BandwidthSetting}},
-                @{L='BandwidthPercentage';E={[string]$_.BandwidthPercentage}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="VMNetworkAdaptersvLANs">VM Network Adapters vLANs</H2>'
         $VMNetworkAdaptersvLANsKey=""
@@ -6333,14 +5769,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         }
         
         #$ConfigureHostManagementVLAN|FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$ConfigureHostManagementVLAN|Select-Object *,@{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="ConfigureHostManagementVLAN">Configure Host Management VLAN</H2>'
         $ConfigureHostManagementVLANkey=""
@@ -6374,20 +5802,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $AssignHostManagementIPaddress=$AssignHostManagementIPaddress|Select-Object PSComputerName,InterfaceAlias,ifIndex,IPAddress,AddressState
         #@{Label='AddressState';Expression={If($_.AddressState -inotmatch 'Preferred'){"YYEELLLLOOWW"+$_.AddressState}Else{$_.AddressState}}}
         #$AssignHostManagementIPaddress|FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$AssignHostManagementIPaddress|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='InterfaceAlias';E={[string]$_.InterfaceAlias}},
-                @{L='ifIndex';E={[string]$_.ifIndex}},
-                @{L='IPAddress';E={[string]$_.IPAddress}},
-                @{L='AddressState';E={[string]$_.AddressState}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="AssignHostManagementIPaddress">Assign Host Management IP address</H2>'
         $AssignHostManagementIPaddressSB=""
@@ -6431,23 +5845,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 					else {$NetIp.IPv4Address}
 					}}
 		}
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$AssignHostManagementIPaddress|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='InterfaceDescription';E={[string]$_.InterfaceDescription}},
-                @{L='ifIndex';E={[string]$_.ifIndex}},
-                @{L='AdminStatus';E={[string]$_.AdminStatus}},
-                @{L='MediaConnectionState';E={[string]$_.MediaConnectionState}},
-                @{L='Speed';E={[string]$_.Speed}},
-                @{L='IPv4Address';E={[string]$_.IPv4Address}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-		
-		
         # HTML Report
         $html+='<H2 id="iDRACISMIPaddress">iDRAC ISM IP address</H2>'
         $iDRACIPaddress=""
@@ -6491,22 +5888,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 
         #$FoundGetNetAdaptervmq | Sort-Object PSComputerName,Name|FT -AutoSize
         $FoundGetNetAdaptervmq=$FoundGetNetAdaptervmq | Sort-Object PSComputerName,Name
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$FoundGetNetAdaptervmq|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='Name';E={[string]$_.Name}},
-                @{L='InterfaceDescription';E={[string]$_.InterfaceDescription}},
-                @{L='Enabled';E={[string]$_.Enabled}},
-                @{L='BaseProcessorNumber';E={[string]$_.BaseProcessorNumber}},
-                @{L='MaxProcessors';E={[string]$_.MaxProcessors}},
-                @{L='NumberOfReceiveQueues';E={[string]$_.NumberOfReceiveQueues}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="VMQinformation">VMQ Information</H2>'
         $GetNetAdaptervmqSB=""
@@ -6532,14 +5913,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $GetNetAdapterQosXml=Foreach ($key in ($SDDCFiles.keys -like "*GetNetAdapterQos")) {$SDDCFiles."$key" | Where-Object{$_.InterfaceDescription -like "Intel*10G*X710*"}}
             $GetNetAdapterQos=$GetNetAdapterQosXml | Select-Object PSComputerName,Name,InterfaceDescription,@{L='Enabled';E={IF($_.Enabled -eq $True){"RREEDD"+$_.Enabled}Else{$_.Enabled}}}
             #$GetNetAdapterQos | Sort-Object PSComputerName,InterfaceDescription | ft
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetNetAdapterQos|Select-Object *,@{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
             $html+='<H2 id="IntelDCBCheck">Intel DCB Check</H2>'
             $GetNetAdapterQosSB=""
@@ -6592,20 +5965,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                     If($_.DisplayValue -inotmatch 'iWARP' -and $_.InterfaceDescription -notlike "*E810*" ){"RREEDD"+$_.DisplayValue}Else{$_.DisplayValue}
                 }Else{$_.DisplayValue}
             }}
-            #Azure Table
-                $AzureTableData=@()
-                $AzureTableData=$GetNetAdapterAdvancedProperty|Select-Object -Property `
-                    @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                    @{L='Name';E={[string]$_.Name}},
-                    @{L='InterfaceDescription';E={[string]$_.InterfaceDescription}},
-                    @{L='DisplayName';E={[string]$_.DisplayName}},
-                    @{L='DisplayValue';E={[string]$_.DisplayValue}},
-                    @{L='ReportID';E={$CReportID}}
-                $PartitionKey=$Name -replace '\s'
-                $TableName="CluChk$($PartitionKey)"
-                $SasToken='?SECRET REMOVED'
-                $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
             # HTML Report
             $html+='<H2 id="RDMAmodeonQLogicNICs">RDMA mode</H2>'
             $html+=""
@@ -6643,20 +6002,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 }Else{$_.DisplayValue}
             }}
             #}
-            #Azure Table
-                $AzureTableData=@()
-                $AzureTableData=$GetNetAdapterAdvancedProperty|Select-Object -Property `
-                    @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                    @{L='Name';E={[string]$_.Name}},
-                    @{L='InterfaceDescription';E={[string]$_.InterfaceDescription}},
-                    @{L='DisplayName';E={[string]$_.DisplayName}},
-                    @{L='DisplayValue';E={[string]$_.DisplayValue}},
-                    @{L='ReportID';E={$CReportID}}
-                $PartitionKey=$Name -replace '\s'
-                $TableName="CluChk$($PartitionKey)"
-                $SasToken='?SECRET REMOVED'
-                $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
             # HTML Report
             $html+='<H2 id="RDMAmodeonMellanoxNICs">RDMA mode on Mellanox NICs</H2>'
             $html+=""
@@ -6687,14 +6032,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 }Else{$_.Enabled}
             }}
         #$GetNetAdapterRdma | FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetNetAdapterRdma|Select-Object *,@{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="RDMAconfiguration">RDMA configuration</H2>'
         $GetNetAdapterRdmaSB=""
@@ -6723,18 +6060,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                 $GetVMNetworkAdapterTeamMapping=$GetVMNetworkAdapterTeamMapping|Select-Object NetAdapterName,`
                 @{Label='ParentAdapter';Expression={If($_.ParentAdapter -inotmatch 'VMInternalNetworkAdapter'){"RREEDD"+$_.ParentAdapter}Else{$_.ParentAdapter}}}
                 #$GetVMNetworkAdapterTeamMapping | FT -AutoSize
-                #Azure Table
-                    $AzureTableData=@()
-                    $AzureTableData=$GetNetAdapterAdvancedProperty|Select-Object -Property `
-                        @{L='ComputerName';E={[string]$_.ComputerName}},
-                        @{L='NetAdapterName';E={[string]$_.NetAdapterName}},
-                        @{L='ParentAdapter';E={[string]$_.ParentAdapter}},
-                        @{L='ReportID';E={$CReportID}}
-                    $PartitionKey=$Name -replace '\s'
-                    $TableName="CluChk$($PartitionKey)"
-                    $SasToken='?SECRET REMOVED'
-                    $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
                 # HTML Report
                 $html+='<H2 id="VMNetworkAdapterTeamMapping">VM Network Adapter Team Mapping</H2>'
                 $html+=""
@@ -6762,18 +6087,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         @{Label='VirtualMachineMigrationPerformanceOption';Expression={If($_.VirtualMachineMigrationPerformanceOption -inotmatch 'SMB'){"RREEDD"+$_.VirtualMachineMigrationPerformanceOption}Else{$_.VirtualMachineMigrationPerformanceOption}}},`
         @{Label='UseAnyNetworkForMigration';Expression={"YYEELLLLOOWW"*($_.UseAnyNetworkForMigration -eq $false)+$_.UseAnyNetworkForMigration}}
         #$GetVMHost | FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetVMHost|Select-Object -Property `
-                @{L='ComputerName';E={[string]$_.ComputerName}},
-                @{L='VirtualMachineMigrationEnabled';E={[string]$_.VirtualMachineMigrationEnabled}},
-                @{L='VirtualMachineMigrationPerformanceOption';E={[string]$_.VirtualMachineMigrationPerformanceOption}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="VirtualMachineMigrationPerformanceOption">Virtual Machine Migration Performance Option</H2>'
         $GetVMHostSB=""
@@ -6836,19 +6149,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $GetNetQosPolicyOut=$GetNetQosPolicySMB+$GetNetQosPolicyCluster
         #$GetNetQosPolicyOut | Format-Table -AutoSize
         #$html+="<h2>QoS Policy configuration</h2>"
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetNetQosPolicyOut|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='Name';E={[string]$_.Name}},
-                @{L='NetDirectPortMatchCondition';E={[string]$_.NetDirectPortMatchCondition}},
-                @{L='PriorityValue8021Action';E={[string]$_.PriorityValue8021Action}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="QoSPolicyconfiguration">QoS Policy configuration</H2>'
         $html+=""
@@ -6885,20 +6185,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
 
         $GetNetQosTrafficClassOut=$GetNetQosTrafficClassSMB+$GetNetQosTrafficClassCluster+$GetNetQosTrafficClassRest
         #$GetNetQosTrafficClassOut | FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetNetQosTrafficClassOut|Select-Object -Property `
-                @{L='ComputerName';E={[string]$_.ComputerName}},
-                @{L='Name';E={[string]$_.NamePriority}},
-                @{L='Priority';E={[string]$_.NetDirectPortMatchCondition}},
-                @{L='BandwidthPercentage';E={[string]$_.BandwidthPercentage}},
-                @{L='Algorithm';E={[string]$_.Algorithm}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="NetQosTrafficClass">Net Qos Traffic Class</H2>'
         $html+=""
@@ -6939,18 +6225,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
                     Else{$_.Enabled}}}
         #$getNetQosFlowControlOut | FT -AutoSize
 
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$getNetQosFlowControlOut|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='Priority';E={[string]$_.NetDirectPortMatchCondition}},
-                @{L='Enabled';E={[string]$_.Enabled}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="NetQosFlowControl">Net Qos Flow Control</H2>'
         $html+=""
@@ -6977,19 +6251,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,DisplayName,`
         @{Label='DisplayValue';Expression={$nn=$_.name;$ifdesc=$_.InterfaceDescription;"RREEDD"*(($nn -imatch ($StorageNics.name | Sort-Object -Unique)) -and ($_.DisplayValue -inotmatch 'Enabled') -and ($ifdesc -imatch 'Mellanox|NVIDIA'))+"YYEELLLLOOWW"*($NotConverged -and (($StorageNics.name | Sort-Object -Unique) -notcontains $nn))+$_.DisplayValue}}
         #$GetNetAdapterAdvancedProperty | FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetNetAdapterAdvancedProperty|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='Name';E={[string]$_.Name}},
-                @{L='DisplayName';E={[string]$_.DisplayName}},
-                @{L='DisplayValue';E={[string]$_.DisplayValue}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="NetAdapterQos">Net Adapter Qos</H2>'
         $html+=""
@@ -7070,17 +6331,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         }
         
         #$GetNetQosDcbxSetting | FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetNetQosDcbxSetting|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='Willing';E={[string]$_.Willing}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="NetQosDcbxSetting">Net Qos Dcbx Setting</H2>'
         $html+=""
@@ -7106,19 +6356,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $GetNetAdapterAdvancedProperty=$GetNetAdapterAdvancedProperty|Select-Object PSComputerName,Name,DisplayName,`
             @{Label='DisplayValue';Expression={$nn=$_.Name;If((($StorageNics.name | Sort-Object -Unique) -imatch $nn ) -and ($_.DisplayValue -inotmatch 'Host In Charge') -and (($StorageNics | Sort Name -Unique | ? name -imatch $nn).InterfaceDescription -imatch 'Mellanox|NVIDIA')){"RREEDD"*(-not $SysInfo[0].AzureLocalVersion)+"YYEELLLLOOWW"*($SysInfo[0].AzureLocalVersion -gt "")+$_.DisplayValue}Else{$_.DisplayValue}}}
             #$GetNetAdapterAdvancedProperty | FT -AutoSize
-            #Azure Table
-                $AzureTableData=@()
-                $AzureTableData=$GetNetAdapterAdvancedProperty|Select-Object -Property `
-                    @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                    @{L='Name';E={[string]$_.Name}},
-                    @{L='DisplayName';E={[string]$_.DisplayName}},
-                    @{L='DisplayValue';E={[string]$_.DisplayValue}},
-                    @{L='ReportID';E={$CReportID}}
-                $PartitionKey=$Name -replace '\s'
-                $TableName="CluChk$($PartitionKey)"
-                $SasToken='?SECRET REMOVED'
-                $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
             # HTML Report
             $html+='<H2 id="NetQosDcbxProperty">Net Qos Dcbx Property</H2>'
             $html+=""
@@ -7157,18 +6394,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
         @{L='ServerRequireSecuritySignature';E={$RequireSecuritySignature=$_.RequireSecuritySignature;IF(($SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -notmatch "2[3-9]H2" -and $RequireSecuritySignature -eq 1) -or (($SysInfo[0].SysModel -match "^APEX" -or $OSVersionNodes -eq "23H2") -and $RequireSecuritySignature -eq 0)){"RREEDD$RequireSecuritySignature"}Else{$RequireSecuritySignature}}}
         $DisableSMBSigning=$DisableSMBSigningGetSmbClientConfiguration+$DisableSMBSigningGetSmbServerConfiguration
         #$DisableSMBSigning | FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$DisableSMBSigning|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='ClientEnableSecuritySignature';E={[string]$_.ClientEnableSecuritySignature}},
-                @{L='ServerEnableSecuritySignature';E={[string]$_.ServerEnableSecuritySignature}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="DisableSMBSigning">Disable SMB Signing</H2>'
         $html+=""
@@ -7208,17 +6433,6 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #ffffff; backgr
             $GetItemProperty=Foreach ($ThisHost in (Get-ChildItem -Path $SDDCPath -Filter "GetRegSpacePortParameters.xml" -Recurse -Depth 1)) {import-clixml -Path $ThisHost.fullname -ErrorAction Continue | Select-Object @{L="ComputerName";E={$ThisHost.Directory.Name -replace "Node_",""}},*}
             $GetItemPropertyOut =$GetItemProperty|Where-Object{$_.HwTimeout -ne $Null} | Select-Object ComputerName,@{L='HwTimeout';E={$HwTimeout=$_.HwTimeout;IF($HwTimeout -lt 10000){"RREEDD"}ElseIF($HwTimeout -gt 10000){"YYEELLLLOOWW$HwTimeout"}Else{$HwTimeout}}} | Sort-Object ComputerName
             #$GetItemPropertyOut | FT -AutoSize
-            #Azure Table
-                $AzureTableData=@()
-                $AzureTableData=$GetItemPropertyOut|Select-Object -Property `
-                    @{L='ComputerName';E={[string]$_.ComputerName}},
-                    @{L='HwTimeout';E={[string]$_.HwTimeout}},
-                    @{L='ReportID';E={$CReportID}}
-                $PartitionKey=$Name -replace '\s'
-                $TableName="CluChk$($PartitionKey)"
-                $SasToken='?SECRET REMOVED'
-                $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
             # HTML Report
             $html+='<H2 id="UpdatehardwaretimeoutforSpacesport">Update hardware timeout for Spaces port</H2>'
             $html+=""
@@ -7267,18 +6481,7 @@ If($SystemInfoContent[2] -imatch 'HCI'){
                 }
               }
               #$GetRegOEMInformationOut | FT -AutoSize
-              #Azure Table
-                $AzureTableData=@()
-                $AzureTableData=$GetRegOEMInformationOut|Select-Object -Property `
-                    @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                    @{L='SupportProvider';E={[string]$_.SupportProvider}},
-                    @{L='ReportID';E={$CReportID}}
-                $PartitionKey=$Name -replace '\s'
-                $TableName="CluChk$($PartitionKey)"
-                $SasToken='?SECRET REMOVED'
-                $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
-            # HTML Report
+              # HTML Report
                 $html+='<H2 id="OEMInformationSupportProvider">OEM Information Support Provider</H2>'
                 $html+=""
                 $html+="<h5><b>Should be:</b></h5>"
@@ -7323,19 +6526,6 @@ If($SystemInfoContent[2] -imatch 'HCI'){
             }
 
         #$GetNetAdapterAdvancedProperty|FT -AutoSize
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$GetNetAdapterAdvancedProperty|Select-Object -Property `
-                @{L='PSComputerName';E={[string]$_.PSComputerName}},
-                @{L='Name';E={[string]$_.Name}},
-                @{L='DisplayName';E={[string]$_.DisplayName}},
-                @{L='DisplayValue';E={[string]$_.DisplayValue}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
         $html+='<H2 id="JumboFrames">Jumbo Frames</H2>'
         $html+=""
@@ -7368,21 +6558,6 @@ $LogName="Microsoft-Windows-StorageSpaces-Driver/Diagnostic"
     #$SSDDEvents|Select-Object -First 1 | FL *
     $SSDDEventsOut=$SSDDEvents|Sort-Object MachineName|Sort-Object -Descending TimeCreated | Select-Object MachineName,LogName,TimeCreated,Id,LevelDisplayName,Message
     If ($Null -eq $SSDDEvents.count) { Write-Host "            No such EventId $LogId exists" -ForegroundColor Yellow } Else { Write-Host "            Found "($SSDDEvents).Count" Events for ID $LogId"}
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$SSDDEventsOut|Select-Object -Property `
-                @{L='MachineName';E={[string]$_.MachineName}},
-                @{L='LogName';E={[string]$_.LogName}},
-                @{L='TimeCreated';E={[string]$_.TimeCreated}},
-                @{L='Id';E={[string]$_.Id}},
-                @{L='LevelDisplayName';E={[string]$_.LevelDisplayName}},
-                @{L='Message';E={[string]$_.Message}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
     $html+='<H2 id="StorageSpacesDriverDiagnosticEvents">Storage Spaces Driver Diagnostic Events</H2>'
     $html+="<h5><b>Key:</b></h5>"
@@ -7418,22 +6593,7 @@ $LogName="System"
     #$SSDDEvents|Select-Object -First 1 | FL *
     $SSDDEventsOut=$SSDDEvents|Sort-Object MachineName|Sort-Object -Descending TimeCreated | Select-Object MachineName,LogName,TimeCreated,@{L="Id";E={"YYEELLLLOOWW$($_.Id)"}},LevelDisplayName,Message
     If ($Null -eq $SSDDEvents.count) { Write-Host "            No such EventId $LogId exists" -ForegroundColor Yellow } Else { Write-Host "            Found "($SSDDEvents).Count" Events for ID $LogId"}
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$SSDDEventsOut|Select-Object -Property `
-                @{L='MachineName';E={[string]$_.MachineName}},
-                @{L='LogName';E={[string]$_.LogName}},
-                @{L='TimeCreated';E={[string]$_.TimeCreated}},
-                @{L='Id';E={[string]$_.Id}},
-                @{L='LevelDisplayName';E={[string]$_.LevelDisplayName}},
-                @{L='Message';E={[string]$_.Message}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
-        # HTML Report
+    # HTML Report
     $html+='<H2 id="Hyper-VNetworkEvents">Hyper-V Network Events</H2>'
     $html+="<h5><b>Key:</b></h5>"
     $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;These events indicate possible network resource congestion:</h5>"
@@ -7588,19 +6748,6 @@ ElseIF($_.Severity -eq 4){"RREEDD"+$_.Severity}}},Description
 }
 }
 }
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$SelOut|Select-Object -Property `
-                @{L='Node';E={[string]$_.Node}},
-                @{L='Record';E={[string]$_.Record}},
-                @{L='DateTime';E={[string]$_.DateTime}},
-                @{L='Severity';E={[string]$_.Severity}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
             $html+='<H2 id="SelLogErrorsandWarnings">Sel Log Errors and Warnings</H2>'
             $html+='<H5>&nbsp;&nbsp;&nbsp;&nbsp;Only showing the last 30 days</H5>'
@@ -7633,21 +6780,6 @@ ElseIF($_.Severity -eq 4){"RREEDD"+$_.Severity}}},Description
                     @{Label='HostNICMacAddress';Expression={IF(($GetNetAdapterXml|Where-Object{$_.MacAddress.startswith($SWPMac)}).MacAddress -eq $Null){$SWPMac -replace "-",":"}Else{($GetNetAdapterXml|Where-Object{$_.MacAddress.startswith($SWPMac)}).MacAddress -replace "-",":"}}}
                 }
             } 
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$FoundSwMap|Select-Object -Property `
-                @{L='HostName';E={[string]$_.HostName}},
-                @{L='SwitchMacAddress';E={[string]$_.SwitchMacAddress}},
-                @{L='SwitchPortConnectionID';E={[string]$_.SwitchPortConnectionID}},
-                @{L='HostNicSlotPort';E={[string]$_.HostNicSlotPort}},
-                @{L='Name';E={[string]$_.Name}},
-                @{L='HostNICMacAddress';E={[string]$_.HostNICMacAddress}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report            
             $html+='<H2 id="SwitchtoHostMap">Switch to Host map</H2>'
             $SwMapSB=""
@@ -7698,21 +6830,6 @@ ElseIF($_.Severity -eq 4){"RREEDD"+$_.Severity}}},Description
             #$BIOSandiDRACCfgtbl |Format-Table SettingName,AvailableVersion,???????
             $BIOSandiDRACCfgOut=$BIOSandiDRACCfgtbl|Where-Object{$_ -iNotMatch 'System.__ComObject'}|Sort-Object Type,SettingName | Select-object -Property * -Exclude RowError, RowState, Table, ItemArray, HasErrors
             #$BIOSandiDRACCfgOut|ft
-        #Azure Table
-            $AzureTableData=@()
-            $AzureTableData=$BIOSandiDRACCfg|Select-Object -Property `
-                @{L='HostName';E={[string]$_.HostName}},
-                @{L='ServiceTag';E={[string]$_.ServiceTag}},
-                @{L='Type';E={[string]$_.Type}},
-                @{L='SettingName';E={[string]$_.SettingName}},
-                @{L='CurrentValue';E={[string]$_.CurrentValue}},
-                @{L='Device';E={[string]$_.Device}},
-                @{L='ReportID';E={$CReportID}}
-            $PartitionKey=$Name -replace '\s'
-            $TableName="CluChk$($PartitionKey)"
-            $SasToken='?SECRET REMOVED'
-            $AzureTableData | %{add-TableData -TableName $TableName -PartitionKey $PartitionKey -RowKey (new-guid).guid -data $_ -SasToken $SasToken}
-
         # HTML Report
             $html+='<H2 id="BIOSandiDRACconfiguration">iDRAC, BIOS and QLogic NIC configuration</H2>'
             $iDRACandBIOSconfigurationSB=""
