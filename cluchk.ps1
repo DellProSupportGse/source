@@ -26,6 +26,10 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/07/14:v1.90 -  1. New Update: TP - New version 1.90 DEV
+                        2. New Update: TP - Removed all occurrences of the 8 digit hexadecimal number in the Action plan failure list that leads to hundreds of very similar errors. 
+                        3. New Update: TP - Used a better method to determine if the SBE update version is more than 6 months out of date based on quarterly updates
+
     2026/07/02:v1.89 -  1. New Update: JG - Removed AzureTableData uploads as they where not being used anyway
     2026/07/01:v1.88 -  1. New Update: JG - Removed SAS tokens per Dell Cyber audit
     2026/06/26:v1.87 -  1. New Update: TP - New version 1.87 DEV
@@ -121,7 +125,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.89"
+$CluChkVer="1.90"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -4659,6 +4663,10 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
         $OSVersion=$OSVersionNodes
         $ReadySUs=$SolutionUpdates | ? State -notmatch "Installed|Obsolete"
         If ($SysInfo[0].AzureLocalVersion -gt "") {
+           #$offsets = @(0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3)
+           $t = (Get-Date).AddMonths(-6)
+           #$requiredSBE = [int].AddMonths(-6).AddMonths(-$offsets[(Get-Date).AddMonths(-6).Month]).ToString("yyMM")
+           $requiredSBE = [int]$t.AddMonths([Math]::Truncate(($t.Month - 1) / 3) * 3 - $t.Month).ToString("yyMM")
            $SupportedDate=Get-Date (Get-Date).AddMonths(-7) -Format "yyMM"
            Invoke-WebRequest -Uri (Invoke-WebRequest -Uri "https://aka.ms/AzureEdgeUpdates" -MaximumRedirection 5 -UseBasicParsing).BaseResponse.ResponseUri.AbsoluteUri -OutFile $env:temp\outfile.xml
            $SUVersions=(([xml](Get-Content $env:temp\outfile.xml)).ASZSolutionBundleUpdates.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} 
@@ -4666,7 +4674,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
            Invoke-WebRequest -Uri "https://aka.ms/AzureStackSBEUpdate/DellEMC" -UseBasicParsing -OutFile $env:temp\outfile.xml
            $SBEVersions=(([xml](Get-Content $env:temp\outfile.xml)).SBEUpdatesManifest.ApplicableUpdate | sort version) | select-object version,type,family,@{L='RequiredSBE';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq SBE;($s.version | sort -Unique) -join ","}},@{L='RequiredSolution';E={$s=$_.validatedconfigurations.requiredpackages.package | ? Type -eq Solution;($s.version | sort -Unique) -join ","}} | ? Family -match $GenerationNodes
            $CurrentUpdatesandHotfixes=Foreach ($key in ($SDDCFiles.keys -like "*GetStampInformation")) { $SDDCFiles."$key" |`
-              Select-Object @{Label="PSComputerName";Expression={$key.replace("GetStampInformation","")}},@{Label='SBE Version';Expression={$sbever=$_.OemVersion;if (([version]$sbever).Build -lt $SupportedDate) {"RREEDD$sbever"} else{ "YYEELLLLOOWW"*([Version]$SBEVersions[-1].Version -ne [version]$sbever)+$sbever}}},
+              Select-Object @{Label="PSComputerName";Expression={$key.replace("GetStampInformation","")}},@{Label='SBE Version';Expression={$sbever=$_.OemVersion;if (([version]$sbever).Build -lt $requiredSBE) {"RREEDD$sbever"} else{ "YYEELLLLOOWW"*([Version]$SBEVersions[-1].Version -ne [version]$sbever)+$sbever}}},
              @{Label='MS Solution';Expression={$suver=$_.StampVersion;if (([version]$suver).Minor -lt $SupportedDate) {"RREEDD$suver"} else{ "YYEELLLLOOWW"*([Version]$SUVersions[-1].Version -ne [version]$suver)+$suver}}},@{Label='Deployed Version';Expression={$_.InitialDeployedVersion}},
              @{Label='Next SBE';Expression={if ($ReadySUs | ? ResourceID -match SBE) {($ReadySUs | ? ResourceID -match SBE)[-1].Version} else {$suver=$_.StampVersion;$sbever=$_.OemVersion;if ([Version]$SBEVersions[-1].Version -ne [version]$sbever) {(($SBEVersions | ? RequiredSBE -match ($sbever.split(".")[0..2] -join ".") | ? {$_.RequiredSolution -match ($suver.split(".")[0..1] -join ".") -or $_.RequiredSolution -match ("$(([version]$suver).Major).*.$(([version]$suver).Build)")})[-1]).Version}}}},
              @{Label='Next MS SU';Expression={if ($ReadySUs | ? ResourceID -match Solution) {($ReadySUs | ? ResourceID -match Solution)[-1].Version} else {$suver=$_.StampVersion;if ([Version]$SUVersions[-1].Version -ne [version]$suver) {(($SUVersions | ?{$_.RequiredSolution -match ($suver.split(".")[0..1] -join ".") -or $_.RequiredSolution -match ("$(([version]$suver).Major).*.$(([version]$suver).Build)")})[-1]).Version}}}}
@@ -5253,7 +5261,10 @@ Unable to add KV info to
         $errors=(Get-ChildItem -Path $SDDCPath -Filter "AzStackHciEnvironmentChecker.EVTX" -Recurse -Depth 2) | %{(Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{ Path = "$($_.fullname)"; Level = 2})}
         $errors | %{$_.Message=$_.Properties.Value}
         $errors=$errors | Select-Object MachineName,TimeCreated,Id,Message | Sort Timecreated
-        foreach ($err in $errors) {$err.Message=$err.Message -replace "ArcIntegration\\.*?\.","";$err.Message=$err.Message -replace "SDNNC\\.*?\.", ""} 
+        foreach ($err in $errors) {
+            #$err.Message=$err.Message -replace "ArcIntegration\\.*?\.","";$err.Message=$err.Message -replace "SDNNC\\.*?\.", ""
+            $err.Message=$err.Message -replace '(?<=\\)[0-9a-fA-F]{8}(?=\. Exception)', ''
+            } 
                ForEach ($thiserror in $errors) {
                     If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $ThisError.Message -match '(Invoke-AzStackHciSBEHealthValidation)|(integrity check)') -and !($SolutionUpdates.InstalledDate.Date -match $thiserror.TimeCreated.Date)) {
                         $resultObject +=     [PSCustomObject] @{
