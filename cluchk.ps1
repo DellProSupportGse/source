@@ -26,6 +26,10 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/07/22:v1.91 -  1. New Update: TP - New version 1.91 DEV
+                        2. Bug Fix: TP - Fixed PM1733 v2 NVMe not finding firmware in support matrix
+                        3. New Update: TP - Dell firmware log check will show more errors to help determine the failure.
+
     2026/07/14:v1.90 -  1. New Update: TP - New version 1.90 DEV
                         2. New Update: TP - Removed all occurrences of the 8 digit hexadecimal number in the Action plan failure list that leads to hundreds of very similar errors. 
                         3. New Update: TP - Used a better method to determine if the SBE update version is more than 6 months out of date based on quarterly updates
@@ -125,7 +129,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.90"
+$CluChkVer="1.91"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -3293,8 +3297,9 @@ $htmlout+=$html
             "Dell DC NVMe 7500 U.2 ISE RI*"      {"MTFDKCC7T6TGP"}
             "Dell Ent NVMe PM1735a*"             {"MZWLR6T4HBLAAD3"}
             "Dell Express Flash CD5*"            {"KCD5XLUG3T84"}
-            "Dell Ent NVMe P5600 MU U.2"        {"D7 P5600 Series 1.6TB"}
+            "Dell Ent NVMe P5600 MU U.2"         {"D7 P5600 Series 1.6TB"}
             "Dell Express Flash CD5*"            {"KCD5XLUG3T84"}
+            "Dell*Ent*NVMe*v2*AGN*RI*U.2*"       {"MZWLR7T6HALAAD3"}
            <# "Dell*DC*NVMe*CD8*U.2*960GB"        {"KCD8XRUG960G"}
             "Dell*DC*NVMe*CD8*U.2*1*92*B"       {"KCD8XRUG1T92"}
             "Dell*DC*NVMe*CD8*U.2*3*84*B"       {"KCD8XRUG3T84"}
@@ -5278,18 +5283,22 @@ Unable to add KV info to
         #<#
         $FWlogs=gci $SDDCPath -Filter "Dell-FwUpgrade*.log" -Recurse -ErrorAction SilentlyContinue
         $errors=@()
+        $findErrorLater=$false
+        $oldTimestamp=$null
         $errors+=foreach ($logPath in ($FWlogs.fullname)) {
+            $node=([regex]"\\Node_(.*?)\\").Match($logpath).groups[1].value
             Get-Content $logPath |
-            Where-Object { $_ -cmatch '\bERROR\b' -and $_ -cnotmatch "Just wait for next try" } |
+            Where-Object { ($_ -cmatch '\bERROR\b' -and $_ -cnotmatch "Just wait for next try") -or $_ -like "*FirmwareUpdateException*" } |
             ForEach-Object {
 
                 # Capture timestamp to seconds
-                if ($_ -match '^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
+                if ($_ -match '^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})' -or $_ -like "*FirmwareUpdateException*") {
                     $dmessage=$_
                     $timestamp = [datetime]$matches.ts
-                    $node=([regex]"\\Node_(.*?)\\").Match($logpath).groups[1].value
+                    If (!($timestamp)) {$timestamp=$oldTimestamp}
                     $message=$_.split(']')[-1].Trim()
                     IF ($message -notlike 'Error detail:' -and $message -notlike 'Meet error when create firmware upgrade list, detail:' -and $message -notlike 'Redfish side returns error http code, it is InternalServerError, check environment for detail') {
+                        $oldTimestamp=$timestamp
                         [PSCustomObject]@{
                             Target    = $node
                             Timestamp = (Get-Date $timestamp -Format "MM/dd/yyyy HH:mm")
