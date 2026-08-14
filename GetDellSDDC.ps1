@@ -18,11 +18,16 @@
       Invoke-GetDellSDDC -ClusterName MyCluster -TemporaryPath C:\Temp\Diag
 
     Alternatively, uncomment the auto-execute block at the bottom.
-#>
+.Updates
+    2026/08/14:v1.0.1 -  1. New Update: TP - Gather Processor Information and System counters
+                         2. New Update: TP - Get a GetCounters.BLG run from each node directly for optimization
 
+ 
+
+#>
 # CONVERSION: replaced $Module with script-scope variables
 $script:ModuleName   = 'GetDellSDDC'
-$script:ScriptVersion = '1.0.0'
+$script:ScriptVersion = '1.0.1'
 
 ###############################################################################
 # region CommonFuncBlock — helpers shared with child jobs/sessions
@@ -2734,8 +2739,15 @@ function Invoke-GetDellSDDC {
     # Static jobs
     Show-Update "Completing background gathers ..." -ForegroundColor Green
     Show-Update "Start monitoring $($PerfSamples)s" -ForegroundColor Green
-
-    $PerfProc = Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList @("-Command", """& {Get-Counter -Counter (Get-Counter -ListSet 'Cluster Storage*','Cluster CSV*','Storage Spaces*','Storage Replica*','Refs','Cluster Disk Counters','PhysicalDisk','RDMA*','Mellanox WinOF-2 Port Traffic*','Mellanox WinOF-2 Congestion Control*','Mellanox WinOF-2 Diagnostics Ext 1*','Marvell*','Hyper-V Hypervisor Virtual Processor','Hyper-V Hypervisor Logical Processor','Hyper-V Hypervisor Root Virtual Processor' -ComputerName (Get-ClusterNode).Name -ErrorAction SilentlyContinue).paths -SampleInterval 1 -MaxSamples $PerfSamples -ErrorAction Ignore -WarningAction Ignore | Export-counter -Path ('$Path' + '\GetCounters.blg') -Force -FileFormat BLG}""") -Passthru
+    Invoke-Command (Get-ClusterNode).Name {Remove-Item "c:\windows\temp\*GetCounters.blg" -Force -Confirm:$false}
+    $perfcmd=@"
+Invoke-Command -ComputerName (Get-ClusterNode).Name -ScriptBlock {
+    `$CounterPaths = (Get-Counter -ListSet 'Processor Information','System','Cluster Storage*','Cluster CSV*','Storage Spaces*','Storage Replica*','Refs','Cluster Disk Counters','PhysicalDisk','RDMA*','Mellanox WinOF-2 Port Traffic*','Mellanox WinOF-2 Congestion Control*','Mellanox WinOF-2 Diagnostics Ext 1*','Marvell*','Hyper-V Hypervisor Virtual Processor','Hyper-V Hypervisor Logical Processor','Hyper-V Hypervisor Root Virtual Processor' -ErrorAction SilentlyContinue).paths
+    Get-Counter -Counter `$CounterPaths -SampleInterval 5 -MaxSamples $PerfSamples -ErrorAction Ignore -WarningAction Ignore | 
+        Export-Counter -Path "C:\Windows\Temp\`$(`$env:COMPUTERNAME)-GetCounters.blg" -Force -FileFormat BLG
+}
+"@
+    $PerfProc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -Command `"$perfcmd`"" -WindowStyle Hidden -PassThru
 
     Show-WaitChildJob $JobStatic 30
     $JobStatic |% { if ($_.Name -ne "Cluster Performance History" -and $_.Name -notlike "ClusterLogs*") { $o=Receive-Job $_; If ($o) {Write-Host "Job $($_.Name) Output:";$o} } }
@@ -2877,7 +2889,11 @@ function Invoke-GetDellSDDC {
         Write-Host ""
         If ($xb -lt 180) { Show-Update "Performance monitoring completed" }
         else { $PerfProc | kill; Show-Warning "Performance monitoring timed out" }
-
+        Foreach ($Node in $ClusterNodes.Name) {
+                $remoteFile="\\$($Node)\c$\Windows\Temp\$Node-GetCounters.BLG"
+                Move-Item -Path $remoteFile -Destination $Path -Force
+                Show-Update "Moved $remoteFile to $Path"
+        }
         if ($ProcessCounter) {
             "Collected $PerfSamples seconds of raw performance counters. Processing...`n"
             # ProcessCounter logic omitted (deprecated) - performance data is in the .blg file
