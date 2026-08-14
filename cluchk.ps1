@@ -26,6 +26,16 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/08/14:v1.92 -  1. New Update: TP - New version 1.92 DEV
+                        2. Bug Fix: TP - Put in Mellanox x5 support matrix version 26.001.03 as 26.1.27016.0 to properly report update status of that driver
+                        3. Bug Fix: TP - Change GetCounter.blg name to align with changes to the new SDDC without affecting the previous version
+                        4. New Feature: TP - Use the modern layout of the html report
+                        5. New Update: TP - Color left tabs with yellow/red. Hide tabs that do not show a problem. Provide top left link to Expand and Collapse the tabs
+                        6. New Update: TP - Integrate Devin to create AI summary tab
+                        7. New Update: TP - Make AI summary better. Put relavent AI information under each table.
+                        8. New Update: TP - Moved each AI summary part to the top of each table page for easier consumption.
+                        9. New Update: TP - Added AI warning before AI runs with a 10 second wait.
+
     2026/07/22:v1.91 -  1. New Update: TP - New version 1.91 DEV
                         2. Bug Fix: TP - Fixed PM1733 v2 NVMe not finding firmware in support matrix
                         3. New Update: TP - Dell firmware log check will show more errors to help determine the failure.
@@ -129,7 +139,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="1.91"
+$CluChkVer="1.92"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -1781,7 +1791,7 @@ IF($SDDCPerf -imatch "YES"){
     # SDDC KPI's 
     # https://docs.microsoft.com/en-us/windows-server/storage/storage-spaces/performance-history-scripting
     # Get log subset
-        $S2DDPD=Get-ChildItem -Path $SDDCPath -Filter "GetCounters.blg" -Recurse -Depth 1
+        $S2DDPD=Get-ChildItem -Path $SDDCPath -Filter "*GetCounters.blg" -Recurse -Depth 1
         If($S2DDPD.Length -gt 0){
         $d2start=Get-Date
         #relog $S2DDPD.fullname -c "\Cluster Disk Counters(*)\ExceededLatencyLimit/sec" "\Cluster Disk Counters(*)\ExceededLatencyLimit" "\Cluster Disk Counters(*)\IO (> 10,000ms)/sec" "\Cluster Disk Counters(*)\IO (<= 10,000ms)/sec" "\Cluster Disk Counters(*)\IO (<= 1000ms)/sec" "\Cluster Disk Counters(*)\IO (<= 100ms)/sec" "\Cluster Disk Counters(*)\IO (<= 100ms)/sec" "\Cluster Disk Counters(*)\IO (<= 10ms)/sec" "\Cluster Disk Counters(*)\IO (<= 5ms)/sec" "\Cluster Disk Counters(*)\IO (<= 1ms)/sec" "\Cluster Storage Cache Stores(*)\Cache Usage %" "\Cluster Storage Hybrid Disks(*)\Cache Miss Reads/sec" "\Cluster Storage Hybrid Disks(*)\Disk Transfers/sec" -o "$SDDCPath\Counters0.blg" | Out-Null
@@ -2410,7 +2420,155 @@ public class Counters
     $HtmlReport= Join-Path -Path $CluChkReportLoc -ChildPath CluChkPerfReport_v$CluChkVer-$DTString$SDDCFileName.html
     Write-Host ("Report Output location: " + $HtmlReport)
     if (Test-Path "$HtmlReport") {Remove-Item $HtmlReport}
-    Out-File -FilePath $HtmlReport -InputObject $htmloutPerfReport -Encoding ASCII
+    $html=$htmloutPerfReport; 
+    $m = [regex]::Match($html, '(?is)<body>(.*)</body>')
+    $head = $html.Substring(0, $m.Index)
+    $tail = $html.Substring($m.Index + $m.Length)
+    $body = $m.Groups[1].Value
+
+    $head = $head -replace '(?is)<style[^>]*>.*?</style>\s*', ''
+    $head = $head -replace '(?is)<script[^>]*>.*?</script>\s*', ''
+
+    $css = @'
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <style type='text/css'>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; padding: 0; }
+    body { display: flex; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #eef2f5; color: #333; }
+    .sidebar { width: 300px; min-width: 300px; background: #1a237e; color: #fff; height: 100vh; overflow-y: auto; position: sticky; top: 0; display: flex; flex-direction: column; }
+    .brand { padding: 1.2rem; background: #0d1642; font-weight: 600; font-size: 1.15rem; text-align: center; border-bottom: 1px solid #3949ab; }
+    #tabSearch { margin: .8rem; padding: .5rem .7rem; border: none; border-radius: 4px; font-size: .9rem; }
+    .sidebar ul { list-style: none; margin: 0; padding: 0; flex: 1; }
+    .sidebar li { border-bottom: 1px solid #283593; }
+    .sidebar button { width: 100%; padding: .75rem 1rem; background: transparent; color: #fff; border: none; text-align: left; cursor: pointer; font-size: .88rem; transition: background .15s; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sidebar button:hover { background: #3949ab; }
+    .sidebar button.active { background: #5c6bc0; border-left: 4px solid #ffeb3b; padding-left: calc(1rem - 4px); }
+    .main-content { flex: 1; padding: 1.5rem; overflow-y: auto; height: 100vh; }
+    .tab-panel { display: none; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.08); padding: 1.5rem; margin-bottom: 1.5rem; }
+    .tab-panel.active { display: block; animation: fadeIn .2s; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    section h1 { font-size: 1.7rem; color: #1a237e; border-bottom: 3px solid #ffeb3b; padding-bottom: .3rem; margin-top: 0; }
+    section h2 { font-size: 1.4rem; color: #1a237e; border-bottom: 2px solid #c5cae9; padding-bottom: .3rem; margin-top: 0; }
+    section h3 { font-size: 1.1rem; color: #3949ab; margin-top: 1.2rem; }
+    section table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .92rem; border: none; }
+    section table th { background: #1a237e; color: #fff; text-align: left; padding: .65rem; font-weight: 600; border: none; }
+    section table td { padding: .55rem .65rem; border: none; border-bottom: 1px solid #e0e0e0; }
+    section table tr:nth-child(even) { background: #f5f5f5; }
+    section table tr:hover td { background: #e8eaf6; }
+    section a { color: #1565c0; }
+    section h5 { margin: .2rem 0; color: #555; font-size: .9rem; }
+    section mark { background-color: #fff176; padding: 0 .2rem; border-radius: 3px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+    @media (max-width: 768px) { body { flex-direction: column; } .sidebar { width: 100%; height: auto; max-height: 40vh; } .main-content { height: auto; } }
+    </style>
+    <script>
+    function showTab(id){
+      document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+      var el=document.getElementById(id);
+      if(el) el.classList.add('active');
+      document.querySelectorAll('.tab-link').forEach(function(b){ b.classList.remove('active'); });
+      var btn=document.querySelector('.tab-link[data-target=' + id + ']');
+      if(btn) btn.classList.add('active');
+      window.scrollTo(0,0);
+    }
+    function filterTabs(){
+      var q=document.getElementById('tabSearch').value.toLowerCase();
+      document.querySelectorAll('.sidebar li').forEach(function(li){
+        li.style.display=li.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+      });
+    }
+    document.addEventListener('DOMContentLoaded',function(){
+      document.querySelectorAll('a[href]').forEach(function(a){
+        var href=a.getAttribute('href');
+        if(href && href.startsWith('#')){
+          a.addEventListener('click',function(e){
+            var id=this.getAttribute('href').slice(1);
+            if(document.getElementById(id) && document.getElementById(id).classList.contains('tab-panel')){
+              showTab(id);
+              e.preventDefault();
+            }
+          });
+        }
+      });
+      var hash=window.location.hash.slice(1);
+      if(hash) showTab(hash);
+    });
+    </script>
+'@
+
+    $idx = $head.LastIndexOf('</head>', [System.StringComparison]::OrdinalIgnoreCase)
+    if ($idx -lt 0) { $idx = $head.LastIndexOf('</head>') }
+    if ($idx -ge 0) { $head = $head.Insert($idx, $css) }
+
+    $parts = [regex]::Split($body, '(?i)(<h2\b[^>]*>)')
+    $sections = @()
+
+    $aiSummaryHtml = "<section id='ai-summary' class='tab-panel'><H2>AI Summary</H2><div>$aiContent</div></section>"
+    $aiSection = [PSCustomObject]@{Id='ai-summary'; Label='AI Summary'; Html=$aiSummaryHtml}
+    $sections += $aiSection
+
+    $sections += [PSCustomObject]@{
+        Id = 'report-overview'
+        Label = 'Report Overview'
+        Html = "<section id='report-overview' class='tab-panel active'>$($parts[0])</section>"
+    }
+
+    for ($i = 1; $i -lt $parts.Length; $i += 2) {
+        $startTag = $parts[$i]
+        $content = if ($i + 1 -lt $parts.Length) { $parts[$i + 1] } else { '' }
+        $id = ([regex]::Match($startTag, 'id="(.+?)"')).Groups[1].Value
+        if ([string]::IsNullOrWhiteSpace($id)) { $id = 'section-' + $i }
+        $label = ([regex]::Match($content, '(?i)^(.+?)</h2>')).Groups[1].Value.Trim()
+        if ([string]::IsNullOrWhiteSpace($label)) { $label = $id }
+        $newStartTag = $startTag -replace 'id=".+?"', ''
+        $actionHtml = ''
+        $sectionIdKey = ($id -replace '[^a-zA-Z0-9]', '').ToLower()
+        $sectionLabelKey = ($label -replace '[^a-zA-Z0-9]', '').ToLower()
+        $sectionKey = $sectionIdKey
+        if (-not $issueActions[$sectionKey]) { $sectionKey = $sectionLabelKey }
+        if ($issueActions[$sectionKey]) {
+            $boxes = foreach ($ia in $issueActions[$sectionKey]) {
+                $acts = ($ia.Actions | ForEach-Object { "<li>$([System.Net.WebUtility]::HtmlEncode($_))</li>" }) -join ''
+                "<div class='ai-table-actions'><h3>$([System.Net.WebUtility]::HtmlEncode($ia.Issue))</h3><p><strong>Why this matters:</strong> $([System.Net.WebUtility]::HtmlEncode($ia.Why))</p><ul>$acts</ul></div>"
+            }
+            $actionHtml = $boxes -join ''
+        }
+        # $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$content$actionHtml</section>"  - removed and replaced with if/then statement below
+        if ($actionHtml) {
+            $mH2 = [regex]::Match($content, '(?i)(</h2>)')
+            if ($mH2.Success) {
+                $h2End = $mH2.Index + $mH2.Groups[1].Length
+                $h2Part = $content.Substring(0, $h2End)
+                $restPart = $content.Substring($h2End)
+                $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$h2Part$actionHtml$restPart</section>"
+            } else {
+                $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$content$actionHtml</section>"
+            }
+        } else {
+            $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$content</section>"
+        }
+        $sections += [PSCustomObject]@{
+            Id = $id
+            Label = $label
+            Html = $sectionHtml
+        }
+    }
+
+    $navItems = $sections | ForEach-Object {
+        "<li><button class='tab-link' data-target='$($_.Id)' onclick='showTab(this.dataset.target)'>$([System.Net.WebUtility]::HtmlEncode($_.Label))</button></li>"
+    }
+    $navHtml = "<nav class='sidebar'><div class='brand'>CluChk Report</div><a href='#' id='expandAll' onclick='toggleAllTabs(); return false;'>Expand and Collapse</a><input type='text' id='tabSearch' oninput='filterTabs()' placeholder='Search tables...' /><ul>$($navItems -join '')</ul></nav>"
+
+    $mainItems = $sections | ForEach-Object { $_.Html }
+    $mainHtml = "<main class='main-content'>$($mainItems -join '')</main>"
+
+    $newBody = $navHtml + $mainHtml
+
+    $sortJs = '<script>function sortTable(table,col){let rows=Array.from(table.querySelectorAll(`tr`)).filter(r=>!r.querySelector(`th`));let asc=table.getAttribute(`data-sort-col`)!=String(col)||table.getAttribute(`data-sort-dir`)!=`asc`;rows.sort((x,y)=>{let u=x.cells[col]?x.cells[col].textContent.trim().toLowerCase():``;let v=y.cells[col]?y.cells[col].textContent.trim().toLowerCase():``;let m=parseFloat(u),n=parseFloat(v);if(!isNaN(m)&&!isNaN(n)&&u===``+m&&v===``+n){u=m;v=n;}return(u>v?1:(u<v?-1:0))*(asc?1:-1);});rows.forEach(row=>table.appendChild(row));table.setAttribute(`data-sort-col`,col);table.setAttribute(`data-sort-dir`,asc?`asc`:`desc`);}function initTables(){document.querySelectorAll(`section table`).forEach(table=>{table.querySelectorAll(`th`).forEach((th,col)=>{th.style.cursor=`pointer`;th.addEventListener(`click`,()=>{sortTable(table,col);});});});}function colorTabs(){document.querySelectorAll(`#report-overview table tr`).forEach(function(row){if(row.cells.length<3)return;var a=row.querySelector(`a[href^="#"]`);if(!a)return;var name=a.textContent.trim();var warnings=parseInt(row.cells[1].textContent.trim(),10)||0;var errors=parseInt(row.cells[2].textContent.trim(),10)||0;var btn=null;document.querySelectorAll(`.tab-link`).forEach(function(b){if(b.textContent.trim()===name)btn=b;});if(btn){if(errors>0)btn.classList.add(`error`);else if(warnings>0)btn.classList.add(`warning`);}});document.querySelectorAll(`.tab-panel`).forEach(function(panel){if(panel.innerHTML.includes(`background-color: #ff0000`)){var btn=document.querySelector(`.tab-link[data-target="${panel.id}"]`);if(btn&&!btn.classList.contains(`error`))btn.classList.add(`error`);}});}function updateTabVisibility(){document.querySelectorAll(`.sidebar li`).forEach(function(li){var btn=li.querySelector(`.tab-link`);if(btn){if(btn.dataset.target===`report-overview`||btn.dataset.target===`ai-summary`)return;if(!btn.classList.contains(`error`)&&!btn.classList.contains(`warning`))li.classList.add(`hidden`);}});}function toggleAllTabs(){var hidden=document.querySelectorAll(`.sidebar li.hidden`);if(hidden.length){hidden.forEach(function(li){li.classList.remove(`hidden`);});}else{updateTabVisibility();}}initTables();colorTabs();updateTabVisibility();</script>'
+
+    $newHtml = $head + '<body>' + $newBody + $sortJs + '</body>' + $tail
+    Out-File -FilePath $HtmlReport -InputObject $newHtml -Encoding ASCII
 
 })
 $Job2 = $PowerShell2.BeginInvoke($Inputs2,$Outputs2)
@@ -4493,11 +4651,15 @@ If ($OSVersion -match "2016") {
     #Driver not on support matrix web page
     'QLogic 57800*'               {'7.13.171.0'}`
 
+
     'QLogic FastLinQ*Adapter' {get-DriverVersion -DriverName "Qlogic FastLinQ 41262*SFP28*" -OSVersion $OSVersionNodes -Platform $Platform}`
     'QLogic FastLinQ*VBD*'    {get-DriverVersion -DriverName "Qlogic FastLinQ 41262*SFP28*" -OSVersion $OSVersionNodes -Platform $Platform}`
 
     'Mellanox ConnectX-4*'    {get-DriverVersion -DriverName "Mellanox ConnectX-4*" -OSVersion $OSVersionNodes -Platform $Platform}`
-    'Mellanox Connectx-5*'    {get-DriverVersion -DriverName "Mellanox Connectx-5*" -OSVersion $OSVersionNodes -Platform $Platform}`
+    'Mellanox Connectx-5*'    {$dver=get-DriverVersion -DriverName "Mellanox Connectx-5*" -OSVersion $OSVersionNodes -Platform $Platform
+                              Switch ($dver) {
+                              "26.001.03" {"26.1.27016.0"}
+                              }}`
     'Mellanox ConnectX-6*'    {(get-DriverVersion -DriverName "Mellanox ConnectX-6*" -OSVersion $OSVersionNodes -Platform $Platform)+".0"}`
 
     'Intel*Gigabit*I350*'     {get-DriverVersion -DriverName "Intel*1Gb*Ethernet*NDC*" -OSVersion $OSVersionNodes -Platform $Platform}`
@@ -5125,7 +5287,7 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
 #endregion Recommended updates and hotfixes for Windows Server
 
 #Health Check and Action Plan Failures
-If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse).count) {
+If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction SilentlyContinue).count) {
         $Name="Action Plan Health Check and Firmware Failures"
         Write-Host "    Gathering $Name..."
         $ap=Get-Content -ErrorAction SilentlyContinue (Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse -ErrorAction SilentlyContinue | select -first 1).fullname
@@ -5174,7 +5336,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse).count) {
         $APLMU=$null
         $apupdate=$null
         $StopError=$null
-        $ECEzip=(gci $SDDCPath -Filter "ECE??.zip" -Recurse).fullname
+        $ECEzip=(Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction SilentlyContinue).fullname
         If ($ECEzip) {
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             Foreach ($ECE in $ECEzip) {
@@ -5189,7 +5351,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse).count) {
             }
         
         }
-        Foreach ($APLMU in (Get-ChildItem -Path $SDDCPath -Filter "AzureStackFailedActionPlanInformation.json" -Recurse)) {
+        Foreach ($APLMU in (Get-ChildItem -Path $SDDCPath -Filter "AzureStackFailedActionPlanInformation.json" -Recurse -Depth 1 -ErrorAction SilentlyContinue)) {
             $apfails=(gc $APLMU.FullName | ConvertFrom-Json).ProgressAsXml
             Foreach ($apupdate in $apfails) {
                 $StopErrors=@()
@@ -6928,9 +7090,686 @@ IF($selection -ne "4"){
     $HtmlReport= Join-Path -Path $CluChkReportLoc -ChildPath CluChkReport_v$CluChkVer-$DTString$SDDCFileName.html
     Write-Host ("Report Output location: " + $HtmlReport)
     if (Test-Path "$HtmlReport") {Remove-Item $HtmlReport}
-    Out-File -FilePath $HtmlReport -InputObject $htmloutReport -Encoding ASCII
+    $html=$htmloutReport
+$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"
+$devinFound = Test-Path $devinPath
+
+<#if ($devinFound) {
+    $authOut = [System.IO.Path]::GetTempFileName()
+    $authErr = [System.IO.Path]::GetTempFileName()
+    $authProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','status') -RedirectStandardOutput $authOut -RedirectStandardError $authErr -NoNewWindow -PassThru
+    if (-not $authProc.WaitForExit(5000)) {
+        $authProc.Kill()
+        $authOk = $false
+    } else {
+        $authOutput = Get-Content $authOut -Raw
+        $authOk = ($authProc.ExitCode -eq 0 -and $authOutput -notmatch 'Not logged in')
+    }
+    if (-not $authOk) {
+        Write-Host 'Devin CLI is not authenticated. Starting interactive login...'
+        Write-Host 'Choose option 1 (Log in with browser) and follow the prompts. The script will continue automatically after authentication.'
+        $loginProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','login') -NoNewWindow -PassThru
+        $loginProc.WaitForExit()
+        $authOk = $true
+    }
+    if ($authOk) {
+    $titleMatch = [regex]::Match($html, '(?is)<title>(.*?)</title>')
+    $reportTitle = if ($titleMatch.Success) { [System.Net.WebUtility]::HtmlDecode($titleMatch.Groups[1].Value.Trim()) } else { 'CluChk Report' }
+
+    $actionMatch = [regex]::Match($html, '(?is)<h2[^>]*>\s*Action Plan, Health Check and Firmware Failures\s*</h2>(.*?)(?=<h2|$)')
+    $errorList = ''
+    if ($actionMatch.Success) {
+        $actionSection = $actionMatch.Groups[1].Value
+        $rows = [regex]::Matches($actionSection, '(?is)<tr\b[^>]*>(.*?)</tr>')
+        foreach ($row in $rows) {
+            $rowHtml = $row.Groups[1].Value
+            $cells = [regex]::Matches($rowHtml, '(?is)<td\b[^>]*>(.*?)</td>')
+            if ($cells.Count -ge 3) {
+                $target = [System.Net.WebUtility]::HtmlDecode(($cells[0].Groups[1].Value -replace '<[^>]+>', '').Trim())
+                $message = [System.Net.WebUtility]::HtmlDecode(($cells[2].Groups[1].Value -replace '<[^>]+>', '').Trim())
+                $errorList += "TARGET: $target`r`nMESSAGE: $message`r`n---`r`n"
+            }
+        }
+    }
+
+    $resultsSection = ([regex]::Match($html, '(?is)<h1[^>]*>\s*Results Summary\s*</h1>.*?(?=<h1|</body>)')).Value
+    $actionSectionHtml = ([regex]::Match($html, '(?is)<h2[^>]*>\s*Action Plan, Health Check and Firmware Failures\s*</h2>.*?(?=<h2|</body>)')).Value
+    $reportBody = ($resultsSection + "`r`n" + $actionSectionHtml) -replace '(?is)<script[^>]*>.*?</script>', '' -replace '(?is)<style[^>]*>.*?</style>', ''
+
+    $sddcContext = ''
+    if ($SDDCPath -and (Test-Path $SDDCPath)) {
+        $sddcSb = [System.Text.StringBuilder]::new()
+        $sddcTotal = 0
+        $sddcFiles = Get-ChildItem -Path $SDDCPath -File | Where-Object { $_.Extension -match '\.(json|txt|csv|xml|ini|md)$' }
+        foreach ($file in $sddcFiles) {
+            if ($file.Length -gt 2048 -or $sddcTotal -gt 8000) { break }
+            $content = [System.IO.File]::ReadAllText($file.FullName)
+            if ($content.Length -gt 2048) { $content = $content.Substring(0,2048) + "`n... truncated ..." }
+            [void]$sddcSb.AppendLine("=== $($file.Name) ===")
+            [void]$sddcSb.AppendLine($content)
+            [void]$sddcSb.AppendLine()
+            $sddcTotal += $content.Length
+        }
+        if ($sddcSb.Length -gt 0) { $sddcContext = "Dell SDDC context from ${SDDCPath}:`r`n" + $sddcSb.ToString() }
+    }
+
+    $prompt = @"
+You are reviewing a CluChk report for Azure Local. Title: $reportTitle
+
+Generate a concise overall summary of the CluChk report provided below, using https://learn.microsoft.com/en-us/azure/azure-local to identify and cite relevant Microsoft Learn URLs for the issues found. Include all red Action Plan errors, including any whose TARGET or MESSAGE starts with DELLFMWR. Then, for each non-DELLFMWR red Action Plan error, do not use any TSG links already shown in the report. Independently identify the single best-matching TSG from https://github.com/Azure/AzureLocal-Supportability/tree/main/TSG, provide its direct URL, and explain why it matches. Also provide 2-3 relevant Microsoft Learn URLs from https://learn.microsoft.com/en-us/azure/azure-local. For DELLFMWR errors, do not attempt to find a TSG or Learn URL; simply note they are Dell-specific and not covered by public Azure Local TSGs. For any Dell BIOS, firmware, or driver version issues, also reference https://dell.github.io/azurestack-docs/docs/hci/supportmatrix/ where applicable. You may provide a TSG, Microsoft Learn, or Dell URL if your confidence is at least 50%. If your confidence is between 50% and 89%, include the URL and explicitly state your estimated confidence percentage. If your confidence is below 50%, do not provide the URL and state that you could not find a reliable match.
+
+Report HTML:
+$reportBody
+
+$sddcContext
+Action Plan errors:
+$errorList
+
+Please respond in plain text with headings and bullet points.
+"@
+
+    $promptFile = [System.IO.Path]::GetTempFileName()
+    [System.IO.File]::WriteAllText($promptFile, $prompt, [System.Text.Encoding]::UTF8)
+    $outFile = [System.IO.Path]::GetTempFileName()
+    Write-Host 'Generating AI summary. Estimated time: 2-5 minutes...'
+    $p = Start-Process -FilePath $devinPath -ArgumentList @('--prompt-file', $promptFile, '--print', '--respect-workspace-trust', 'false', '--permission-mode', 'dangerous') -RedirectStandardOutput $outFile -NoNewWindow -PassThru
+    if (-not $p.WaitForExit(180000)) {
+        $p.Kill()
+        $aiContent = '<p>Devin CLI is installed but could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
+    } else {
+        $stdout = [System.IO.File]::ReadAllText($outFile)
+        $stdout = $stdout -replace '\x1B\[[0-9;]*[a-zA-Z]', ''
+        $stdout = $stdout -replace '(?is)^Welcome to Devin CLI!.*?Run devin to get started\.', ''
+        $stdout = $stdout -replace '(?is)warning: rejected a tool call.*?(\r?\n|$)', ''
+        $stdout = $stdout.Trim()
+        if ($stdout -match '(?i)(log in|sign in|authenticate)') {
+            $aiContent = '<p>Devin CLI is installed but could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
+        } else {
+            $sb = [System.Text.StringBuilder]::new()
+            $last = 0
+            $urlMatches = [regex]::Matches($stdout, 'https?://[^\s)><\x22\x27]+')
+            foreach ($m in $urlMatches) {
+                [void]$sb.Append([System.Net.WebUtility]::HtmlEncode($stdout.Substring($last, $m.Index - $last)))
+                $url = $m.Value
+                $enc = [System.Net.WebUtility]::HtmlEncode($url)
+                [void]$sb.Append("<a href='$enc'>$enc</a>")
+                $last = $m.Index + $url.Length
+            }
+            [void]$sb.Append([System.Net.WebUtility]::HtmlEncode($stdout.Substring($last)))
+            $aiContent = "<pre>$($sb.ToString())</pre>"
+        }
+    }
+    Remove-Item $promptFile, $outFile, $authOut, $authErr -ErrorAction SilentlyContinue
+    } else {
+        $aiContent = '<p>Devin CLI is not authenticated after the login attempt. Ensure you completed the Windsurf login and that <code>devin -p "say hi"</code> works, then rerun the script.</p>'
+    }
+} else {
+    $aiContent = '<p>Devin CLI not found. AI summary could not be genereated.</p>
+<p>Please register and install Windsurf/Devin using Company Portal.</p>
+<p>Please update Devin to the latest.</p>
+<p>After install Devin CLI using these powershell commands</p>
+<pre>Invoke-WebRequest -Uri "https://static.devin.ai/cli/setup.ps1" -OutFile "$env:TEMP\devin-setup.ps1" -UseBasicParsing
+&amp; "$env:TEMP\devin-setup.ps1"</pre>'
+}#>
+
+$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"
+$devinFound = Test-Path $devinPath
+
+if ($devinFound) {
+    $authOut = [System.IO.Path]::GetTempFileName()
+    $authErr = [System.IO.Path]::GetTempFileName()
+    $authProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','status') -RedirectStandardOutput $authOut -RedirectStandardError $authErr -NoNewWindow -PassThru
+    if (-not $authProc.WaitForExit(5000)) {
+        $authProc.Kill()
+        $authOk = $false
+    } else {
+        $authOutput = Get-Content $authOut -Raw
+        $authOk = ($authProc.ExitCode -eq 0 -and $authOutput -notmatch 'Not logged in')
+    }
+    if (-not $authOk) {
+        Write-Host 'Devin CLI reports not authenticated. Checking login...'
+        Write-Host 'If you are already logged in, this will finish automatically. Otherwise choose option 1 (Log in with browser).'
+        Write-Warning 'If these logs are from WELLS FARGO or another company that does not allow AI to analyze logs, DO NOT LOGIN TO DEVIN and/or cancel the script'
+        Sleep 10
+        $loginProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','login') -NoNewWindow -PassThru
+        $loginProc.WaitForExit()
+        $authOk = $true
+    }
+    if ($authOk) {
+    $titleMatch = [regex]::Match($html, '(?is)<title>(.*?)</title>')
+    $reportTitle = if ($titleMatch.Success) { [System.Net.WebUtility]::HtmlDecode($titleMatch.Groups[1].Value.Trim()) } else { 'CluChk Report' }
+
+    $actionMatch = [regex]::Match($html, '(?is)<h2[^>]*>\s*Action Plan, Health Check and Firmware Failures\s*</h2>(.*?)(?=<h2|$)')
+    $errorList = ''
+    if ($actionMatch.Success) {
+        $actionSection = $actionMatch.Groups[1].Value
+        $rows = [regex]::Matches($actionSection, '(?is)<tr\b[^>]*>(.*?)</tr>')
+        foreach ($row in $rows) {
+            $rowHtml = $row.Groups[1].Value
+            $cells = [regex]::Matches($rowHtml, '(?is)<td\b[^>]*>(.*?)</td>')
+            if ($cells.Count -ge 3) {
+                $target = [System.Net.WebUtility]::HtmlDecode(($cells[0].Groups[1].Value -replace '<[^>]+>', '').Trim())
+                $message = [System.Net.WebUtility]::HtmlDecode(($cells[2].Groups[1].Value -replace '<[^>]+>', '').Trim())
+                $errorList += "TARGET: $target`r`nMESSAGE: $message`r`n---`r`n"
+            }
+        }
+    }
+
+    $bodyMatch = [regex]::Match($html, '(?is)<body>(.*)</body>')
+    $bodyContent = if ($bodyMatch.Success) { $bodyMatch.Groups[1].Value } else { $html }
+    $reportBody = $bodyContent -replace '(?is)<script[^>]*>.*?</script>', '' -replace '(?is)<style[^>]*>.*?</style>', ''
+
+    $sddcContext = ''
+    if ($SDDCPath -and (Test-Path $SDDCPath)) {
+        $sddcSb = [System.Text.StringBuilder]::new()
+        $sddcTotal = 0
+        $sddcFiles = Get-ChildItem -Path $SDDCPath -File | Where-Object { $_.Extension -match '\.(json|txt|csv|xml|ini|md)$' }
+        foreach ($file in $sddcFiles) {
+            if ($file.Length -gt 2048 -or $sddcTotal -gt 8000) { break }
+            $content = [System.IO.File]::ReadAllText($file.FullName)
+            if ($content.Length -gt 2048) { $content = $content.Substring(0,2048) + "`n... truncated ..." }
+            [void]$sddcSb.AppendLine("=== $($file.Name) ===")
+            [void]$sddcSb.AppendLine($content)
+            [void]$sddcSb.AppendLine()
+            $sddcTotal += $content.Length
+        }
+        if ($sddcSb.Length -gt 0) { $sddcContext = "Dell SDDC context from ${SDDCPath}:`r`n" + $sddcSb.ToString() }
+    }
+
+$prompt = @"
+You are a Dell L3 support engineer writing for L1 engineers.
+You are given a CluChk HTML report for a Windows Failover Cluster. The cluster may be Azure Local, Azure Stack HCI, classic Hyper-V, file server, scale-out file server, SQL FCI, or another Windows cluster type.
+ 
+Do not use any Devin skills, MCP servers, or non-web tools. You may use web search/fetch as needed to verify references. Base your analysis primarily on the report HTML and the data provided in this prompt.
+ 
+TIME CONSTRAINT
+You must provide the complete response within 5 minutes. If time is short, finish the RECOMMENDED ORDER OF WORK and FOR L1 ENGINEERS - QUICK CHECKLIST first, then stop and output what you have completed. Do not leave the response empty.
+ 
+GOAL
+Determine the cluster type from the report data, then produce a structured, prioritized summary of the most important issues and safe next steps.
+ 
+CLUSTER TYPE DETECTION
+Choose the analysis path based on these indicators:
+- Azure Local: The "Solution and SBE Updates" table exists, OR the Cluster Nodes table explicitly shows "Azure Local" with a version, OR Cluster Groups include "Cloud Management" / "SDDC Group".
+- Azure Stack HCI: The OS is Azure Stack HCI but there is no "Solution and SBE Updates" table.
+- Generic Windows Failover Cluster (Hyper-V, File Server, SOFS, SQL FCI, etc.): None of the above indicators are present.
+If you cannot determine the type, treat it as a generic Windows Failover Cluster.
+ 
+OUTPUT FORMAT
+Respond using ONLY these four sections, in this exact order, with the exact headings. Do not add an introduction, conclusion, or any other section.
+ 
+1. RECOMMENDED ORDER OF WORK
+   Numbered list of current actionable issues in priority order. Put update/health blockers and failed cluster groups first; warnings last. Combine all evidence for the same root cause into one numbered item.
+   Item 1 must always be the failed/unhealthy cluster group that is blocking the Azure Local Solution update (typically the Cloud Management cluster group / RegisterCloudManagementClusterExtensions failure). The failed Solution update must not appear before the cluster-group blocker that is causing it.
+   After item 1, use this exact priority order: (1) Invoke-AzStackHciSDNNCValidation failure, (2) offline virtual machines, (3) SDDC Group PartialOnline, (4) network QoS/DCBX warnings, (5) any third-party filter driver such as VeeamFCT. Do not reorder these items unless the data proves one is actively blocking health.
+ 
+2. FOR L1 ENGINEERS - QUICK CHECKLIST
+   Bullet list of read-only checks and safe first actions. The last bullet must always be the escalation step. Add a one-line production or data-loss warning when an action can affect production or data.
+ 
+3. DETAILED FINDINGS
+   One subsection per significant issue. Use this exact format:
+   ISSUE: <short, specific name>
+   WHY IT MATTERS: <one sentence explaining the impact if this is not resolved>
+   EVIDENCE:
+   - <TableName>: <Field/Value>
+   - ...
+   NEXT ACTIONS:
+   - <action>
+   - ...
+   Include one subsection for each unique, actionable failure. Do not create multiple subsections for the same root cause that appears in more than one table or cell. If the same issue appears across multiple tables, list every affected table/field in the EVIDENCE section of a single subsection and keep WHY IT MATTERS and NEXT ACTIONS unique. Label historical issues [HISTORICAL].
+ 
+4. ITEMS TO IGNORE
+   Bullet list of flagged items that should not be actioned right now, with the reason.
+ 
+GENERAL ANALYSIS RULES
+1. Do not rely on the Results Summary table. Examine the actual section tables directly.
+2. Identify every cell with a red or yellow background and explain why it is flagged based on the data in that section.
+3. Determine the cluster type first, then apply the correct update path:
+   a. Azure Local: Do NOT recommend manual BIOS/firmware/driver updates. Route all component updates through the pending Solution/SBE update workflow. Focus update failure analysis on the "Solution and SBE Updates" table and the "Action Plan, Health Check and Firmware Failures" table.
+   b. Azure Stack HCI: Use the Azure Stack HCI support matrix and Dell EMC SBE guidance if available. Do not manually flash components unless the report explicitly supports it for this OS version.
+   c. Generic Windows Failover Cluster / Hyper-V / File Server / SOFS / SQL FCI: Evaluate firmware/BIOS/driver drift against the Dell support matrix and recommend the normal Dell update path. Reference Windows Update, Cluster-Aware Updating (CAU), or the appropriate update mechanism shown in the report.
+4. Do not jump to hardware replacement for disk issues. First evaluate CannotPool and firmware/BIOS/driver non-compliance.
+5. Do not suggest node-level repair commands (e.g., Repair-Server, Repair-Cluster, Remove-ClusterNode) unless the report explicitly supports it and you have warned about production impact and data-loss risk.
+6. If Set-NetIntentRetryState appears in the Action Plan, list it as the first action; otherwise ignore this rule.
+7. Ignore UseAnyNetworkForMigration = False issues.
+8. Only include action-plan failures that are newer than the last successful update, unless an older failure is still actively blocking health.
+9. If a pending reboot/restart-required warning exists, check the last reboot time in the Cluster Nodes table before calling it out.
+10. Do not use words like "likely", "probably", "maybe", or "suspect". State only what the data shows.
+11. Allowed reference sources only:
+    - https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md
+    - https://github.com/Azure/AzureLocal-Supportability/
+    - https://www.dell.com/support/
+    Do not include any URL that is not from one of those sources. Do not invent URLs.
+ 
+CAU AUTO UPDATE RULE
+If the Cluster Name table shows CAU Auto Update = Enabled, AND the "Solution and SBE Updates" table contains any entry in InstallationFailed, Failed, or another failed/in-progress state, treat CAU Auto Update as informational only and move it to "Items to Ignore". Do not list it as a separate actionable issue.
+ 
+UPDATE HISTORY RULE
+For any failed or pending Solution or SBE update, include the last successfully installed/registered version and the target version in the EVIDENCE. For example, include the current installed Solution version, the target Solution version, the current installed SBE version, and the target SBE version if the report shows them.
+ 
+TSG AND KNOWN ISSUES FORMAT
+1. If a TSG from https://github.com/Azure/AzureLocal-Supportability/ closely matches the error or symptom, use these EXACT two bullets in NEXT ACTIONS:
+   "This matches the Azure Local known issue '<title>'. Look at this TSG to resolve the <issue> issue: <TSG_URL>"
+   "Also check the known-issues page for any additional related issues: https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md"
+   Replace <title> with the exact known-issue title, <issue> with the short issue name, and <TSG_URL> with the full TSG URL. Do not place any punctuation immediately after the TSG URL.
+2. If no TSG closely matches, use this EXACT format:
+   "No matching TSG was found. Review https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md for any related known issue."
+3. Do not use any other wording for TSG or known-issue references. The top-level known-issues.md page must never be the only link in a NEXT ACTION unless no TSG matches.
+ 
+L1 CHECKLIST ESCALATION RULE
+The final bullet in the FOR L1 ENGINEERS - QUICK CHECKLIST must always be:
+"Escalate to the MS DE group if the problem cannot be resolved."
+This bullet must appear even if all other checklist items are read-only.
+ 
+TSG MAPPING RULE
+For these common Azure Local failures, use the exact TSG URL shown; do not search or say "no matching TSG":
+- Cloud Management cluster group Failed OR RegisterCloudManagementClusterExtensions failure -> https://github.com/Azure/AzureLocal-Supportability/blob/main/TSG/Upgrade/Known-Issue-Cloud-Management-Cluster-Group-Missing-or-Failed-To-Start.md
+- Invoke-AzStackHciSDNNCValidation failure -> https://github.com/Azure/AzureLocal-Supportability/blob/main/TSG/Networking/Top-Of-Rack-Switch/Troubleshoot-TOR-LLDP-DCBX-PFC-RoCEv2.md
+ 
+FILTER DRIVER RULE
+If the FLTMC Logs table shows a non-Microsoft file-system filter driver (for example, VeeamFCT), do not create a DETAILED FINDING or a FOR L1 ENGINEERS action item. Move it to "Items to Ignore" with the reason: "Third-party filter drivers are not an L1 actionable item; escalate to the MS DE group if backup or storage symptoms are present."
+ 
+COMBINE RELATED FINDINGS
+Do not split a failed update, its blocked SBE update, and the resulting BIOS/firmware/driver drift into multiple ISSUE subsections. Group all related evidence under one ISSUE with a clear root-cause name such as "Cloud Management cluster group failure blocking Azure Local Solution and SBE updates". Mention the standalone SBE requirement only once if relevant, or omit if not applicable.
+ 
+DEDUPLICATION RULE
+If the same error, warning, or root cause is shown in multiple tables or cells, do not repeat the ISSUE, WHY IT MATTERS, or NEXT ACTIONS. Create exactly one subsection for that unique issue and list every affected table/field in the EVIDENCE section. Do not copy the same summary text into a separate section for each table.
+ 
+Report Title: $reportTitle
+ 
+Report HTML:
+$reportBody
+ 
+$sddcContext
+Action Plan errors:
+$errorList
+"@
+
+    $promptFile = [System.IO.Path]::GetTempFileName()
+    [System.IO.File]::WriteAllText($promptFile, $prompt, [System.Text.Encoding]::UTF8)
+
+    $attempt = 0
+    $maxAttempts = 2
+    $aiContent = '<p>Devin CLI is installed but could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
+    $outFile = $null
+    do {
+        $attempt++
+        if ($outFile) { Remove-Item $outFile -ErrorAction SilentlyContinue }
+        $outFile = [System.IO.Path]::GetTempFileName()
+        Write-Host "Generating AI summary. Estimated time: 2-5 minutes... (attempt $attempt)"
+        $p = Start-Process -FilePath $devinPath -ArgumentList @('--prompt-file', $promptFile, '--print', '--respect-workspace-trust', 'false', '--permission-mode', 'auto') -RedirectStandardOutput $outFile -NoNewWindow -PassThru
+        if (-not $p.WaitForExit(300000)) {
+            $p.Kill()
+            $aiContent = '<p>Devin CLI is installed but timed out and could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
+            break
+        }
+        $stdout = [System.IO.File]::ReadAllText($outFile)
+        $stdout = $stdout -replace '\x1B\[[0-9;]*[a-zA-Z]', ''
+        $stdout = $stdout -replace '(?is)^Welcome to Devin CLI!.*?Run devin to get started\.', ''
+        $stdout = $stdout -replace '(?is)warning: rejected a tool call.*?(\r?\n|$)', ''
+        $stdout = $stdout.Trim()
+        if ($stdout -match '(?i)(log in|sign in|authenticate)') {
+            if ($attempt -lt $maxAttempts) {
+                Write-Host 'Devin session not valid for summary generation. Logging out and re-authenticating...'
+                Start-Process -FilePath $devinPath -ArgumentList @('auth','logout') -NoNewWindow -Wait
+                Write-Host 'Choose option 1 (Log in with browser)'
+                $loginProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','login') -NoNewWindow -PassThru
+                $loginProc.WaitForExit()
+            } else {
+                $aiContent = '<p>Devin CLI is installed but could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
+            }
+        } else {
+            $sb = [System.Text.StringBuilder]::new()
+            $last = 0
+            $urlMatches = [regex]::Matches($stdout, 'https?://[^\s)><\x22\x27]+')
+            foreach ($m in $urlMatches) {
+                [void]$sb.Append([System.Net.WebUtility]::HtmlEncode($stdout.Substring($last, $m.Index - $last)))
+                $url = $m.Value
+                $enc = [System.Net.WebUtility]::HtmlEncode($url)
+                [void]$sb.Append("<a href='$enc'>$enc</a>")
+                $last = $m.Index + $url.Length
+            }
+            [void]$sb.Append([System.Net.WebUtility]::HtmlEncode($stdout.Substring($last)))
+            $aiContent = "<pre>$($sb.ToString())</pre>"
+            break
+        }
+    } while ($attempt -lt $maxAttempts)
+
+    Remove-Item $promptFile, $outFile, $authOut, $authErr -ErrorAction SilentlyContinue
+    } else {
+        $aiContent = '<p>Devin CLI is not authenticated after the login attempt. Ensure you completed the Windsurf login and that <code>devin -p "say hi"</code> works, then rerun the script.</p>'
+    }
+} else {
+    $aiContent = '<p>Devin CLI not found. AI summary could not be genereated.</p>
+<p>Please register and install Windsurf/Devin using Company Portal.</p>
+<p>Please update Devin to the latest.</p>
+<p>Afterwards, install Devin CLI using these powershell commands</p>
+<pre>Invoke-WebRequest -Uri "https://static.devin.ai/cli/setup.ps1" -OutFile "$env:TEMP\devin-setup.ps1" -UseBasicParsing
+&amp; "$env:TEMP\devin-setup.ps1"</pre>'
+}
+
+$issueActions = @{}
+if ($stdout -and $stdout -match '(?m)^ISSUE:') {
+    $lines = $stdout -split '\r?\n'
+    $i = 0
+    $blockType = $null
+    while ($i -lt $lines.Count) {
+        $line = $lines[$i]
+        if ($line -match '^ISSUE:\s*(.+)$') {
+            $issueName = $matches[1].Trim()
+            $why = ''
+            $evidence = @()
+            $actions = @()
+            $blockType = $null
+            $i++
+            while ($i -lt $lines.Count -and $lines[$i] -notmatch '^(ISSUE|3\. DETAILED|4\. ITEMS|2\. FOR L1)') {
+                $l = $lines[$i]
+                if ($l -match '^WHY IT MATTERS:\s*(.+)$') { $why = $matches[1].Trim() }
+                elseif ($l -match '^EVIDENCE:\s*$') { $blockType = 'evidence' }
+                elseif ($l -match '^NEXT ACTIONS:\s*$') { $blockType = 'actions' }
+                elseif ($l -match '^-\s+(.+)$') {
+                    $v = $matches[1].Trim()
+                    if ($blockType -eq 'evidence') { $evidence += $v }
+                    elseif ($blockType -eq 'actions') { $actions += $v }
+                }
+                $i++
+            }
+            foreach ($ev in $evidence) {
+                $tbl = ($ev -split ':')[0].Trim()
+                if ($tbl) {
+                    $key = ($tbl -replace '[^a-zA-Z0-9]', '').ToLower()
+                    if (-not $issueActions[$key]) { $issueActions[$key] = @() }
+                    $actionsKey = $actions -join [char]0
+                    $duplicate = $issueActions[$key] | Where-Object { $_.Issue -eq $issueName -and $_.Why -eq $why -and (($_.Actions -join [char]0) -eq $actionsKey) } | Select-Object -First 1
+                    if (-not $duplicate) {
+                        $issueActions[$key] += [PSCustomObject]@{
+                            Issue = $issueName
+                            Why = $why
+                            Actions = $actions
+                        }
+                    }
+                }
+            }
+        } else {
+            $i++
+        }
+    }
+    Write-Host "Actionable items parsed for $($issueActions.Count) table keys"
+}
+
+$m = [regex]::Match($html, '(?is)<body>(.*)</body>')
+$head = $html.Substring(0, $m.Index)
+$tail = $html.Substring($m.Index + $m.Length)
+$body = $m.Groups[1].Value
+
+$head = $head -replace '(?is)<style[^>]*>.*?</style>\s*', ''
+$head = $head -replace '(?is)<script[^>]*>.*?</script>\s*', ''
+
+$css = @'
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<style type='text/css'>
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; padding: 0; }
+body { display: flex; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #eef2f5; color: #333; }
+.sidebar { width: 300px; min-width: 300px; background: #1a237e; color: #fff; height: 100vh; overflow-y: auto; position: sticky; top: 0; display: flex; flex-direction: column; }
+.brand { padding: 1.2rem; background: #0d1642; font-weight: 600; font-size: 1.15rem; text-align: center; border-bottom: 1px solid #3949ab; }
+#ai-summary pre { white-space: pre-wrap; overflow-wrap: break-word; max-width: 100%; }
+#tabSearch { margin: .8rem; padding: .5rem .7rem; border: none; border-radius: 4px; font-size: .9rem; }
+.sidebar ul { list-style: none; margin: 0; padding: 0; flex: 1; }
+.sidebar li { border-bottom: 1px solid #283593; } .sidebar li.hidden { display: none; } #expandAll { display: block; padding: .5rem .8rem; color: #fff; text-decoration: underline; cursor: pointer; font-size: .85rem; }
+.sidebar button { width: 100%; padding: .75rem 1rem; background: transparent; color: #fff; border: none; text-align: left; cursor: pointer; font-size: .88rem; transition: background .15s; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar button:hover { background: #3949ab; }
+.sidebar button.active { background: #5c6bc0; border-left: 4px solid #ffeb3b; padding-left: calc(1rem - 4px); } .sidebar button.error { background: #e53935 !important; color: #fff; } .sidebar button.warning { background: #ffeb3b !important; color: #000; }
+.main-content { flex: 1; padding: 1.5rem; overflow-y: auto; height: 100vh; }
+.tab-panel { display: none; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.08); padding: 1.5rem; margin-bottom: 1.5rem; }
+.tab-panel.active { display: block; animation: fadeIn .2s; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+section h1 { font-size: 1.7rem; color: #1a237e; border-bottom: 3px solid #ffeb3b; padding-bottom: .3rem; margin-top: 0; }
+section h2 { font-size: 1.4rem; color: #1a237e; border-bottom: 2px solid #c5cae9; padding-bottom: .3rem; margin-top: 0; }
+section h3 { font-size: 1.1rem; color: #3949ab; margin-top: 1.2rem; }
+section table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .92rem; border: none; }
+section table th { background: #1a237e; color: #fff; text-align: left; padding: .65rem; font-weight: 600; border: none; }
+section table td { padding: .55rem .65rem; border: none; border-bottom: 1px solid #e0e0e0; }
+section table tr:nth-child(even) { background: #f5f5f5; }
+section table tr:hover td { background: #e8eaf6; }
+section a { color: #1565c0; }
+section h5 { margin: .2rem 0; color: #555; font-size: .9rem; }
+section mark { background-color: #fff176; padding: 0 .2rem; border-radius: 3px; }
+.ai-table-actions { background: #fff3e0; border-left: 4px solid #ff9800; padding: 1rem; margin: 1rem 0; border-radius: 4px; }
+.ai-table-actions h3 { margin-top: 0; color: #e65100; border-bottom: 1px solid #ffcc80; padding-bottom: .3rem; }
+.ai-table-actions p { margin: .5rem 0; }
+.ai-table-actions ul { margin: .5rem 0; padding-left: 1.2rem; }
+.ai-table-actions li { margin: .3rem 0; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+@media (max-width: 768px) { body { flex-direction: column; } .sidebar { width: 100%; height: auto; max-height: 40vh; } .main-content { height: auto; } }
+</style>
+<script>
+function showTab(id){
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  var el=document.getElementById(id);
+  if(el) el.classList.add('active');
+  document.querySelectorAll('.tab-link').forEach(function(b){ b.classList.remove('active'); });
+  var btn=document.querySelector('.tab-link[data-target=' + id + ']');
+  if(btn) btn.classList.add('active');
+  window.scrollTo(0,0);
+}
+function filterTabs(){
+  var q=document.getElementById('tabSearch').value.toLowerCase();
+  document.querySelectorAll('.sidebar li').forEach(function(li){
+    li.style.display=li.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+  });
+}
+document.addEventListener('DOMContentLoaded',function(){
+  document.querySelectorAll('a[href]').forEach(function(a){
+    var href=a.getAttribute('href');
+    if(href && href.startsWith('#')){
+      a.addEventListener('click',function(e){
+        var id=this.getAttribute('href').slice(1);
+        if(document.getElementById(id) && document.getElementById(id).classList.contains('tab-panel')){
+          showTab(id);
+          e.preventDefault();
+        }
+      });
+    }
+  });
+  var hash=window.location.hash.slice(1);
+  if(hash) showTab(hash);
+});
+</script>
+'@
+
+$idx = $head.LastIndexOf('</head>', [System.StringComparison]::OrdinalIgnoreCase)
+if ($idx -lt 0) { $idx = $head.LastIndexOf('</head>') }
+if ($idx -ge 0) { $head = $head.Insert($idx, $css) }
+
+$parts = [regex]::Split($body, '(?i)(<h2\b[^>]*>)')
+$sections = @()
+
+$aiSummaryHtml = "<section id='ai-summary' class='tab-panel'><H2>AI Summary</H2><div>$aiContent</div></section>"
+$aiSection = [PSCustomObject]@{Id='ai-summary'; Label='AI Summary'; Html=$aiSummaryHtml}
+$sections += $aiSection
+
+$sections += [PSCustomObject]@{
+    Id = 'report-overview'
+    Label = 'Report Overview'
+    Html = "<section id='report-overview' class='tab-panel active'>$($parts[0])</section>"
+}
+
+for ($i = 1; $i -lt $parts.Length; $i += 2) {
+    $startTag = $parts[$i]
+    $content = if ($i + 1 -lt $parts.Length) { $parts[$i + 1] } else { '' }
+    $id = ([regex]::Match($startTag, 'id="(.+?)"')).Groups[1].Value
+    if ([string]::IsNullOrWhiteSpace($id)) { $id = 'section-' + $i }
+    $label = ([regex]::Match($content, '(?i)^(.+?)</h2>')).Groups[1].Value.Trim()
+    if ([string]::IsNullOrWhiteSpace($label)) { $label = $id }
+    $newStartTag = $startTag -replace 'id=".+?"', ''
+    $actionHtml = ''
+    $sectionIdKey = ($id -replace '[^a-zA-Z0-9]', '').ToLower()
+    $sectionLabelKey = ($label -replace '[^a-zA-Z0-9]', '').ToLower()
+    $sectionKey = $sectionIdKey
+    if (-not $issueActions[$sectionKey]) { $sectionKey = $sectionLabelKey }
+    if ($issueActions[$sectionKey]) {
+        $boxes = foreach ($ia in $issueActions[$sectionKey]) {
+            $acts = ($ia.Actions | ForEach-Object { "<li>$([System.Net.WebUtility]::HtmlEncode($_))</li>" }) -join ''
+            "<div class='ai-table-actions'><h3>$([System.Net.WebUtility]::HtmlEncode($ia.Issue))</h3><p><strong>Why this matters:</strong> $([System.Net.WebUtility]::HtmlEncode($ia.Why))</p><ul>$acts</ul></div>"
+        }
+        $actionHtml = $boxes -join ''
+    }
+    # $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$content$actionHtml</section>"   - removed and expanded to the if/then below
+    if ($actionHtml) {
+        $mH2 = [regex]::Match($content, '(?i)(</h2>)')
+        if ($mH2.Success) {
+            $h2End = $mH2.Index + $mH2.Groups[1].Length
+            $h2Part = $content.Substring(0, $h2End)
+            $restPart = $content.Substring($h2End)
+            $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$h2Part$actionHtml$restPart</section>"
+        } else {
+            $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$content$actionHtml</section>"
+        }
+    } else {
+        $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$content</section>"
+    }
+    $sections += [PSCustomObject]@{
+        Id = $id
+        Label = $label
+        Html = $sectionHtml
+    }
+}
+
+$navItems = $sections | ForEach-Object {
+    "<li><button class='tab-link' data-target='$($_.Id)' onclick='showTab(this.dataset.target)'>$([System.Net.WebUtility]::HtmlEncode($_.Label))</button></li>"
+}
+$navHtml = "<nav class='sidebar'><div class='brand'>CluChk Report</div><a href='#' id='expandAll' onclick='toggleAllTabs(); return false;'>Expand and Collapse</a><input type='text' id='tabSearch' oninput='filterTabs()' placeholder='Search tables...' /><ul>$($navItems -join '')</ul></nav>"
+
+$mainItems = $sections | ForEach-Object { $_.Html }
+$mainHtml = "<main class='main-content'>$($mainItems -join '')</main>"
+
+$newBody = $navHtml + $mainHtml
+
+$sortJs = '<script>function sortTable(table,col){let rows=Array.from(table.querySelectorAll(`tr`)).filter(r=>!r.querySelector(`th`));let asc=table.getAttribute(`data-sort-col`)!=String(col)||table.getAttribute(`data-sort-dir`)!=`asc`;rows.sort((x,y)=>{let u=x.cells[col]?x.cells[col].textContent.trim().toLowerCase():``;let v=y.cells[col]?y.cells[col].textContent.trim().toLowerCase():``;let m=parseFloat(u),n=parseFloat(v);if(!isNaN(m)&&!isNaN(n)&&u===``+m&&v===``+n){u=m;v=n;}return(u>v?1:(u<v?-1:0))*(asc?1:-1);});rows.forEach(row=>table.appendChild(row));table.setAttribute(`data-sort-col`,col);table.setAttribute(`data-sort-dir`,asc?`asc`:`desc`);}function initTables(){document.querySelectorAll(`section table`).forEach(table=>{table.querySelectorAll(`th`).forEach((th,col)=>{th.style.cursor=`pointer`;th.addEventListener(`click`,()=>{sortTable(table,col);});});});}function colorTabs(){document.querySelectorAll(`#report-overview table tr`).forEach(function(row){if(row.cells.length<3)return;var a=row.querySelector(`a[href^="#"]`);if(!a)return;var name=a.textContent.trim();var warnings=parseInt(row.cells[1].textContent.trim(),10)||0;var errors=parseInt(row.cells[2].textContent.trim(),10)||0;var btn=null;document.querySelectorAll(`.tab-link`).forEach(function(b){if(b.textContent.trim()===name)btn=b;});if(btn){if(errors>0)btn.classList.add(`error`);else if(warnings>0)btn.classList.add(`warning`);}});document.querySelectorAll(`.tab-panel`).forEach(function(panel){if(panel.innerHTML.includes(`background-color: #ff0000`)){var btn=document.querySelector(`.tab-link[data-target="${panel.id}"]`);if(btn&&!btn.classList.contains(`error`))btn.classList.add(`error`);}});}function updateTabVisibility(){document.querySelectorAll(`.sidebar li`).forEach(function(li){var btn=li.querySelector(`.tab-link`);if(btn){if(btn.dataset.target===`report-overview`||btn.dataset.target===`ai-summary`)return;if(!btn.classList.contains(`error`)&&!btn.classList.contains(`warning`))li.classList.add(`hidden`);}});}function toggleAllTabs(){var hidden=document.querySelectorAll(`.sidebar li.hidden`);if(hidden.length){hidden.forEach(function(li){li.classList.remove(`hidden`);});}else{updateTabVisibility();}}initTables();colorTabs();updateTabVisibility();</script>'
+
+  <#  $m = [regex]::Match($html, '(?is)<body>(.*)</body>')
+    $head = $html.Substring(0, $m.Index)
+    $tail = $html.Substring($m.Index + $m.Length)
+    $body = $m.Groups[1].Value
+
+    $head = $head -replace '(?is)<style[^>]*>.*?</style>\s*', ''
+    $head = $head -replace '(?is)<script[^>]*>.*?</script>\s*', ''
+
+    $css = @'
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <style type='text/css'>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; padding: 0; }
+    body { display: flex; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #eef2f5; color: #333; }
+    .sidebar { width: 300px; min-width: 300px; background: #1a237e; color: #fff; height: 100vh; overflow-y: auto; position: sticky; top: 0; display: flex; flex-direction: column; }
+    .brand { padding: 1.2rem; background: #0d1642; font-weight: 600; font-size: 1.15rem; text-align: center; border-bottom: 1px solid #3949ab; }
+    #tabSearch { margin: .8rem; padding: .5rem .7rem; border: none; border-radius: 4px; font-size: .9rem; }
+    .sidebar ul { list-style: none; margin: 0; padding: 0; flex: 1; }
+    .sidebar li { border-bottom: 1px solid #283593; }
+    .sidebar button { width: 100%; padding: .75rem 1rem; background: transparent; color: #fff; border: none; text-align: left; cursor: pointer; font-size: .88rem; transition: background .15s; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sidebar button:hover { background: #3949ab; }
+    .sidebar button.active { background: #5c6bc0; border-left: 4px solid #ffeb3b; padding-left: calc(1rem - 4px); }
+    .main-content { flex: 1; padding: 1.5rem; overflow-y: auto; height: 100vh; }
+    .tab-panel { display: none; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.08); padding: 1.5rem; margin-bottom: 1.5rem; }
+    .tab-panel.active { display: block; animation: fadeIn .2s; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    section h1 { font-size: 1.7rem; color: #1a237e; border-bottom: 3px solid #ffeb3b; padding-bottom: .3rem; margin-top: 0; }
+    section h2 { font-size: 1.4rem; color: #1a237e; border-bottom: 2px solid #c5cae9; padding-bottom: .3rem; margin-top: 0; }
+    section h3 { font-size: 1.1rem; color: #3949ab; margin-top: 1.2rem; }
+    section table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .92rem; border: none; }
+    section table th { background: #1a237e; color: #fff; text-align: left; padding: .65rem; font-weight: 600; border: none; }
+    section table td { padding: .55rem .65rem; border: none; border-bottom: 1px solid #e0e0e0; }
+    section table tr:nth-child(even) { background: #f5f5f5; }
+    section table tr:hover td { background: #e8eaf6; }
+    section a { color: #1565c0; }
+    section h5 { margin: .2rem 0; color: #555; font-size: .9rem; }
+    section mark { background-color: #fff176; padding: 0 .2rem; border-radius: 3px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+    @media (max-width: 768px) { body { flex-direction: column; } .sidebar { width: 100%; height: auto; max-height: 40vh; } .main-content { height: auto; } }
+    </style>
+    <script>
+    function showTab(id){
+      document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+      var el=document.getElementById(id);
+      if(el) el.classList.add('active');
+      document.querySelectorAll('.tab-link').forEach(function(b){ b.classList.remove('active'); });
+      var btn=document.querySelector('.tab-link[data-target=' + id + ']');
+      if(btn) btn.classList.add('active');
+      window.scrollTo(0,0);
+    }
+    function filterTabs(){
+      var q=document.getElementById('tabSearch').value.toLowerCase();
+      document.querySelectorAll('.sidebar li').forEach(function(li){
+        li.style.display=li.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+      });
+    }
+    document.addEventListener('DOMContentLoaded',function(){
+      document.querySelectorAll('a[href]').forEach(function(a){
+        var href=a.getAttribute('href');
+        if(href && href.startsWith('#')){
+          a.addEventListener('click',function(e){
+            var id=this.getAttribute('href').slice(1);
+            if(document.getElementById(id) && document.getElementById(id).classList.contains('tab-panel')){
+              showTab(id);
+              e.preventDefault();
+            }
+          });
+        }
+      });
+      var hash=window.location.hash.slice(1);
+      if(hash) showTab(hash);
+    });
+    </script>
+'@
+
+    $idx = $head.LastIndexOf('</head>', [System.StringComparison]::OrdinalIgnoreCase)
+    if ($idx -lt 0) { $idx = $head.LastIndexOf('</head>') }
+    if ($idx -ge 0) { $head = $head.Insert($idx, $css) }
+
+    $parts = [regex]::Split($body, '(?i)(<h2\b[^>]*>)')
+    $sections = @()
+    $sections += [PSCustomObject]@{
+        Id = 'report-overview'
+        Label = 'Report Overview'
+        Html = "<section id='report-overview' class='tab-panel active'>$($parts[0])</section>"
+    }
+
+    for ($i = 1; $i -lt $parts.Length; $i += 2) {
+        $startTag = $parts[$i]
+        $content = if ($i + 1 -lt $parts.Length) { $parts[$i + 1] } else { '' }
+        $id = ([regex]::Match($startTag, 'id="(.+?)"')).Groups[1].Value
+        if ([string]::IsNullOrWhiteSpace($id)) { $id = 'section-' + $i }
+        $label = ([regex]::Match($content, '(?i)^(.+?)</h2>')).Groups[1].Value.Trim()
+        if ([string]::IsNullOrWhiteSpace($label)) { $label = $id }
+        $newStartTag = $startTag -replace 'id=".+?"', ''
+        $sectionHtml = "<section id='$id' class='tab-panel'>$newStartTag$content</section>"
+        $sections += [PSCustomObject]@{
+            Id = $id
+            Label = $label
+            Html = $sectionHtml
+        }
+    }
+
+    $navItems = $sections | ForEach-Object {
+        "<li><button class='tab-link' data-target='$($_.Id)' onclick='showTab(this.dataset.target)'>$([System.Net.WebUtility]::HtmlEncode($_.Label))</button></li>"
+    }
+    $navHtml = "<nav class='sidebar'><div class='brand'>CluChk Report</div><input type='text' id='tabSearch' oninput='filterTabs()' placeholder='Search tables...' /><ul>$($navItems -join '')</ul></nav>"
+
+    $mainItems = $sections | ForEach-Object { $_.Html }
+    $mainHtml = "<main class='main-content'>$($mainItems -join '')</main>"
+
+    $newBody = $navHtml + $mainHtml
+
+    $sortJs = '<script>function sortTable(table,col){let rows=Array.from(table.querySelectorAll(`tr`)).filter(r=>!r.querySelector(`th`));let asc=table.getAttribute(`data-sort-col`)!=String(col)||table.getAttribute(`data-sort-dir`)!=`asc`;rows.sort((x,y)=>{let u=x.cells[col]?x.cells[col].textContent.trim().toLowerCase():``;let v=y.cells[col]?y.cells[col].textContent.trim().toLowerCase():``;let m=parseFloat(u),n=parseFloat(v);if(!isNaN(m)&&!isNaN(n)&&u===``+m&&v===``+n){u=m;v=n;}return(u>v?1:(u<v?-1:0))*(asc?1:-1);});rows.forEach(row=>table.appendChild(row));table.setAttribute(`data-sort-col`,col);table.setAttribute(`data-sort-dir`,asc?`asc`:`desc`);}function initTables(){document.querySelectorAll(`section table`).forEach(table=>{table.querySelectorAll(`th`).forEach((th,col)=>{th.style.cursor=`pointer`;th.addEventListener(`click`,()=>{sortTable(table,col);});});});}initTables();</script>'
+    #>
+    $newHtml = $head + '<body>' + $newBody + $sortJs + '</body>' + $tail
+
+    Out-File -FilePath $HtmlReport -InputObject $newHtml -Encoding ASCII
     # open HTML file
-    if (test-path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.html\UserChoice) {Invoke-Item($HtmlReport)}
+    if (test-path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.html\UserChoice -ErrorAction SilentlyContinue) {Invoke-Item($HtmlReport)}
 }
 #endregion  Create CluChk Html Report
 
@@ -6948,7 +7787,7 @@ IF($SDDCPerf -ieq "YES"){
     $HtmlReport= Join-Path -Path $CluChkReportLoc -ChildPath CluChkPerfReport_v$CluChkVer-$DTString$SDDCFileName.html
     Write-Host ("Report Output location: " + $HtmlReport)
     # open HTML file
-    if (test-path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.html\UserChoice) {Invoke-Item($HtmlReport)}
+    if (test-path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.html\UserChoice -ErrorAction SilentlyContinue) {Invoke-Item($HtmlReport)}
 }
 #endregion  Create CluChk Html Report
 
