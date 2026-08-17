@@ -30,7 +30,7 @@ Function Invoke-SLIC {
 Function EndScript{  
     break
 }
-$Ver="v1.34"
+$Ver="v1.35"
 $ToolName = @"
 $Ver
   ___ _    ___ ___ 
@@ -910,21 +910,143 @@ function Save-HtmlReport {
                     }
                 }
             }
+
+        # If Network ATC intent data is unavailable, allow the operator to manually
+        # identify the server-facing switch ports discovered through LLDP/GetNetAdapter.
+        $ManualPortClassificationUsed = $false
+
+        if ((-not $NetIntentDataFound) -and $SwPortToHostMap.Count -gt 0) {
+            Write-Host ""
+            Write-Host "    [!] GetNetIntent.XML is unavailable. Manual switch-port classification is required." -ForegroundColor Yellow
+            Write-Host "        The following server-facing switch ports were correlated using LLDP and GetNetAdapter.xml:" -ForegroundColor Yellow
+            Write-Host ""
+
+            $ManualCandidates = @($SwPortToHostMap |
+                Sort-Object SwHostName, SwLocPortId, ComputerName, ifAlias |
+                Select-Object SwHostName, SwLocPortId, ComputerName, ifAlias, ifDesc, MacAddress -Unique)
+
+            $IndexedCandidates = for ($Index = 0; $Index -lt $ManualCandidates.Count; $Index++) {
+                [pscustomobject]@{
+                    ID           = $Index + 1
+                    Switch       = $ManualCandidates[$Index].SwHostName
+                    SwitchPort   = $ManualCandidates[$Index].SwLocPortId
+                    ComputerName = $ManualCandidates[$Index].ComputerName
+                    Adapter      = $ManualCandidates[$Index].ifAlias
+                    Description  = $ManualCandidates[$Index].ifDesc
+                    MacAddress   = $ManualCandidates[$Index].MacAddress
+                }
+            }
+
+            $IndexedCandidates | Format-Table -AutoSize -Wrap
+            Write-Host ""
+            Write-Host "    Classify each port: M = Management, S = Storage, B = Both, O = Other/Skip" -ForegroundColor Cyan
+            Write-Host "    VLAN values are requested so the existing switch configuration checks can continue." -ForegroundColor Cyan
+            Write-Host ""
+
+            $ManualPortMap = @()
+
+            foreach ($Candidate in $ManualCandidates) {
+                $PromptLabel = "{0} / {1} -> {2} / {3}" -f $Candidate.SwHostName, $Candidate.SwLocPortId, $Candidate.ComputerName, $Candidate.ifAlias
+
+                do {
+                    $RoleChoice = (Read-Host "Role for $PromptLabel [M/S/B/O]").Trim().ToUpperInvariant()
+                } until ($RoleChoice -match '^[MSBO]$')
+
+                if ($RoleChoice -eq 'O') {
+                    $ManualPortMap += [pscustomobject]@{
+                        SwHostName      = $Candidate.SwHostName
+                        SwLocPortId     = $Candidate.SwLocPortId
+                        ComputerName    = $Candidate.ComputerName
+                        ifAlias         = $Candidate.ifAlias
+                        ifDesc          = $Candidate.ifDesc
+                        MacAddress      = $Candidate.MacAddress
+                        IntentType      = 'Other'
+                        vLAN            = ''
+                        AssignmentSource = 'Manual'
+                    }
+                    continue
+                }
+
+                if ($RoleChoice -in @('M','B')) {
+                    do {
+                        $MgmtVlan = (Read-Host "  Management VLAN for $($Candidate.SwHostName) $($Candidate.SwLocPortId)").Trim()
+                        if ($MgmtVlan -notmatch '^\d{1,4}$') {
+                            Write-Host "    Please enter a numeric VLAN ID (for example 201)." -ForegroundColor Yellow
+                        }
+                    } until ($MgmtVlan -match '^\d{1,4}$')
+
+                    $ManualPortMap += [pscustomobject]@{
+                        SwHostName      = $Candidate.SwHostName
+                        SwLocPortId     = $Candidate.SwLocPortId
+                        ComputerName    = $Candidate.ComputerName
+                        ifAlias         = $Candidate.ifAlias
+                        ifDesc          = $Candidate.ifDesc
+                        MacAddress      = $Candidate.MacAddress
+                        IntentType      = 'Mgmt'
+                        vLAN            = $MgmtVlan
+                        AssignmentSource = 'Manual'
+                    }
+                }
+
+                if ($RoleChoice -in @('S','B')) {
+                    do {
+                        $StorageVlan = (Read-Host "  Storage VLAN for $($Candidate.SwHostName) $($Candidate.SwLocPortId)").Trim()
+                        if ($StorageVlan -notmatch '^\d{1,4}$') {
+                            Write-Host "    Please enter a numeric VLAN ID (for example 711)." -ForegroundColor Yellow
+                        }
+                    } until ($StorageVlan -match '^\d{1,4}$')
+
+                    $ManualPortMap += [pscustomobject]@{
+                        SwHostName      = $Candidate.SwHostName
+                        SwLocPortId     = $Candidate.SwLocPortId
+                        ComputerName    = $Candidate.ComputerName
+                        ifAlias         = $Candidate.ifAlias
+                        ifDesc          = $Candidate.ifDesc
+                        MacAddress      = $Candidate.MacAddress
+                        IntentType      = 'Storage'
+                        vLAN            = $StorageVlan
+                        AssignmentSource = 'Manual'
+                    }
+                }
+            }
+
+            $SwPortToHostMap = @($ManualPortMap)
+            $ManualPortClassificationUsed = $true
+
+            Write-Host ""
+            Write-Host "    [+] Manual switch-port classification complete:" -ForegroundColor Green
+            $SwPortToHostMap | Format-Table SwHostName, SwLocPortId, ComputerName, ifAlias, IntentType, vLAN -AutoSize
+            Write-Host ""
+        }
         # Add Interface-to-Node Map to the HTML report.
-        if (-not $NetIntentDataFound) {
+        if ((-not $NetIntentDataFound) -and $ManualPortClassificationUsed) {
             $Description = @"
 <div class='warning-banner'>
-  <b>WARNING: NetIntent data not found.</b><br>
+  <b>WARNING: NetIntent data not found - manual port classification used.</b><br>
   SLIC could not find any <b>GetNetIntent.XML</b> data in the supplied SDDC.<br>
-  Management and Storage intent NICs cannot be identified, so the corresponding
-  Management and/or Storage switch ports cannot be determined.
+  The Management/Storage roles and VLANs shown below were entered manually by the operator.
+</div>
+"@
+
+            AddTo-HtmlReport -Title "Interface-to-Node Map" `
+                -Data $SwPortToHostMap `
+                -Description $Description `
+                -Footnotes "Port roles were manually assigned because GetNetIntent.XML was unavailable. LLDP and GetNetAdapter.xml were used to correlate server-facing switch ports. <p><a href='#'>Go to top</a></p>" `
+                -IncludeTitle -IncludeDescription -IncludeFootnotes
+        }
+        elseif (-not $NetIntentDataFound) {
+            $Description = @"
+<div class='warning-banner'>
+  <b>WARNING: NetIntent data not found and no server-facing ports could be correlated.</b><br>
+  SLIC could not find any <b>GetNetIntent.XML</b> data and could not build a candidate switch-port list from LLDP/GetNetAdapter.xml.
+  Management and Storage switch ports cannot be determined.
 </div>
 "@
 
             AddTo-HtmlReport -Title "Interface-to-Node Map" `
                 -Data @() `
                 -Description $Description `
-                -Footnotes "The switch-port map requires GetNetIntent.XML, GetNetAdapter.xml, and matching LLDP information. <p><a href='#'>Go to top</a></p>" `
+                -Footnotes "Manual classification requires matching LLDP and GetNetAdapter.xml information. <p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
         elseif ($SwPortToHostMap) {
