@@ -18,33 +18,19 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
-    2025/11/19:v1.3 - 1. JG - Added tri-state collapse button
-                      2. JG - Resolved red cell missing
-                      3. JG - Change column names to match the q of the nodes
-                      4. JG - Added Go to top link
-
-    2025/11/06:v1.2 - 1. JG - policy-map type queuing ets-policy class Q5/7 - Added Q-class matching between Switch and Server
-                      2. JG - class-map type network-qos group 5/7 - Added Q-class matching between Switch and Server
-                      3. JG - Fixed issue where switchport trunk allowed vlan was incorrectly flagged red when Management or Storage VLANs were missing
-                      4. JG - Added Ref links to the switch model if we have it
-                      5. JG - Show Version - Removed SwHostName as we do not get it until we build the next table
-                      6. JG - qos-map traffic-class queue-map - Added matching between Switch and Server
-                      7. JG - trust dot1p-map trust_map - Added matching between Switch and Server
-                      8. JG - Storage Interfaces - Fixed nested vlan check
-                      9. JG - Mgmt Interfaces - Fixed nested vlan check
-
-    2025/11/03:v1.1 - 1. JG - Resolved Ready to Run not stopping on N
-                      2. JG - Removed smart chars
-                      3. JG - Save-HtmlReport - Added support for UTF-8 with BOM for symbols
-    2025/11/03:v1.0 - JG - Initial release
+    See GitHub pull requests for history
 
 #>
 Function Invoke-SLIC {
 
+# Console output intentionally uses ASCII-only status markers so the script renders
+# consistently in Windows PowerShell 5.1 and PowerShell ISE. HTML-only symbols are
+# generated with entities/character codes and do not depend on the .ps1 file encoding.
+
 Function EndScript{  
     break
 }
-$Ver="v1.31"
+$Ver="v1.34"
 $ToolName = @"
 $Ver
   ___ _    ___ ___ 
@@ -57,7 +43,7 @@ $Ver
 Clear-Host
 Write-Host $ToolName
 Write-Host ""
-Write-Host "⚠️ SLIC Compatibility Notice:"
+Write-Host "[!] SLIC Compatibility Notice:" -ForegroundColor Yellow
 Write-host "       This tool currently supports Azure Local and Windows Server S2D clusters only."
 do {
     $run = Read-Host "Ready to run? [Y/N]"
@@ -97,7 +83,7 @@ If($confirmed -eq $true){
         Write-Host "No logs provided. Exiting script..."
         EndScript
     }Else{
-        Write-Host "✅ SwithcLogs:"$STSLOC
+        Write-Host "[+] Switch Logs:" $STSLOC -ForegroundColor Green
     }
 
     $SDDCPath = Read-Host "Please provide the path to the extracted SDDC"
@@ -106,7 +92,7 @@ If($confirmed -eq $true){
         Write-Host "SDDC path not found. Exiting script..." -ForegroundColor Red
         EndScript
     }Else{
-        Write-Host "✅ SDDC Path:"$SDDCPath
+        Write-Host "[+] SDDC Path:" $SDDCPath -ForegroundColor Green
     }
 
     #region === HTML Report System ===
@@ -196,12 +182,12 @@ div[id^='section'] { margin-bottom: 4px; }
 // --- Toggle sections ---
 function toggleSection(id, elem) {
   var x = document.getElementById(id);
-  if (x.style.display === 'none') { 
-    x.style.display = 'block'; 
-    elem.innerText = '▼'; 
-  } else { 
-    x.style.display = 'none'; 
-    elem.innerText = '▶'; 
+  if (x.style.display === 'none') {
+    x.style.display = 'block';
+    elem.innerText = String.fromCharCode(9660); // down triangle
+  } else {
+    x.style.display = 'none';
+    elem.innerText = String.fromCharCode(9658); // right triangle
   }
 }
 
@@ -235,7 +221,7 @@ document.addEventListener('DOMContentLoaded', function () {
       rows.forEach(r => tbody.appendChild(r));
 
       // Clear arrows
-      headers.forEach(h => h.innerText = h.innerText.replace(/[▲▼]/g, '').trim());
+      headers.forEach(h => h.innerText = h.innerText.replace(/[\u25B2\u25BC]/g, '').trim());
     };
     tbl.parentNode.insertBefore(resetBtn, tbl);
 
@@ -284,9 +270,9 @@ document.addEventListener('DOMContentLoaded', function () {
         rows.forEach(r => tbody.appendChild(r));
 
         // Update sort arrows
-        headers.forEach(h => h.innerText = h.innerText.replace(/[▲▼]/g, '').trim());
+        headers.forEach(h => h.innerText = h.innerText.replace(/[\u25B2\u25BC]/g, '').trim());
         sortState.forEach(s => {
-          headers[s.col].innerText += s.asc ? ' ▲' : ' ▼';
+          headers[s.col].innerText += ' ' + String.fromCharCode(s.asc ? 9650 : 9660);
         });
       });
     });
@@ -307,7 +293,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // Collapse ONLY if no highlight AND no warning banner
     if (!hasHighlight && !hasWarningBanner) {
       sectionDiv.style.display = 'none';
-      if (toggleIcon) toggleIcon.innerText = '▶';
+      if (toggleIcon) toggleIcon.innerText = String.fromCharCode(9658);
       sectionDiv.style.marginBottom = '2px';
     }
   });
@@ -353,9 +339,9 @@ document.addEventListener('DOMContentLoaded', function () {
     if (triState === 0) {
       sections.forEach(s => {
         s.div.style.display = 'block';
-        s.icon.innerText = '▼';
+        s.icon.innerText = String.fromCharCode(9660);
       });
-      btn.innerText = "Opimized";
+      btn.innerText = "Optimized";
       triState = 1;
       return;
     }
@@ -365,10 +351,10 @@ document.addEventListener('DOMContentLoaded', function () {
       sections.forEach(s => {
         if (s.hasHighlight || s.hasWarningBanner) {
           s.div.style.display = 'block';
-          s.icon.innerText = '▼';
+          s.icon.innerText = String.fromCharCode(9660);
         } else {
           s.div.style.display = 'none';
-          s.icon.innerText = '▶';
+          s.icon.innerText = String.fromCharCode(9658);
         }
       });
       btn.innerText = "Collapse All";
@@ -380,7 +366,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (triState === 2) {
       sections.forEach(s => {
         s.div.style.display = 'none';
-        s.icon.innerText = '▶';
+        s.icon.innerText = String.fromCharCode(9658);
       });
       btn.innerText = "Expand All";
       triState = 0;
@@ -419,7 +405,7 @@ $htmlStyle
 <h3>&nbsp;Run Date: $RunDate</h3>
 
 <div class='warning-banner'>
-  ⚠️ <b>SLIC Compatibility Notice:</b>
+  &#9888; <b>SLIC Compatibility Notice:</b>
   This tool currently supports <b>Azure Local</b> and <b>Windows Server S2D</b> clusters only.
 </div>
 "@
@@ -434,6 +420,7 @@ $script:HtmlReportPath = $OutputPath
         param (
     
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
             [array]$Data,
             [string]$Title = "Report Section",
             [string]$Description = "",
@@ -450,7 +437,7 @@ $script:HtmlReportPath = $OutputPath
 
         process {
             if ($IncludeTitle) {
-                $html += "<h2><span class='toggle' onclick=`"toggleSection('$sectionId',this)`">▼</span> $Title</h2>`n"
+                $html += "<h2><span class='toggle' onclick=`"toggleSection('$sectionId',this)`">&#9660;</span> $Title</h2>`n"
                 $html += "<div id='$sectionId' style='display:block;'>"
             }
 
@@ -458,8 +445,11 @@ $script:HtmlReportPath = $OutputPath
                 $html += "<h5><b>Discription:</b> $Description</h5>`n"
             }
 
-            # Convert the input objects to HTML table fragment
-            $html += ($Data | ConvertTo-Html -Fragment)
+            # Convert input objects to an HTML table only when data exists.
+            # Warning/information-only sections are allowed to have an empty collection.
+            if ($null -ne $Data -and $Data.Count -gt 0) {
+                $html += ($Data | ConvertTo-Html -Fragment)
+            }
 
 
 
@@ -491,10 +481,10 @@ function Save-HtmlReport {
 
     $finalHtml = $script:HtmlReportHeader + ($script:HtmlReportSections -join "`n") + $script:HtmlReportFooter
 
-    # ✅ Save clean UTF-8 without BOM for browser compatibility
+    # Save clean UTF-8 without BOM for browser compatibility
     [System.IO.File]::WriteAllText($script:HtmlReportPath, $finalHtml, [System.Text.UTF8Encoding]::new($false))
 
-    Write-Host "✅ Report saved to: $script:HtmlReportPath"
+    Write-Host "[+] Report saved to: $script:HtmlReportPath" -ForegroundColor Green
     Invoke-Item $script:HtmlReportPath
 }
 
@@ -507,20 +497,20 @@ function Save-HtmlReport {
         if ($saveChoice -match '^[Yy]$') {
             $OutputPath = $SDDCPath
             if (Test-Path $OutputPath) {
-                Write-Host "✅ Report will be saved in: $OutputPath"
+                Write-Host "[+] Report will be saved in: $OutputPath" -ForegroundColor Green
                 $confirmed = $true
             } else {
-                Write-Host "❌ The SDDC folder path does not exist: $OutputPath"
+                Write-Host "[!] The SDDC folder path does not exist: $OutputPath" -ForegroundColor Yellow
                 $confirmed = $false
             }
         }
         elseif ($saveChoice -match '^[Nn]$') {
             $OutputPath = Read-Host "Please type the full folder path where you want to save the report"
             if (Test-Path $OutputPath) {
-                Write-Host "✅ Report will be saved in: $OutputPath"
+                Write-Host "[+] Report will be saved in: $OutputPath" -ForegroundColor Green
                 $confirmed = $true
             } else {
-                Write-Host "❌ Invalid path. Please try again or choose Y to use the SDDC folder."
+                Write-Host "[!] Invalid path. Please try again or choose Y to use the SDDC folder." -ForegroundColor Yellow
                 $confirmed = $false
             }
         }
@@ -563,7 +553,8 @@ function Save-HtmlReport {
         $m = [regex]::Match($text, $pattern, 'IgnoreCase, Multiline, Singleline')
         #$m | ?{$_ -imatch "hostname"} | select Filename,@{L="HostName";E={($_.lines -imatch "hostname") -replace "hostname "}}
         if (-not $m.Success) {
-            throw "Could not locate the 'show running-configuration' section. Check header format in the log."
+            Write-Host "    WARNING: Could not locate the 'show running-configuration' section in $(Split-Path $Path -Leaf). Check header format in the log." -ForegroundColor Yellow
+            return @()
         }
 
         $run = $m.Groups[1].Value.Trim()
@@ -621,7 +612,8 @@ function Save-HtmlReport {
         $m = [regex]::Match($text, $pattern, 'IgnoreCase, Multiline, Singleline')
         #$m | ?{$_ -imatch "hostname"} | select Filename,@{L="HostName";E={($_.lines -imatch "hostname") -replace "hostname "}}
         if (-not $m.Success) {
-            throw "Could not locate the 'show interface' section. Check header format in the log."
+            Write-Host "    WARNING: Could not locate the 'show interface' section in $(Split-Path $Path -Leaf). Check header format in the log." -ForegroundColor Yellow
+            return @()
         }
 
         $run = $m.Groups[1].Value.Trim()
@@ -678,7 +670,8 @@ function Save-HtmlReport {
         $m = [regex]::Match($text, $pattern, 'IgnoreCase, Multiline, Singleline')
         #$m | ?{$_ -imatch "hostname"} | select Filename,@{L="HostName";E={($_.lines -imatch "hostname") -replace "hostname "}}
         if (-not $m.Success) {
-            throw "Could not locate the 'show running-configuration' section. Check header format in the log."
+            Write-Host "    WARNING: Could not locate the 'show version' section in $(Split-Path $Path -Leaf). Check header format in the log." -ForegroundColor Yellow
+            return @()
         }
 
         $run = $m.Groups[1].Value.Trim()
@@ -746,7 +739,8 @@ function Save-HtmlReport {
             $pattern = '(?is)^\s*-{3,}\s*show\s+lldp\s+neighbors\s*-{3,}\s*\n(.*?)(?=^\s*-{3,}\s*show\s+\S.*?-{3,}\s*$|\Z)'
             $m = [regex]::Match($text, $pattern, 'IgnoreCase, Multiline, Singleline')
             if (-not $m.Success) {
-                throw "Could not locate the 'show lldp neighbors' section. Check header format in the log."
+                Write-Host "    WARNING: Could not locate the 'show lldp neighbors' section in $(Split-Path $Path -Leaf). Check header format in the log." -ForegroundColor Yellow
+                return @()
             }
 
             $section = $m.Groups[1].Value.Trim()
@@ -818,33 +812,50 @@ function Save-HtmlReport {
                 throw "File not found: $Path"
             }
 
-            $NetIntentsXml = Get-ChildItem -Path $SDDCPath -Recurse -ErrorAction SilentlyContinue -Depth 2 -Filter GetNetIntent.XML | Import-Clixml | select *,@{L="MADDR";E={$_.MacAddress -replace "-",":"}}
-            return  $NetIntentsXml
+            # Find NetIntent XML files first so a missing file can be handled cleanly.
+            $NetIntentFiles = @(Get-ChildItem -Path $Path -Recurse -ErrorAction SilentlyContinue -Depth 2 -Filter GetNetIntent.XML)
 
+            if (-not $NetIntentFiles -or $NetIntentFiles.Count -eq 0) {
+                return @()
+            }
+
+            $NetIntentsXml = @($NetIntentFiles | Import-Clixml | Select-Object *,@{L="MADDR";E={$_.MacAddress -replace "-",":"}})
+            return $NetIntentsXml
          }
 
-         $GetNetIntents = Get-GetNetIntents -path $SDDCPath
-         $NetIntentStorageNicsInfo = $GetNetIntents| ?{$_.IsStorageIntentSet -eq $True} | select NetAdapterNamesAsList,StorageVLANs
-            # Split and expand into separate objects
-            $StorageNics = for ($i = 0; $i -lt $NetIntentStorageNicsInfo.NetAdapterNamesAsList.Count; $i++) {
-                [pscustomobject]@{
-                    NetAdapterName = $NetIntentStorageNicsInfo.NetAdapterNamesAsList[$i]
-                    VLAN    = $NetIntentStorageNicsInfo.StorageVLANs[$i]
+         $GetNetIntents = @(Get-GetNetIntents -Path $SDDCPath)
+         $NetIntentDataFound = ($GetNetIntents.Count -gt 0)
+         $StorageNics = @()
+         $MgmtNics = @()
+
+         if (-not $NetIntentDataFound) {
+            Write-Host "    [!] WARNING: No GetNetIntent.XML data was found in the SDDC." -ForegroundColor Yellow
+            Write-Host "        Management and Storage intent NICs cannot be identified." -ForegroundColor Yellow
+            Write-Host "        SLIC therefore cannot determine the Management and/or Storage switch ports." -ForegroundColor Yellow
+         }
+         else {
+            $NetIntentStorageNicsInfo = @($GetNetIntents | Where-Object {$_.IsStorageIntentSet -eq $True} | Select-Object NetAdapterNamesAsList,StorageVLANs)
+
+            foreach ($Intent in $NetIntentStorageNicsInfo) {
+                for ($i = 0; $i -lt $Intent.NetAdapterNamesAsList.Count; $i++) {
+                    $StorageNics += [pscustomobject]@{
+                        NetAdapterName = $Intent.NetAdapterNamesAsList[$i]
+                        VLAN           = $Intent.StorageVLANs[$i]
+                    }
                 }
             }
 
-            # Display
-            #$StorageNics | Format-Table
+            $NetIntentMgmtNicsInfo = @($GetNetIntents | Where-Object {$_.IsManagementIntentSet -eq $True} | Select-Object NetAdapterNamesAsList,ManagementVLAN)
 
-      
-              $NetIntentMgmtNicsInfo = $GetNetIntents| ?{$_.IsManagementIntentSet -eq $True} | select NetAdapterNamesAsList,ManagementVLAN
-            # Split and expand into separate objects
-            $MgmtNics = for ($i = 0; $i -lt $NetIntentMgmtNicsInfo.NetAdapterNamesAsList.Count; $i++) {
-                [pscustomobject]@{
-                    NetAdapterName = $NetIntentMgmtNicsInfo.NetAdapterNamesAsList[$i]
-                    VLAN    = $NetIntentMgmtNicsInfo.ManagementVLAN
+            foreach ($Intent in $NetIntentMgmtNicsInfo) {
+                for ($i = 0; $i -lt $Intent.NetAdapterNamesAsList.Count; $i++) {
+                    $MgmtNics += [pscustomobject]@{
+                        NetAdapterName = $Intent.NetAdapterNamesAsList[$i]
+                        VLAN           = $Intent.ManagementVLAN
+                    }
                 }
             }
+         }
 
             # Display
             #$MgmtNics | Format-Table
@@ -899,23 +910,39 @@ function Save-HtmlReport {
                     }
                 }
             }
-        If(!($SwPortToHostMap)){Write-Host "    WARNING: No matches found. Suspect SDDC is NOT for show tech" -ForegroundColor Yellow}
-        #$SwPortToHostMap | sort SwHostName,SwLocPortId,ComputerName,ifAlias | ft
-        # Add to HTML report output sections
-        if($SwPortToHostMap){
+        # Add Interface-to-Node Map to the HTML report.
+        if (-not $NetIntentDataFound) {
+            $Description = @"
+<div class='warning-banner'>
+  <b>WARNING: NetIntent data not found.</b><br>
+  SLIC could not find any <b>GetNetIntent.XML</b> data in the supplied SDDC.<br>
+  Management and Storage intent NICs cannot be identified, so the corresponding
+  Management and/or Storage switch ports cannot be determined.
+</div>
+"@
+
+            AddTo-HtmlReport -Title "Interface-to-Node Map" `
+                -Data @() `
+                -Description $Description `
+                -Footnotes "The switch-port map requires GetNetIntent.XML, GetNetAdapter.xml, and matching LLDP information. <p><a href='#'>Go to top</a></p>" `
+                -IncludeTitle -IncludeDescription -IncludeFootnotes
+        }
+        elseif ($SwPortToHostMap) {
             AddTo-HtmlReport -Title "Interface-to-Node Map" `
                 -Data $SwPortToHostMap `
                 -Description "" `
                 -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
-        }Else{
-            Write-Host "    WARNING: No matches found. Suspect SDDC is NOT for show tech" -ForegroundColor Yellow
-            $Description = "<div class='warning-banner'><b>WARNING:</b> No matches found. Suspect SDDC is NOT for these show tech(s)</div>"
+        }
+        else {
+            Write-Host "    [!] WARNING: NetIntent data was found, but no switch-to-node port matches were found." -ForegroundColor Yellow
+            Write-Host "        Suspect the supplied SDDC does not correspond to these show tech file(s), or LLDP data is incomplete." -ForegroundColor Yellow
+            $Description = "<div class='warning-banner'><b>WARNING:</b> NetIntent data was found, but no switch-to-node port matches were found. Suspect the supplied SDDC does not correspond to these show tech file(s), or LLDP data is incomplete.</div>"
 
             AddTo-HtmlReport -Title "Interface-to-Node Map" `
-                -Data ""`
+                -Data @() `
                 -Description $Description `
-                -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
+                -Footnotes "The switch-port map requires matching NetIntent, NetAdapter, and LLDP information. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
                 -IncludeTitle -IncludeDescription -IncludeFootnotes
         }
 
@@ -1664,14 +1691,24 @@ function Save-HtmlReport {
     }
     #Write-Host "Storage Interfaces"
     #$StorageUsedInterfacesOut | ft * -AutoSize -Wrap
-    $StorageUsedInterfacesEasyOut = Convert-ToSwitchComparisonTable -Interfaces $StorageUsedInterfacesOut | sort ShouldBe
-    #$StorageUsedInterfacesEasyOut | Show-WideTable -Title "Storage Switch Port Comparison"
-    # Add to HTML report output sections
-    AddTo-HtmlReport -Title "Storage Interfaces" `
-        -Data $StorageUsedInterfacesEasyOut `
-        -Description "" `
-        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
-        -IncludeTitle -IncludeDescription -IncludeFootnotes
+    if ($StorageUsedInterfacesOut.Count -gt 0) {
+        $StorageUsedInterfacesEasyOut = Convert-ToSwitchComparisonTable -Interfaces $StorageUsedInterfacesOut | sort ShouldBe
+        #$StorageUsedInterfacesEasyOut | Show-WideTable -Title "Storage Switch Port Comparison"
+        # Add to HTML report output sections
+        AddTo-HtmlReport -Title "Storage Interfaces" `
+            -Data $StorageUsedInterfacesEasyOut `
+            -Description "" `
+            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
+            -IncludeTitle -IncludeDescription -IncludeFootnotes
+    } else {
+        Write-Host "    WARNING: No storage interfaces found to analyze." -ForegroundColor Yellow
+        $StorageUsedInterfacesEasyOut = @([PSCustomObject]@{Message = "No storage interfaces found"})
+        AddTo-HtmlReport -Title "Storage Interfaces" `
+            -Data $StorageUsedInterfacesEasyOut `
+            -Description "No storage interfaces were found in the switch configurations." `
+            -Footnotes "Check that the SDDC data matches the switch tech-support files." `
+            -IncludeTitle -IncludeDescription -IncludeFootnotes
+    }
 
     #-------------------------------------------------------------
     # MGMT INTERFACES
@@ -1713,14 +1750,24 @@ function Save-HtmlReport {
     }
     #Write-Host "Mgmt Interfaces"
     #$MgmtUsedInterfacesOut | ft
-    $MgmtUsedInterfacesEasyOut = Convert-ToSwitchComparisonTable -Interfaces $MgmtUsedInterfacesOut | sort ShouldBe
-    #$MgmtUsedInterfacesEasyOut | Show-WideTable -Title "Mgmt Switch Port Comparison"
-    # Add to HTML report output sections
-    AddTo-HtmlReport -Title "Mgmt Interfaces" `
-        -Data $MgmtUsedInterfacesEasyOut `
-        -Description "" `
-        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
-        -IncludeTitle -IncludeDescription -IncludeFootnotes
+    if ($MgmtUsedInterfacesOut.Count -gt 0) {
+        $MgmtUsedInterfacesEasyOut = Convert-ToSwitchComparisonTable -Interfaces $MgmtUsedInterfacesOut | sort ShouldBe
+        #$MgmtUsedInterfacesEasyOut | Show-WideTable -Title "Mgmt Switch Port Comparison"
+        # Add to HTML report output sections
+        AddTo-HtmlReport -Title "Mgmt Interfaces" `
+            -Data $MgmtUsedInterfacesEasyOut `
+            -Description "" `
+            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
+            -IncludeTitle -IncludeDescription -IncludeFootnotes
+    } else {
+        Write-Host "    WARNING: No management interfaces found to analyze." -ForegroundColor Yellow
+        $MgmtUsedInterfacesEasyOut = @([PSCustomObject]@{Message = "No management interfaces found"})
+        AddTo-HtmlReport -Title "Mgmt Interfaces" `
+            -Data $MgmtUsedInterfacesEasyOut `
+            -Description "No management interfaces were found in the switch configurations." `
+            -Footnotes "Check that the SDDC data matches the switch tech-support files." `
+            -IncludeTitle -IncludeDescription -IncludeFootnotes
+    }
 
     #region VLTi
     #-------------------------------------------------------------
@@ -1753,7 +1800,8 @@ function Save-HtmlReport {
                 $pattern = '(?is)^\s*-{3,}\s*show\s+vlt\s+all\s*-{3,}\s*\n(.*?)(?=^\s*-{3,}\s*show\s+\S.*?-{3,}\s*$|\Z)'
                 $m = [regex]::Match($text, $pattern, 'IgnoreCase, Multiline, Singleline')
                 if (-not $m.Success) {
-                    throw "Could not locate the 'show vlt all' section. Check header format in the log."
+                    Write-Host "    INFO: No VLT data found in $(Split-Path $Path -Leaf)" -ForegroundColor Yellow
+                    return @()
                 }
 
                 $section = $m.Groups[1].Value.Trim()
@@ -1829,11 +1877,12 @@ function Save-HtmlReport {
             # Extract hostname
             $SwitchHostname = (((($text | Select-String -Pattern 'hostname\s+\S+') -split 'hostname ')[-1] -split "`n")[0]).Trim()
 
-            # Extract section
-            $pattern = '(?is)^\s*-{3,}\s*show\s+port-channel\s+summary\s*-{3,}\s*\n(.*?)(?=^\s*-{3,}\s*show\s+\S.*?-{3,}\s*$|\Z)'
+            # Extract section - handle both "show port-channel summary" and "show interface port-channel summary"
+            $pattern = '(?is)^\s*-{3,}\s*show\s+(?:interface\s+)?port-channel\s+summary\s*-{3,}\s*\n(.*?)(?=^\s*-{3,}\s*show\s+\S.*?-{3,}\s*$|\Z)'
             $m = [regex]::Match($text, $pattern, 'IgnoreCase, Multiline, Singleline')
             if (-not $m.Success) {
-                throw "Could not locate the 'show port-channel summary' section. Check header format in the log."
+                Write-Host "    INFO: No port-channel summary section found in $(Split-Path $Path -Leaf)" -ForegroundColor Yellow
+                return @()
             }
 
             $section = $m.Groups[1].Value.Trim()
@@ -1841,7 +1890,11 @@ function Save-HtmlReport {
 
             # Find header
             $headerLine = $lines | Where-Object { $_ -match '^\s*Group\s+Port-Channel' }
-            if (-not $headerLine) { throw "Header not found." }
+            if (-not $headerLine) { 
+                # If no data found, return empty array instead of throwing
+                Write-Host "    INFO: No port-channel data found in $(Split-Path $Path -Leaf)" -ForegroundColor Yellow
+                return @()
+            }
 
             # Extract headers cleanly
             $headers = $headerLine -split '\s{2,}' | ForEach-Object { $_.Trim() }
@@ -1866,18 +1919,33 @@ function Save-HtmlReport {
         }
 
             $showvltall=@()
-            $showvltall += $STSLOC | ForEach-Object { Get-showvltall -Path $_ }
+            try {
+                $showvltall += $STSLOC | ForEach-Object { Get-showvltall -Path $_ }
+            } catch {
+                Write-Host "    WARNING: Could not parse VLT information: $_" -ForegroundColor Yellow
+                $showvltall = @()
+            }
 
     
 
         #$showportchannelsummary = Get-showportchannelsummary -path "C:\Users\Jim_Gandy\Downloads\tk5tor17-01a-show-tech-20251021-134546.txt"
-        $showportchannelsummary = $STSLOC | ForEach-Object { Get-showportchannelsummary -Path $_ }
-        $VLTiPorts = ($showportchannelsummary | ?{$_.'Group Port-Channel' -imatch ($showvltall | select port-channel* | GM | ?{$_.MemberType -eq "NoteProperty"}).Name} | select @{L="VLTi Ports";E={$_.'Member Ports' -split " "-replace '\([A-Z]+\)', '' }}).'VLTi Ports'| sort -Unique
+        try {
+            $showportchannelsummary = $STSLOC | ForEach-Object { Get-showportchannelsummary -Path $_ }
+            $VLTiPorts = ($showportchannelsummary | ?{$_.'Group Port-Channel' -imatch ($showvltall | select port-channel* | GM | ?{$_.MemberType -eq "NoteProperty"}).Name} | select @{L="VLTi Ports";E={$_.'Member Ports' -split " "-replace '\([A-Z]+\)', '' }}).'VLTi Ports'| sort -Unique
+        } catch {
+            Write-Host "    WARNING: Could not parse port-channel summary: $_" -ForegroundColor Yellow
+            $showportchannelsummary = @()
+            $VLTiPorts = @()
+        }
         $VLTiUsedInterfaces = @()
-        ForEach($VLTiPort in $VLTiPorts){
-            ForEach($Interface in $ShowRunningConfigs){
-                $VLTiUsedInterfaces += $Interface | ?{$_.Header -imatch "interface ethernet"+$VLTiPort}
+        if ($VLTiPorts.Count -gt 0) {
+            ForEach($VLTiPort in $VLTiPorts){
+                ForEach($Interface in $ShowRunningConfigs){
+                    $VLTiUsedInterfaces += $Interface | ?{$_.Header -imatch "interface ethernet"+$VLTiPort}
+                }
             }
+        } else {
+            Write-Host "    INFO: No VLTi ports found in port-channel summary" -ForegroundColor Yellow
         }
                 <# mtu 9216
                  flowcontrol receive off
@@ -1918,14 +1986,24 @@ function Save-HtmlReport {
     
                 }
 
-    $VLTiUsedInterfacesEasyOut = Convert-ToSwitchComparisonTable -Interfaces $VLTiUsedInterfacesOut  | sort ShouldBe
-    #$VLTiUsedInterfacesEasyOut | Show-WideTable -Title "VLTi Switch Port Comparison"
-    # Add to HTML report output sections
-    AddTo-HtmlReport -Title "VLTi Interfaces" `
-        -Data $VLTiUsedInterfacesEasyOut `
-        -Description "" `
-        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
-        -IncludeTitle -IncludeDescription -IncludeFootnotes
+    if ($VLTiUsedInterfacesOut.Count -gt 0) {
+        $VLTiUsedInterfacesEasyOut = Convert-ToSwitchComparisonTable -Interfaces $VLTiUsedInterfacesOut  | sort ShouldBe
+        #$VLTiUsedInterfacesEasyOut | Show-WideTable -Title "VLTi Switch Port Comparison"
+        # Add to HTML report output sections
+        AddTo-HtmlReport -Title "VLTi Interfaces" `
+            -Data $VLTiUsedInterfacesEasyOut `
+            -Description "" `
+            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
+            -IncludeTitle -IncludeDescription -IncludeFootnotes
+    } else {
+        Write-Host "    WARNING: No VLTi interfaces found to analyze." -ForegroundColor Yellow
+        $VLTiUsedInterfacesEasyOut = @([PSCustomObject]@{Message = "No VLTi interfaces found"})
+        AddTo-HtmlReport -Title "VLTi Interfaces" `
+            -Data $VLTiUsedInterfacesEasyOut `
+            -Description "No VLTi interfaces were found in the switch configurations." `
+            -Footnotes "Check that the SDDC data matches the switch tech-support files." `
+            -IncludeTitle -IncludeDescription -IncludeFootnotes
+    }
 
     #endregion VLTi
 
@@ -1933,10 +2011,14 @@ function Save-HtmlReport {
     # vLAN INTERFACES
     #-------------------------------------------------------------
     $StoragevLANUsedInterfaces = @()
-    ForEach ($StoragevLAN in $Storagevlans){
-        ForEach($Interface in $ShowRunningConfigs){
-                $StoragevLANUsedInterfaces += $Interface | ?{$_.Header -imatch "interface vlan"+$StoragevLAN}
+    if ($Storagevlans.Count -gt 0) {
+        ForEach ($StoragevLAN in $Storagevlans){
+            ForEach($Interface in $ShowRunningConfigs){
+                    $StoragevLANUsedInterfaces += $Interface | ?{$_.Header -imatch "interface vlan"+$StoragevLAN}
+            }
         }
+    } else {
+        Write-Host "    INFO: No storage VLANs found in SDDC data" -ForegroundColor Yellow
     }
     $StoragevLANUsedInterfacesOut = @()
     $StoragevLANUsedInterfacesInfo = ""
@@ -1957,14 +2039,24 @@ function Save-HtmlReport {
         $StoragevLANUsedInterfacesOut += Set-MissingNoteProperties $StoragevLANUsedInterfacesInfo
     }
 
-    $StoragevLANUsedInterfacesEasyOut = Convert-ToSwitchComparisonTable -Interfaces $StoragevLANUsedInterfacesOut | sort ShouldBe
-    #$StoragevLANUsedInterfacesEasyOut | Show-WideTable -Title "vLAN Switch Port Comparison"
-    # Add to HTML report output sections
-    AddTo-HtmlReport -Title "Storage vLAN Interfaces" `
-        -Data $StoragevLANUsedInterfacesEasyOut `
-        -Description "" `
-        -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
-        -IncludeTitle -IncludeDescription -IncludeFootnotes
+    if ($StoragevLANUsedInterfacesOut.Count -gt 0) {
+        $StoragevLANUsedInterfacesEasyOut = Convert-ToSwitchComparisonTable -Interfaces $StoragevLANUsedInterfacesOut | sort ShouldBe
+        #$StoragevLANUsedInterfacesEasyOut | Show-WideTable -Title "vLAN Switch Port Comparison"
+        # Add to HTML report output sections
+        AddTo-HtmlReport -Title "Storage vLAN Interfaces" `
+            -Data $StoragevLANUsedInterfacesEasyOut `
+            -Description "" `
+            -Footnotes "Highlighted in red or yellow if out of spec. <p><a href='$SwitchRefLink' target='_blank'>Ref: Switch Configurations - RoCE/iWarp Reference Guide</a></p><p><a href='#'>Go to top</a></p>" `
+            -IncludeTitle -IncludeDescription -IncludeFootnotes
+    } else {
+        Write-Host "    WARNING: No storage vLAN interfaces found to analyze." -ForegroundColor Yellow
+        $StoragevLANUsedInterfacesEasyOut = @([PSCustomObject]@{Message = "No storage vLAN interfaces found"})
+        AddTo-HtmlReport -Title "Storage vLAN Interfaces" `
+            -Data $StoragevLANUsedInterfacesEasyOut `
+            -Description "No storage vLAN interfaces were found in the switch configurations." `
+            -Footnotes "Check that the SDDC data matches the switch tech-support files." `
+            -IncludeTitle -IncludeDescription -IncludeFootnotes
+    }
 
 
 
