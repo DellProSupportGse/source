@@ -26,6 +26,8 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/08/21:v2.02 -  1. Bug Fix: JG - Resolved AI summary reponse not showing up
+
     2026/08/21:v2.01 -  1. New Update: TP - Change AI summary to only look at RED issues and make iDrac IP address wording more consistent.
                         2. New Update: JG - Added detailed AI/Devin troubleshooting to the CluChk transcript log, including CLI detection, authentication status, login verification, timeouts, stderr output, and AI summary failures.
                         3. New Update: JG - Added clear transcript warnings when Devin CLI is not installed or cannot be located.
@@ -33,6 +35,10 @@ Specifies to show debug information
                         5. New Update: JG - Replaced the harsh bright-green success highlighting with the softer CluChk success color palette for improved readability in light and dark modes.
                         6. New Update: JG - Added an end-of-run pause with report and transcript log locations so warnings and errors can be reviewed when CluChk is launched from ToolBox.
                         7. Bug Fix: TP - Don't call out iDrac nics if the cluster network role is None. Also removed a company name from AI section.
+                        8. Bug Fix: JG - Devin Enterprise/API-key sessions that explicitly report 'Logged in' are now accepted even when the CLI returns a non-zero status code.
+                        9. Bug Fix: JG - Added explicit AI-to-HTML conversion/insertion logging, UTF-8 report output, and post-write verification that the AI Summary is present in the saved HTML report.
+                        10. Bug Fix: JG - Made the AI parser tolerant of Markdown headings/bold labels and added a full-response fallback so valid Devin output is never replaced by empty AI tables.
+                        11. Bug Fix: JG - Normalize embedded Devin Markdown section headings onto separate lines so Recommended Order of Work is parsed even when Devin appends ## 1. to introductory text.
 
     2026/08/20:v2.0 -  1. Major Update: JG - New unified modern CluChk report interface across Configuration and Performance reports.
                         2. New Feature: JG - Added CluChk branding with automatic light/dark logo switching.
@@ -61,7 +67,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.01"
+$CluChkVer="2.02"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -7310,7 +7316,7 @@ IF($selection -ne "4"){
     $SDDCFileName=($SDDCPath.TrimEnd('\') -split '\\')[-1]
     If($CluChkReportLoc.Count -gt 1) {$CluChkReportLoc = $CluchkReportLoc[0]}
     $HtmlReport= Join-Path -Path $CluChkReportLoc -ChildPath CluChkReport_v$CluChkVer-$DTString$SDDCFileName.html
-    Write-Host ("Report Output location: " + $HtmlReport)
+    Write-Host "[Report] Preparing final HTML report: $HtmlReport"
     if (Test-Path "$HtmlReport") {Remove-Item $HtmlReport}
     $html=$htmloutReport
 $devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"
@@ -7461,9 +7467,22 @@ if ($devinFound) {
         } else {
             $authOutput = Get-Content $authOut -Raw -ErrorAction SilentlyContinue
             $authError  = Get-Content $authErr -Raw -ErrorAction SilentlyContinue
-            $authOk = ($authProc.ExitCode -eq 0 -and $authOutput -notmatch 'Not logged in')
+
+            # Devin Enterprise/API-key sessions can explicitly report
+            # "Logged in (via API key)" even when the CLI exit code is non-zero.
+            # Treat explicit login text as authoritative, while still rejecting
+            # an explicit "Not logged in" response.
+            $authCombined = "$authOutput`r`n$authError"
+            $authExplicitlyLoggedIn  = $authCombined -match '(?im)^\s*Logged in(?:\s|\(|$)'
+            $authExplicitlyLoggedOut = $authCombined -match '(?im)^\s*Not logged in(?:\s|$)'
+            $authOk = (-not $authExplicitlyLoggedOut) -and (
+                $authExplicitlyLoggedIn -or $authProc.ExitCode -eq 0
+            )
 
             Write-Host "[AI] Devin auth status exit code: $($authProc.ExitCode)"
+            if ($authExplicitlyLoggedIn -and $authProc.ExitCode -ne 0) {
+                Write-Host "[AI] Devin explicitly reports a valid logged-in session; accepting authentication despite CLI exit code $($authProc.ExitCode)." -ForegroundColor Yellow
+            }
             if (-not [string]::IsNullOrWhiteSpace($authError)) {
                 Write-Warning "[AI] Devin auth status error: $($authError.Trim())"
             }
@@ -7506,7 +7525,17 @@ if ($devinFound) {
             } else {
                 $authOutput = Get-Content $authOut -Raw -ErrorAction SilentlyContinue
                 $authError  = Get-Content $authErr -Raw -ErrorAction SilentlyContinue
-                $authOk = ($authProc.ExitCode -eq 0 -and $authOutput -notmatch 'Not logged in')
+
+                $authCombined = "$authOutput`r`n$authError"
+                $authExplicitlyLoggedIn  = $authCombined -match '(?im)^\s*Logged in(?:\s|\(|$)'
+                $authExplicitlyLoggedOut = $authCombined -match '(?im)^\s*Not logged in(?:\s|$)'
+                $authOk = (-not $authExplicitlyLoggedOut) -and (
+                    $authExplicitlyLoggedIn -or $authProc.ExitCode -eq 0
+                )
+
+                if ($authExplicitlyLoggedIn -and $authProc.ExitCode -ne 0) {
+                    Write-Host "[AI] Devin explicitly reports a valid logged-in session; accepting authentication despite CLI exit code $($authProc.ExitCode)." -ForegroundColor Yellow
+                }
 
                 if ($authOk) {
                     Write-Host "[AI] Devin authentication verified after login." -ForegroundColor Green
@@ -7796,12 +7825,37 @@ $errorList
 
                 $currentIssue = $null
 
-                $lines = $Text -split '\r?\n'
+                # Devin occasionally appends the first Markdown section heading directly
+                # to an introductory sentence, for example:
+                #   "...structured L3-to-L1 summary.## 1. RECOMMENDED ORDER OF WORK"
+                # Normalize any embedded numbered Markdown headings onto their own line
+                # before parsing so sections 1-4 are handled consistently.
+                $normalizedText = $Text
+                $normalizedText = [regex]::Replace(
+                    $normalizedText,
+                    '(?i)(?<!^)(?<!\r)(?<!\n)(#{1,6}\s*[1-4][\.\)]\s*(?:RECOMMENDED ORDER OF WORK|FOR L1 ENGINEERS\s*-\s*QUICK CHECKLIST|DETAILED FINDINGS|ITEMS TO IGNORE))',
+                    "`r`n`$1"
+                )
+
+                $lines = $normalizedText -split '\r?\n'
                 foreach ($rawLine in $lines) {
                     $line = $rawLine.Trim()
                     if ([string]::IsNullOrWhiteSpace($line)) { continue }
 
-                    if ($line -match '^1\.\s+RECOMMENDED ORDER OF WORK\s*$') {
+                    # Devin may return Markdown even when the requested structure is correct.
+                    # Normalize common Markdown decoration before matching section/field labels.
+                    # Examples handled:
+                    #   ## 1. RECOMMENDED ORDER OF WORK
+                    #   **ISSUE:** Cluster service failure
+                    #   ### WHY IT MATTERS:
+                    $parseLine = $line
+                    $parseLine = $parseLine -replace '^\s*#{1,6}\s*', ''
+                    $parseLine = $parseLine -replace '^\s*>\s*', ''
+                    $parseLine = $parseLine -replace '\*\*', ''
+                    $parseLine = $parseLine -replace '__', ''
+                    $parseLine = $parseLine.Trim()
+
+                    if ($parseLine -match '^1[\.\)]\s+RECOMMENDED ORDER OF WORK\s*:?[\s]*$') {
                         if ($currentIssue) {
                             $issues += [PSCustomObject]@{
                                 Issue=$currentIssue.Issue; Why=$currentIssue.Why;
@@ -7811,7 +7865,7 @@ $errorList
                         }
                         $currentSection = 'order'; $detailField = ''; continue
                     }
-                    if ($line -match '^2\.\s+FOR L1 ENGINEERS\s*-\s*QUICK CHECKLIST\s*$') {
+                    if ($parseLine -match '^2[\.\)]\s+FOR L1 ENGINEERS\s*-\s*QUICK CHECKLIST\s*:?[\s]*$') {
                         if ($currentIssue) {
                             $issues += [PSCustomObject]@{
                                 Issue=$currentIssue.Issue; Why=$currentIssue.Why;
@@ -7821,7 +7875,7 @@ $errorList
                         }
                         $currentSection = 'checklist'; $detailField = ''; continue
                     }
-                    if ($line -match '^3\.\s+DETAILED FINDINGS\s*$') {
+                    if ($parseLine -match '^3[\.\)]\s+DETAILED FINDINGS\s*:?[\s]*$') {
                         if ($currentIssue) {
                             $issues += [PSCustomObject]@{
                                 Issue=$currentIssue.Issue; Why=$currentIssue.Why;
@@ -7831,7 +7885,7 @@ $errorList
                         }
                         $currentSection = 'details'; $detailField = ''; continue
                     }
-                    if ($line -match '^4\.\s+ITEMS TO IGNORE\s*$') {
+                    if ($parseLine -match '^4[\.\)]\s+ITEMS TO IGNORE\s*:?[\s]*$') {
                         if ($currentIssue) {
                             $issues += [PSCustomObject]@{
                                 Issue=$currentIssue.Issue; Why=$currentIssue.Why;
@@ -7844,20 +7898,20 @@ $errorList
 
                     switch ($currentSection) {
                         'order' {
-                            if ($line -match '^\d+[\.\)]\s+(.+)$') { $orderItems += $matches[1].Trim() }
-                            elseif ($line -match '^[-*]\s+(.+)$') { $orderItems += $matches[1].Trim() }
-                            elseif ($orderItems.Count -gt 0) { $orderItems[-1] += ' ' + $line }
+                            if ($parseLine -match '^\d+[\.\)]\s+(.+)$') { $orderItems += $matches[1].Trim() }
+                            elseif ($parseLine -match '^[-*]\s+(.+)$') { $orderItems += $matches[1].Trim() }
+                            elseif ($orderItems.Count -gt 0) { $orderItems[-1] += ' ' + $parseLine }
                         }
                         'checklist' {
-                            if ($line -match '^[-*]\s+(.+)$') { $checkItems += $matches[1].Trim() }
-                            elseif ($checkItems.Count -gt 0) { $checkItems[-1] += ' ' + $line }
+                            if ($parseLine -match '^[-*]\s+(.+)$') { $checkItems += $matches[1].Trim() }
+                            elseif ($checkItems.Count -gt 0) { $checkItems[-1] += ' ' + $parseLine }
                         }
                         'ignore' {
-                            if ($line -match '^[-*]\s+(.+)$') { $ignoreItems += $matches[1].Trim() }
-                            elseif ($ignoreItems.Count -gt 0) { $ignoreItems[-1] += ' ' + $line }
+                            if ($parseLine -match '^[-*]\s+(.+)$') { $ignoreItems += $matches[1].Trim() }
+                            elseif ($ignoreItems.Count -gt 0) { $ignoreItems[-1] += ' ' + $parseLine }
                         }
                         'details' {
-                            if ($line -match '^ISSUE:\s*(.+)$') {
+                            if ($parseLine -match '^ISSUE\s*:\s*(.+)$') {
                                 if ($currentIssue) {
                                     $issues += [PSCustomObject]@{
                                         Issue=$currentIssue.Issue; Why=$currentIssue.Why;
@@ -7873,7 +7927,7 @@ $errorList
                                 $detailField = 'issue'
                                 continue
                             }
-                            if ($line -match '^WHY IT MATTERS:\s*(.*)$') {
+                            if ($parseLine -match '^WHY IT MATTERS\s*:\s*(.*)$') {
                                 if (-not $currentIssue) {
                                     $currentIssue = [ordered]@{Issue='Finding';Why='';Evidence=@();Actions=@()}
                                 }
@@ -7881,7 +7935,7 @@ $errorList
                                 $detailField = 'why'
                                 continue
                             }
-                            if ($line -match '^EVIDENCE:\s*(.*)$') {
+                            if ($parseLine -match '^EVIDENCE\s*:\s*(.*)$') {
                                 if (-not $currentIssue) {
                                     $currentIssue = [ordered]@{Issue='Finding';Why='';Evidence=@();Actions=@()}
                                 }
@@ -7889,7 +7943,7 @@ $errorList
                                 if ($matches[1].Trim()) { $currentIssue.Evidence += $matches[1].Trim() }
                                 continue
                             }
-                            if ($line -match '^NEXT ACTIONS:\s*(.*)$') {
+                            if ($parseLine -match '^NEXT ACTIONS\s*:\s*(.*)$') {
                                 if (-not $currentIssue) {
                                     $currentIssue = [ordered]@{Issue='Finding';Why='';Evidence=@();Actions=@()}
                                 }
@@ -7899,7 +7953,7 @@ $errorList
                             }
 
                             if (-not $currentIssue) { continue }
-                            $clean = $line -replace '^[-*]\s*',''
+                            $clean = $parseLine -replace '^[-*]\s*',''
                             switch ($detailField) {
                                 'why' {
                                     if ($currentIssue.Why) { $currentIssue.Why += ' ' + $clean }
@@ -7917,6 +7971,19 @@ $errorList
                         Issue=$currentIssue.Issue; Why=$currentIssue.Why;
                         Evidence=@($currentIssue.Evidence); Actions=@($currentIssue.Actions)
                     }
+                }
+
+                Write-Host "[AI] Parsed AI response: $($orderItems.Count) work item(s), $($checkItems.Count) checklist item(s), $($issues.Count) finding(s), $($ignoreItems.Count) ignore item(s)."
+
+                # Safety fallback: never discard a valid Devin response just because its
+                # formatting changed. If none of the expected structured sections parsed,
+                # render the complete response in the AI Summary instead.
+                $parsedItemCount = $orderItems.Count + $checkItems.Count + $issues.Count + $ignoreItems.Count
+                if ($parsedItemCount -eq 0) {
+                    Write-Warning "[AI] Structured AI parser found no recognized sections. Rendering the complete Devin response instead."
+                    $fallback = Convert-AiTextWithLinksToHtml $Text
+                    $fallback = $fallback -replace "`r?`n", '<br>'
+                    return "<h3>AI Analysis</h3><table><tr><th>Devin Analysis</th></tr><tr><td>$fallback</td></tr></table>"
                 }
 
                 $sb = [System.Text.StringBuilder]::new()
@@ -7994,8 +8061,28 @@ $errorList
                 return $sb.ToString()
             }
 
+            Write-Host "[AI] Converting Devin response to CluChk HTML..."
+
+            # Preview the normalized response format so embedded section headings are visible
+            # on their own line in the transcript.
+            $previewText = [regex]::Replace(
+                $stdout,
+                '(?i)(?<!^)(?<!\r)(?<!\n)(#{1,6}\s*[1-4][\.\)]\s*(?:RECOMMENDED ORDER OF WORK|FOR L1 ENGINEERS\s*-\s*QUICK CHECKLIST|DETAILED FINDINGS|ITEMS TO IGNORE))',
+                "`r`n`$1"
+            )
+            $previewLines = @($previewText -split '\r?\n' | Select-Object -First 20)
+            Write-Host "[AI] Devin response format preview (first 20 lines):"
+            foreach ($previewLine in $previewLines) {
+                Write-Host "[AI]   $previewLine"
+            }
             $aiContent = Convert-AiSummaryToHtml -Text $stdout
             $aiSummaryAvailable = -not [string]::IsNullOrWhiteSpace($aiContent)
+
+            if ($aiSummaryAvailable) {
+                Write-Host "[AI] AI summary converted to HTML ($($aiContent.Length) characters)." -ForegroundColor Green
+            } else {
+                Write-Warning "[AI] Devin returned content, but the HTML conversion produced no usable output."
+            }
             break
         }
     } while ($attempt -lt $maxAttempts)
@@ -8376,6 +8463,9 @@ if ($aiSummaryAvailable) {
     $aiSummaryHtml = "<section id='ai-summary' class='tab-panel'><H2>AI Summary</H2><div>$aiContent</div></section>"
     $aiSection = [PSCustomObject]@{Id='ai-summary'; Label='AI Summary'; Html=$aiSummaryHtml}
     $sections += $aiSection
+    Write-Host "[AI] AI Summary section added to final report layout." -ForegroundColor Green
+} else {
+    Write-Host "[AI] AI Summary section not added because no usable AI content is available."
 }
 
 $sections += [PSCustomObject]@{
@@ -8606,9 +8696,29 @@ function colorTabs(){document.querySelectorAll(`#report-overview table tr`).forE
     #>
     $newHtml = $head + '<body>' + $newBody + $sortJs + '</body>' + $tail
 
-    Out-File -FilePath $HtmlReport -InputObject $newHtml -Encoding ASCII
-    # open HTML file
-    if (($Global:CombineReports -ne 'Y') -and (test-path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.html\UserChoice -ErrorAction SilentlyContinue)) {Invoke-Item($HtmlReport)}
+    Write-Host "[Report] Writing final HTML report..."
+    Out-File -FilePath $HtmlReport -InputObject $newHtml -Encoding UTF8
+
+    if (Test-Path $HtmlReport) {
+        $savedHtml = Get-Content -Path $HtmlReport -Raw -ErrorAction SilentlyContinue
+
+        if ($aiSummaryAvailable) {
+            if ($savedHtml -match '(?i)id=[''"]ai-summary[''"]') {
+                Write-Host "[AI] Verified AI Summary is present in the saved HTML report." -ForegroundColor Green
+            } else {
+                Write-Warning "[AI] AI Summary was generated but is NOT present in the saved HTML report."
+            }
+        }
+
+        Write-Host ("Report Output location: " + $HtmlReport) -ForegroundColor Green
+    } else {
+        Write-Warning "[Report] Final HTML report was not created: $HtmlReport"
+    }
+
+    # open HTML file only after the final version has been written and verified
+    if (($Global:CombineReports -ne 'Y') -and (Test-Path $HtmlReport) -and (test-path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.html\UserChoice -ErrorAction SilentlyContinue)) {
+        Invoke-Item($HtmlReport)
+    }
 }
 #endregion  Create CluChk Html Report
 
