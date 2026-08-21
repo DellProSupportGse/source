@@ -26,6 +26,14 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/08/21:v2.01 -  1. New Update: TP - Change AI summary to only look at RED issues and make iDrac IP address wording more consistent.
+                        2. New Update: JG - Added detailed AI/Devin troubleshooting to the CluChk transcript log, including CLI detection, authentication status, login verification, timeouts, stderr output, and AI summary failures.
+                        3. New Update: JG - Added clear transcript warnings when Devin CLI is not installed or cannot be located.
+                        4. New Update: JG - Added clear transcript warnings when Devin authentication cannot be verified and the AI Summary is skipped.
+                        5. New Update: JG - Replaced the harsh bright-green success highlighting with the softer CluChk success color palette for improved readability in light and dark modes.
+                        6. New Update: JG - Added an end-of-run pause with report and transcript log locations so warnings and errors can be reviewed when CluChk is launched from ToolBox.
+                        7. Bug Fix: TP - Don't call out iDrac nics if the cluster network role is None. Also removed a company name from AI section.
+
     2026/08/20:v2.0 -  1. Major Update: JG - New unified modern CluChk report interface across Configuration and Performance reports.
                         2. New Feature: JG - Added CluChk branding with automatic light/dark logo switching.
                         3. New Feature: JG - Added persistent Light/Dark theme toggle with saved user preference.
@@ -53,7 +61,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.0"
+$CluChkVer="2.01"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -63,7 +71,9 @@ try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -N
 # Remove-Variable * -Scope Local  -ErrorAction SilentlyContinue
 # Recommend using a prefix on variables so remove-variable can -include prefix*
 $TLogLoc = "C:\programdata\Dell\CluChk"
-$DateTime=Get-Date -Format yyyyMMdd_HHmmss;Start-Transcript -NoClobber -Path "$TlogLoc\CluChk_$DateTime.log"
+$DateTime = Get-Date -Format yyyyMMdd_HHmmss
+$TranscriptPath = Join-Path $TLogLoc "CluChk_$DateTime.log"
+Start-Transcript -NoClobber -Path $TranscriptPath
 [system.gc]::Collect()
 #endregion
 
@@ -5489,7 +5499,7 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
         $html+=$CurrentUpdatesandHotfixes | sort-object -Property @{Expression={$_.PSComputerName}; Ascending=$true}, @{Expression={$_.HotFixID} ;Descending=$true} | ConvertTo-html -Fragment
     }    
         
-        $html=$html -replace '<td>GGRREEEENN','<td style="background-color: #40ff00">'`
+        $html=$html -replace '<td>GGRREEEENN','<td style="background-color: #dff6dd">'`
                     -replace '<td>RREEDD','<td style="color: #a4262c; background-color: #fde7e9">'`
                     -replace '<td>YYEELLLLOOWW','<td style="background-color: #fff4ce">'
         
@@ -6236,9 +6246,10 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #a4262c; backgr
 		$iDRACNetAdaptersIPs=@()
 		# Find the Mgmt Cluster Network
 			ForEach($NetIp in $GetNetIpAddress){
+                
 				$iDRACNetAdaptersIPs+=$idracNics | Where-Object{($_.IfIndex -eq $NetIp.IfIndex) -and ($_.PsComputername -eq $NetIp.PSComputerName )}|Select-Object *,@{L='IPv4Address';E={
 					if (($SysInfo[0].SysModel -match "^APEX") -and ($NetIp.IPv4Address -ne "169.254.0.1")) {'RREEDD'*(($GetClusterNetwork).IPv6Addresses -like "*:de11::*")+$NetIp.IPv4Address}
-					elseif (($SysInfo[0].SysModel -notmatch "^APEX") -and (($GetNetIpAddress | where-object {$_.IPv4Address -eq $NetIp.IPv4Address} | sort -Unique).count -gt 1)) {'RREEDD'*(($GetClusterNetwork).IPv6Addresses -like "*:de11::*")+$NetIp.IPv4Address}
+					elseif (($SysInfo[0].SysModel -notmatch "^APEX") -and (($GetNetIpAddress | where-object {$_.IPv4Address -eq $NetIp.IPv4Address} | sort -Unique).count -gt 1)) {'RREEDD'*(($GetClusterNetwork | ? IPv6Addresses -like "*:de11::*").Role.Value -notmatch "None|^$" )+$NetIp.IPv4Address}
 					else {$NetIp.IPv4Address}
 					}}
 		}
@@ -6248,11 +6259,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #a4262c; backgr
         $iDRACIPaddress+="<h5><b>Should be:</b></h5>"
         $iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-Adminstatus=Up</h5>"
 		$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-MediaConnectedState=Connected</h5>"
-		IF($SysInfo[0].SysModel -notmatch "^APEX"){
-			$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-IPv4Address=unique per host</h5>"
-		} else {
-			$iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-IPv4Address=169.254.0.1</h5>"
-		}
+	    $iDRACIPaddress+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;-IPv4Address=unique per host, the cluster network role is None or ignored by the cluster service on all nodes</h5>"
         $html+=$iDRACIPaddress
         $html+=$iDRACNetAdaptersIPs | ConvertTo-html -Fragment
         $html=$html `
@@ -7414,12 +7421,14 @@ Please respond in plain text with headings and bullet points.
             $aiContent = "<pre>$($sb.ToString())</pre>"
         }
     }
-    Remove-Item $promptFile, $outFile, $authOut, $authErr -ErrorAction SilentlyContinue
+    Remove-Item $promptFile, $outFile, $errFile, $authOut, $authErr -ErrorAction SilentlyContinue
     } else {
+        Write-Warning '[AI] AI summary skipped because Devin authentication could not be verified.'
         $aiContent = '<p>Devin CLI is not authenticated after the login attempt. Ensure you completed the Windsurf login and that <code>devin -p "say hi"</code> works, then rerun the script.</p>'
     }
 } else {
-    $aiContent = '<p>Devin CLI not found. AI summary could not be genereated.</p>
+    Write-Warning "[AI] Devin CLI was not found at $devinPath. AI summary will be skipped."
+    $aiContent = '<p>Devin CLI not found. AI summary could not be generated.</p>
 <p>Please register and install Windsurf/Devin using Company Portal.</p>
 <p>Please update Devin to the latest.</p>
 <p>After install Devin CLI using these powershell commands</p>
@@ -7431,27 +7440,96 @@ $devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"
 $devinFound = Test-Path $devinPath
 $aiSummaryAvailable = $false
 $stdout = $null
+$authOk = $false
+
+Write-Host "[AI] Checking for Devin AI access..."
+Write-Host "[AI] Devin CLI path: $devinPath"
 
 if ($devinFound) {
+    Write-Host "[AI] Devin CLI found."
     $authOut = [System.IO.Path]::GetTempFileName()
     $authErr = [System.IO.Path]::GetTempFileName()
-    $authProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','status') -RedirectStandardOutput $authOut -RedirectStandardError $authErr -NoNewWindow -PassThru
-    if (-not $authProc.WaitForExit(5000)) {
-        $authProc.Kill()
+
+    try {
+        Write-Host "[AI] Checking Devin authentication status..."
+        $authProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','status') -RedirectStandardOutput $authOut -RedirectStandardError $authErr -NoNewWindow -PassThru -ErrorAction Stop
+
+        if (-not $authProc.WaitForExit(5000)) {
+            $authProc.Kill()
+            $authOk = $false
+            Write-Warning "[AI] Devin authentication status check timed out after 5 seconds."
+        } else {
+            $authOutput = Get-Content $authOut -Raw -ErrorAction SilentlyContinue
+            $authError  = Get-Content $authErr -Raw -ErrorAction SilentlyContinue
+            $authOk = ($authProc.ExitCode -eq 0 -and $authOutput -notmatch 'Not logged in')
+
+            Write-Host "[AI] Devin auth status exit code: $($authProc.ExitCode)"
+            if (-not [string]::IsNullOrWhiteSpace($authError)) {
+                Write-Warning "[AI] Devin auth status error: $($authError.Trim())"
+            }
+
+            if ($authOk) {
+                Write-Host "[AI] Devin authentication verified." -ForegroundColor Green
+            } else {
+                Write-Warning "[AI] Devin authentication check failed."
+                if (-not [string]::IsNullOrWhiteSpace($authOutput)) {
+                    Write-Host "[AI] Devin auth status output: $($authOutput.Trim())"
+                }
+            }
+        }
+    }
+    catch {
         $authOk = $false
-    } else {
-        $authOutput = Get-Content $authOut -Raw
-        $authOk = ($authProc.ExitCode -eq 0 -and $authOutput -notmatch 'Not logged in')
+        Write-Warning "[AI] Devin authentication status check failed: $($_.Exception.Message)"
+        if ($_.ErrorDetails.Message) {
+            Write-Warning "[AI] Details: $($_.ErrorDetails.Message)"
+        }
     }
+
     if (-not $authOk) {
-        Write-Host 'Devin CLI reports not authenticated. Checking login...'
-        Write-Host 'If you are already logged in, this will finish automatically. Otherwise choose option 1 (Log in with browser).'
-        Write-Warning 'If these logs are from WELLS FARGO or another company that does not allow AI to analyze logs, DO NOT LOGIN TO DEVIN and/or cancel the script'
+        Write-Host '[AI] Devin CLI reports not authenticated. Checking login...'
+        Write-Host '[AI] If you are already logged in, this will finish automatically. Otherwise choose option 1 (Log in with browser).'
+        Write-Warning '[AI] If these logs are from an organization that restricts AI-assisted log analysis, DO NOT proceed with AI tools and cancel this script.'
         Sleep 10
-        $loginProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','login') -NoNewWindow -PassThru
-        $loginProc.WaitForExit()
-        $authOk = $true
+
+        try {
+            $loginProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','login') -NoNewWindow -PassThru -ErrorAction Stop
+            $loginProc.WaitForExit()
+            Write-Host "[AI] Devin login process exit code: $($loginProc.ExitCode)"
+
+            # Do not assume login succeeded. Verify auth status again.
+            $authProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','status') -RedirectStandardOutput $authOut -RedirectStandardError $authErr -NoNewWindow -PassThru -ErrorAction Stop
+            if (-not $authProc.WaitForExit(5000)) {
+                $authProc.Kill()
+                $authOk = $false
+                Write-Warning "[AI] Post-login authentication verification timed out."
+            } else {
+                $authOutput = Get-Content $authOut -Raw -ErrorAction SilentlyContinue
+                $authError  = Get-Content $authErr -Raw -ErrorAction SilentlyContinue
+                $authOk = ($authProc.ExitCode -eq 0 -and $authOutput -notmatch 'Not logged in')
+
+                if ($authOk) {
+                    Write-Host "[AI] Devin authentication verified after login." -ForegroundColor Green
+                } else {
+                    Write-Warning "[AI] Devin authentication still failed after login."
+                    if (-not [string]::IsNullOrWhiteSpace($authError)) {
+                        Write-Warning "[AI] Devin auth error: $($authError.Trim())"
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($authOutput)) {
+                        Write-Host "[AI] Devin auth status output: $($authOutput.Trim())"
+                    }
+                }
+            }
+        }
+        catch {
+            $authOk = $false
+            Write-Warning "[AI] Devin login/verification failed: $($_.Exception.Message)"
+            if ($_.ErrorDetails.Message) {
+                Write-Warning "[AI] Details: $($_.ErrorDetails.Message)"
+            }
+        }
     }
+
     if ($authOk) {
     $titleMatch = [regex]::Match($html, '(?is)<title>(.*?)</title>')
     $reportTitle = if ($titleMatch.Success) { [System.Net.WebUtility]::HtmlDecode($titleMatch.Groups[1].Value.Trim()) } else { 'CluChk Report' }
@@ -7518,7 +7596,7 @@ Respond using ONLY these four sections, in this exact order, with the exact head
 1. RECOMMENDED ORDER OF WORK
    Numbered list of current actionable issues in priority order. Put update/health blockers and failed cluster groups first; warnings last. Combine all evidence for the same root cause into one numbered item.
    Item 1 must always be the failed/unhealthy cluster group that is blocking the Azure Local Solution update (typically the Cloud Management cluster group / RegisterCloudManagementClusterExtensions failure). The failed Solution update must not appear before the cluster-group blocker that is causing it.
-   After item 1, use this exact priority order: (1) Invoke-AzStackHciSDNNCValidation failure, (2) offline virtual machines, (3) SDDC Group PartialOnline, (4) network QoS/DCBX warnings, (5) any third-party filter driver such as VeeamFCT. Do not reorder these items unless the data proves one is actively blocking health.
+   After item 1, use this priority order: (2) offline virtual machines, (3) SDDC Group PartialOnline, (5) any third-party filter driver such as VeeamFCT. Any other important items dealing with the problem. Do not reorder these items unless the data proves one is actively blocking health.
  
 2. FOR L1 ENGINEERS - QUICK CHECKLIST
    Bullet list of read-only checks and safe first actions. The last bullet must always be the escalation step. Add a one-line production or data-loss warning when an action can affect production or data.
@@ -7540,7 +7618,7 @@ Respond using ONLY these four sections, in this exact order, with the exact head
  
 GENERAL ANALYSIS RULES
 1. Do not rely on the Results Summary table. Examine the actual section tables directly.
-2. Identify every cell with a red or yellow background and explain why it is flagged based on the data in that section.
+2. Identify every cell with a red background and explain why it is flagged based on the data in that section.
 3. Determine the cluster type first, then apply the correct update path:
    a. Azure Local: Do NOT recommend manual BIOS/firmware/driver updates. Route all component updates through the pending Solution/SBE update workflow. Focus update failure analysis on the "Solution and SBE Updates" table and the "Action Plan, Health Check and Firmware Failures" table.
    b. Azure Stack HCI: Use the Azure Stack HCI support matrix and Dell EMC SBE guidance if available. Do not manually flash components unless the report explicitly supports it for this OS version.
@@ -7565,7 +7643,7 @@ UPDATE HISTORY RULE
 For any failed or pending Solution or SBE update, include the last successfully installed/registered version and the target version in the EVIDENCE. For example, include the current installed Solution version, the target Solution version, the current installed SBE version, and the target SBE version if the report shows them.
  
 TSG AND KNOWN ISSUES FORMAT
-1. If a TSG from https://github.com/Azure/AzureLocal-Supportability/ closely matches the error or symptom, use these EXACT two bullets in NEXT ACTIONS:
+1. If a TSG from https://github.com/Azure/AzureLocal-Supportability/ closely matches the action plan table error message or symptom, use these EXACT two bullets in NEXT ACTIONS:
    "This matches the Azure Local known issue '<title>'. Look at this TSG to resolve the <issue> issue: <TSG_URL>"
    "Also check the known-issues page for any additional related issues: https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md"
    Replace <title> with the exact known-issue title, <issue> with the short issue name, and <TSG_URL> with the full TSG URL. Do not place any punctuation immediately after the TSG URL.
@@ -7609,33 +7687,74 @@ $errorList
     $maxAttempts = 2
     $aiContent = '<p>Devin CLI is installed but could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
     $outFile = $null
+    $errFile = $null
     do {
         $attempt++
         if ($outFile) { Remove-Item $outFile -ErrorAction SilentlyContinue }
+        if ($errFile) { Remove-Item $errFile -ErrorAction SilentlyContinue }
         $outFile = [System.IO.Path]::GetTempFileName()
-        Write-Host "Generating AI summary. Estimated time: 2-5 minutes... (attempt $attempt)"
-        $p = Start-Process -FilePath $devinPath -ArgumentList @('--prompt-file', $promptFile, '--print', '--respect-workspace-trust', 'false', '--permission-mode', 'auto') -RedirectStandardOutput $outFile -NoNewWindow -PassThru
-        if (-not $p.WaitForExit(300000)) {
-            $p.Kill()
-            $aiContent = '<p>Devin CLI is installed but timed out and could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
+        $errFile = [System.IO.Path]::GetTempFileName()
+
+        Write-Host "[AI] Generating AI summary. Estimated time: 2-5 minutes... (attempt $attempt of $maxAttempts)"
+
+        try {
+            $p = Start-Process -FilePath $devinPath -ArgumentList @('--prompt-file', $promptFile, '--print', '--respect-workspace-trust', 'false', '--permission-mode', 'auto') -RedirectStandardOutput $outFile -RedirectStandardError $errFile -NoNewWindow -PassThru -ErrorAction Stop
+
+            if (-not $p.WaitForExit(300000)) {
+                $p.Kill()
+                Write-Warning "[AI] AI summary timed out after 5 minutes on attempt $attempt."
+                $aiContent = '<p>Devin CLI is installed but timed out and could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
+                break
+            }
+
+            $stderr = [System.IO.File]::ReadAllText($errFile)
+            Write-Host "[AI] Devin summary process exit code: $($p.ExitCode)"
+            if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+                Write-Warning "[AI] Devin summary error output: $($stderr.Trim())"
+            }
+
+            $stdout = [System.IO.File]::ReadAllText($outFile)
+        }
+        catch {
+            Write-Warning "[AI] Failed to start or run Devin AI summary: $($_.Exception.Message)"
+            if ($_.ErrorDetails.Message) {
+                Write-Warning "[AI] Details: $($_.ErrorDetails.Message)"
+            }
+            $aiContent = '<p>Devin CLI could not be started to generate the AI summary. See the CluChk transcript log for details.</p>'
             break
         }
-        $stdout = [System.IO.File]::ReadAllText($outFile)
+
         $stdout = $stdout -replace '\x1B\[[0-9;]*[a-zA-Z]', ''
         $stdout = $stdout -replace '(?is)^Welcome to Devin CLI!.*?Run devin to get started\.', ''
         $stdout = $stdout -replace '(?is)warning: rejected a tool call.*?(\r?\n|$)', ''
         $stdout = $stdout.Trim()
-        if ($stdout -match '(?i)(log in|sign in|authenticate)') {
+
+        if ([string]::IsNullOrWhiteSpace($stdout)) {
+            Write-Warning "[AI] Devin returned no AI summary content on attempt $attempt."
+            if ($attempt -ge $maxAttempts) {
+                $aiContent = '<p>Devin CLI returned no AI summary content. See the CluChk transcript log for details.</p>'
+                break
+            }
+        }
+        elseif ($stdout -match '(?i)(log in|sign in|authenticate)') {
+            Write-Warning "[AI] Devin output indicates the session is not authenticated."
             if ($attempt -lt $maxAttempts) {
-                Write-Host 'Devin session not valid for summary generation. Logging out and re-authenticating...'
-                Start-Process -FilePath $devinPath -ArgumentList @('auth','logout') -NoNewWindow -Wait
-                Write-Host 'Choose option 1 (Log in with browser)'
-                $loginProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','login') -NoNewWindow -PassThru
-                $loginProc.WaitForExit()
+                Write-Host '[AI] Logging out and re-authenticating before retry...'
+                try {
+                    Start-Process -FilePath $devinPath -ArgumentList @('auth','logout') -NoNewWindow -Wait -ErrorAction Stop
+                    Write-Host '[AI] Choose option 1 (Log in with browser)'
+                    $loginProc = Start-Process -FilePath $devinPath -ArgumentList @('auth','login') -NoNewWindow -PassThru -ErrorAction Stop
+                    $loginProc.WaitForExit()
+                    Write-Host "[AI] Devin re-login process exit code: $($loginProc.ExitCode)"
+                }
+                catch {
+                    Write-Warning "[AI] Devin re-authentication failed: $($_.Exception.Message)"
+                }
             } else {
                 $aiContent = '<p>Devin CLI is installed but could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
             }
         } else {
+            Write-Host "[AI] Devin returned AI summary content ($($stdout.Length) characters)." -ForegroundColor Green
             # Convert Devin's structured plain-text response into semantic HTML.
             # This keeps the exact AI content but makes the four required sections,
             # issues, evidence, and actions much easier to scan in the report.
@@ -7881,12 +8000,17 @@ $errorList
         }
     } while ($attempt -lt $maxAttempts)
 
-    Remove-Item $promptFile, $outFile, $authOut, $authErr -ErrorAction SilentlyContinue
+    Remove-Item $promptFile, $outFile, $errFile, $authOut, $authErr -ErrorAction SilentlyContinue
     } else {
+        Write-Warning "[AI] Devin CLI was found, but authentication could not be verified."
+        Write-Warning "[AI] AI Summary will be skipped. Review the authentication messages above and verify that Devin login completes successfully."
         $aiContent = '<p>Devin CLI is not authenticated after the login attempt. Ensure you completed the Windsurf login and that <code>devin -p "say hi"</code> works, then rerun the script.</p>'
     }
 } else {
-    $aiContent = '<p>Devin CLI not found. AI summary could not be genereated.</p>
+    Write-Warning "[AI] Devin CLI was NOT found."
+    Write-Warning "[AI] Expected path: $devinPath"
+    Write-Warning "[AI] AI Summary will be skipped because Devin CLI is not installed or could not be located."
+    $aiContent = '<p>Devin CLI not found. AI summary could not be generated.</p>
 <p>Please register and install Windsurf/Devin using Company Portal.</p>
 <p>Please update Devin to the latest.</p>
 <p>Afterwards, install Devin CLI using these powershell commands</p>
@@ -8681,8 +8805,38 @@ TLogCleanup
 $allArrayout=@()
 $allArray=@()
 $ServiceTagList=@()
-try {Stop-Transcript -ErrorAction SilentlyContinue} catch {}
 
+# Keep the ToolBox-launched console open long enough to review report/log locations
+# and any warnings/errors written during the run.
+Write-Host ""
+Write-Host "==================== CluChk Complete ====================" -ForegroundColor Cyan
+if ($HtmlReport) {
+    Write-Host "Report Output location:" -ForegroundColor Cyan
+    Write-Host "  $HtmlReport"
+}
+if ($CombinedHtmlReport -and (Test-Path $CombinedHtmlReport -ErrorAction SilentlyContinue)) {
+    Write-Host "Combined Report Output location:" -ForegroundColor Cyan
+    Write-Host "  $CombinedHtmlReport"
+}
+Write-Host "Transcript Log location:" -ForegroundColor Cyan
+Write-Host "  $TranscriptPath"
+Write-Host ""
+Write-Host "Review any warnings or errors above before closing." -ForegroundColor Yellow
+Write-Host "Press any key to continue..." -ForegroundColor Yellow
+
+try {
+    if ([Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost') {
+        [void][Console]::ReadKey($true)
+    } else {
+        [void](Read-Host "Press ENTER to continue")
+    }
+}
+catch {
+    [void](Read-Host "Press ENTER to continue")
+}
+
+Write-Host "[CluChk] User acknowledged completion. Closing transcript."
+try {Stop-Transcript -ErrorAction SilentlyContinue} catch {}
 
 break
 $GetVMProcCount=Foreach ($key in ($SDDCFiles.keys -like "*GetVM" )) {
