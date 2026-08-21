@@ -18,7 +18,8 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
-    2026/08/20:UI TEST - JG - Modernized SLIC HTML report to match CluChk 2.0 visual framework.
+    2026/08/20:v1.37 - JG - Updated links to the validated switch configs.
+    2026/08/20:v1.36 - JG - Modernized SLIC HTML report to match CluChk 2.0 visual framework.
     See GitHub pull requests for history
 
 #>
@@ -31,7 +32,7 @@ Function Invoke-SLIC {
 Function EndScript{  
     break
 }
-$Ver="v1.36"
+$Ver="v1.37"
 $ToolName = @"
 $Ver
   ___ _    ___ ___ 
@@ -542,13 +543,13 @@ document.addEventListener('DOMContentLoaded',function(){loadSavedTheme();initTab
 
         # Map to reference link
         $SwitchRefLink = switch -Regex ($SystemTypeUnique) {
-            "4112" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s4112f-on-switch-8/' ; break }
-            "4148" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s4148f-on-switch-8/' ; break }
-            "5148" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s5148f-on-switch-8/' ; break }
-            "5212" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s5212f-on-switch-8/' ; break }
-            "5232" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s5232f-on-switch-8/' ; break }
-            "5248" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/dell-networking-s5248f-on-switch-8/' ; break }
-            default { 'https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-iwarp-mellanox-and-intel-e810-cards-reference-guide/' }
+            "4112" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-and-iwarp-reference-guide-1/dell-networking-s4112f-on-switch-17/' ; break }
+            "4148" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-and-iwarp-reference-guide-1/dell-networking-s4148f-on-switch-17/' ; break }
+            "5148" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-and-iwarp-reference-guide-1/dell-networking-s5148f-on-switch-17/' ; break }
+            "5212" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-and-iwarp-reference-guide-1/dell-networking-s5212f-on-switch-17/' ; break }
+            "5232" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-and-iwarp-reference-guide-1/dell-networking-s5232f-on-switch-17/' ; break }
+            "5248" { 'https://infohub.delltechnologies.com/en-us/l/switch-configurations-roce-and-iwarp-reference-guide-1/dell-networking-s5248f-on-switch-17/' ; break }
+            default { 'https://infohub.delltechnologies.com/en-us/t/switch-configurations-roce-and-iwarp-reference-guide-1/' }
         }
 
     # Add to HTML report output sections
