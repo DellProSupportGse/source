@@ -5222,6 +5222,45 @@ $CurrentOSBuild+=$CurrentOSBuildTmp
         #Write-Host "Total time taken is $(($dstop-$dstart).totalmilliseconds)"
 #endregion Recommended updates and hotfixes for Windows Server
 
+#region CluChk timestamp helpers
+# Action plan / health check / firmware timestamps are stored as fixed US style strings
+# ("MM/dd/yyyy HH:mm") and are parsed back later for sorting and for the severity marking.
+# Get-Date -Format and Get-Date <string> both follow the culture of the host that CluChk
+# runs on, and in a .NET custom format string "/" is the culture date separator placeholder
+# rather than a literal slash. On a de-DE host "MM/dd/yyyy HH:mm" therefore renders as
+# "08.26.2026 12:07", which can no longer be parsed back ("String was not recognized as a
+# valid DateTime"), and on dd/MM cultures such as en-GB it silently parses back as the wrong
+# day. Format and parse these strings with InvariantCulture so the report is identical no
+# matter which locale the collecting host uses.
+Function ConvertTo-CluChkDateTime{
+    Param([Parameter(Position=0)]$InputDate)
+    If($null -eq $InputDate){Return $null}
+    If($InputDate -is [datetime]){Return $InputDate}
+    If($InputDate -is [System.DateTimeOffset]){Return $InputDate.LocalDateTime}
+    $DateString=([string]$InputDate).Trim()
+    If([string]::IsNullOrWhiteSpace($DateString)){Return $null}
+    $ParsedDate=[datetime]::MinValue
+    $DateStyles=[System.Globalization.DateTimeStyles]::None
+    # The format this section writes, then the machine formats the source logs use (ECE text,
+    # Test-SBEContentIntegrity, EndTimeUtc). All are unambiguous, so match them exactly first.
+    $KnownFormats=@('MM/dd/yyyy HH:mm','yyyy-MM-dd HH:mm:ss','yyyy-MM-dd HH:mm','yyyy-MM-ddTHH:mm:ss',
+                    'yyyy-MM-ddTHH:mm:ssK','yyyy-MM-ddTHH:mm:ss.fffffffK','o','s','u')
+    If([datetime]::TryParseExact($DateString,$KnownFormats,[cultureinfo]::InvariantCulture,$DateStyles,[ref]$ParsedDate)){Return $ParsedDate}
+    # Anything else is free text from a log, so read it the way the host would, and only then
+    # fall back to invariant for US formatted logs collected on a non US host.
+    If([datetime]::TryParse($DateString,[cultureinfo]::CurrentCulture,$DateStyles,[ref]$ParsedDate)){Return $ParsedDate}
+    If([datetime]::TryParse($DateString,[cultureinfo]::InvariantCulture,$DateStyles,[ref]$ParsedDate)){Return $ParsedDate}
+    Return $null
+}
+
+Function Format-CluChkTimeStamp{
+    Param([Parameter(Position=0)]$InputDate)
+    $ParsedDate=ConvertTo-CluChkDateTime $InputDate
+    If($null -eq $ParsedDate){Return $null}
+    Return $ParsedDate.ToString('MM/dd/yyyy HH:mm',[cultureinfo]::InvariantCulture)
+}
+#endregion CluChk timestamp helpers
+
 #Latest Action Plan Failure
 If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recurse).count) {
         $Name="Latest Action Plan Failure"
@@ -5234,7 +5273,7 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
                          
             try {$resultObject +=  [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PreContext | select-string 'Value') -split ': On ')[-1].trim(':')
-                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
+                TimeStamp                       = (Format-CluChkTimeStamp (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1])
                 Message                         = $ErrorMessage.Line.Trim()
                 
             }
@@ -5246,7 +5285,7 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
             $ThisError=((($ErrorMessage.Context.PostContext | select-string 'TargetResourceName' -Context 0,5).Context.PostContext ) -replace "Description        : ","").Trim() -join ","
             try {$resultObject +=   [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PostContext | select-string 'TargetResourceName') -split ':')[-1].trim()
-                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
+                TimeStamp                       = (Format-CluChkTimeStamp (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1])
                 Message                         = $ThisError
             }
             } catch {}
@@ -5261,7 +5300,7 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
             $ThisError='BBOOLLDDOONNPlease run the following in Azure CLI to resolve this error:RRREEETTT'+$FixCmd+'RRREEETTTRRREEETTTRun the following on any node in the cluster:RRREEETTTGet-ClusterGroup "azure stack hci * cluster group" | Stop-ClusterGroup | Start-ClusterGroupRRREEETTTInvoke-SolutionUpdatePrecheck # Wait '+(5+$ClusterNodeCount*5)+' MinutesBBOOLLDDOOFFFF RRREEETTT RRREEETTT'+$ThisError
             try {$resultObject +=   [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PreContext | select-string 'TargetResourceName') -split ':')[-1].trim()
-                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
+                TimeStamp                       = (Format-CluChkTimeStamp (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1])
                 Message                         = $ThisError
             }
             } catch {}
@@ -5293,7 +5332,8 @@ If ((Get-ChildItem $SDDCPath -Filter "GetActionplanInstanceToComplete.txt" -Recu
                 $StopError = ([xml]$apupdate).SelectNodes("//Task") | where Status -eq "Error" | where Action -eq $null | where Exception -ne $null
                 $APTime=$StopError.EndTimeUtc
                 If (!($APTime)) {$APTime=$StopError.StartTimeUtc}
-                $APTime=try {(Get-Date $APTime -Format "MM/dd/yyyy HH:mm tt")} catch {(Get-Date -Format "MM/dd/yyyy HH:mm")}
+                $APTime=ConvertTo-CluChkDateTime $APTime
+                If(-not $APTime){$APTime=Get-Date}
                 if ($StopError) {
                     $ThisError=($StopError.Exception.Message.split("`n") | select -first 10).Trim() -join ","
                     if ($ThisError -match 'Invoke-Command for Get-CauReport failed. Error=Processing data.*remote.*failed with the following error message\: The WSMan provider host process did not return a proper response') {
@@ -5336,7 +5376,7 @@ File hash mismatch error
                     $ThisErrorGroups=($ThisError | select-string "\[(.*)\]\:(\d{4}-\d{2}-\d{2} \d{2}.\d{2}.\d{2}).*\[Test-SBEContentIntegrity\] (.*)").Matches.Groups
                     $resultObject +=     [PSCustomObject] @{
                         Target                  = $ThisErrorGroups[1].Value
-                        TimeStamp               = (Get-Date $ThisErrorGroups[2].Value -Format "MM/dd/yyyy HH:mm")
+                        TimeStamp               = (Format-CluChkTimeStamp $ThisErrorGroups[2].Value)
                         Message                 = $ThisErrorGroups[3].Value
                 
                     }
@@ -5345,10 +5385,15 @@ File hash mismatch error
 
         }
         $ActionPlanErrors=$resultObject | sort TimeStamp -Descending | sort Target,Message -Unique | sort TimeStamp -Descending
+        $APReferenceDate=ConvertTo-CluChkDateTime $SysInfo[0].LocalTime
+        If(-not $APReferenceDate){$APReferenceDate=Get-Date}
         Foreach ($apfailure in $ActionPlanErrors) {
-            if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-7)) {
+            $APFailureDate=ConvertTo-CluChkDateTime $apfailure.TimeStamp
+            if (-not $APFailureDate) {
+                    # Timestamp could not be determined, leave the row unmarked
+            } elseif ($APFailureDate -gt $APReferenceDate.AddDays(-7)) {
                     $apfailure.Target="RREEDD" + $apfailure.Target
-            } elseif ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).AddDays(-30)) {
+            } elseif ($APFailureDate -gt $APReferenceDate.AddDays(-30)) {
                     $apfailure.Target="YYEELLLLOOWW" + $apfailure.Target
             }
         }
