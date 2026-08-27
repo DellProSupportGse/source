@@ -26,6 +26,11 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/08/27:v2.03 -  1. Bug Fix: TP - Find devin using get-command
+                        2. New Update: TP - Added marking WIMMOUNT as red/error
+                        3. New Update/Fix: TP - Check all GetSolutionUpdate.xml files for valid data
+                        4. Bug Fix: TP - CAUEnabled column now only marks red of the scheduled date is in the future from the cluchk run
+    
     2026/08/21:v2.02 -  1. Bug Fix: JG - Resolved AI summary reponse not showing up
 
     2026/08/21:v2.01 -  1. New Update: TP - Change AI summary to only look at RED issues and make iDrac IP address wording more consistent.
@@ -67,7 +72,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.02"
+$CluChkVer="2.03"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -2901,7 +2906,7 @@ $Name=""
                 '1'{'Enabled'}}}
         }},@{Label="Quorum";Expression={@("Static","Dynamic","Unknown")[$_.DynamicQuorum]}},
         @{Label="Mixed Mode";Expression={if (($SDDCFiles."GetClusterNodeSupportedVersion").ClusterFunctionalLevel.count -gt 1) {'RREEDDTrue'} else {'False'}}},
-        @{L="CAU Auto Update";E={$CauRole=$SDDCFiles."GetCauClusterRole";if ($CauRole) {if ($CauRole[1].value.value -eq "Online" -and $CauRole[-1].value -gt -1 -and $CauRole[-2].value.value -gt '' -and $CauRole[2].value -lt (Get-Date).AddDays(30)) {"RREEDDEnabled"}else{"Disabled"}}}},`
+        @{L="CAU Auto Update";E={$CauRole=$SDDCFiles."GetCauClusterRole";if ($CauRole) {if ($CauRole[1].value.value -eq "Online" -and $CauRole[-1].value -gt -1 -and $CauRole[-2].value.value -gt '' -and $CauRole[2].value -gt (Get-Date)) {"RREEDDEnabled"}else{"Disabled"}}}},`
         ShutdownTimeoutInMinutes
         #$ClusterName | FT -AutoSize -Wrap
 
@@ -4283,6 +4288,11 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
                             $CompanyName=$S[5].Replace("|","").Trim()
                             If (@("UnionFS","DvFlt","MdvFsFlt","applockerfltr") -contains $FilterName) {$CompanyName="Microsoft"}
                             IF($CompanyName -inotmatch "Microsoft"){$CompanyName="RREEDD"+$CompanyName}
+                            If (@("WIMMOUNT") -contains $FilterName) {
+                                $FilterName="RREEDD$FilterName"
+                                $FilterData0=""
+                                $FilterData0+=$Driver.PSComputerName+","+$FilterName+","+$Driver.NumInstances+","+$Driver.Altitude+","+$Driver.Frame+","
+                            }
                             $FilterData1=""
                             $FilterData1=$S[1]+","+$CompanyName+"`r`n"
                             $FilterData+=$FilterData0+$FilterData1
@@ -4292,6 +4302,10 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
                     }}}
          $FilterDataOut=@()
          $FilterDataOut=$FilterData|ConvertFrom-Csv|Sort-Object FilterName,PSComputerName -Unique | Select-Object PSComputerName,FilterName,NumInstances,Altitude,Frame,CompanyName
+         Foreach ($Filter in $FilterDataOut) {
+            IF (@("WIMMOUNT") -contains $Filter.FilterName) {$Filter.FilterName="RREEDD$($Filter.FilterName)"}
+         }
+
         }
 
 
@@ -4308,10 +4322,12 @@ $html+='<H2 id="FLTMCLogs">FLTMC Logs</H2>'
             } elseif ($item.company -inotmatch "Microsoft") {
                 $item.company = "RREEDD" + $item.company
             }
+            if ($item.WindowsDriver -match "WIMMOUNT") {$item.WindowsDriver="RREEDD$($item.WindowsDriver)"}
             $item
         }
 
         $FilterDataOut = $FilterDataOut | Sort-Object FilterName,PSComputerName -Unique
+
 
         #HTML Report
         If($FilterDataOut.count -eq 0){$html+='<h5><span style="color: #a4262c; background-color: #fde7e9">&nbsp;&nbsp;&nbsp;&nbsp;No FLTMC found</span></h5>'}
@@ -5031,14 +5047,15 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
            #Write-Host "    Gathering $Name..."
            $SolutionUpdates=@()
            $HealthCheckIssues=@()
-           $SolutionUpdateFiles=$SDDCFiles."$($SDDCFiles.keys | ?{$_ -like '*GetSolutionUpdate' }| Select-Object -First 1)"
+           $SolutionUpdateFiles=$SDDCFiles.keys | ?{$_ -like '*GetSolutionUpdate' } | %{$SDDCFiles."$($_)"}
            Foreach ($SolutionUpdateFile in $SolutionUpdateFiles) {
               If ($SolutionUpdateFile.State -gt "") {
                  $SolutionUpdates=$SolutionUpdates+=$SolutionUpdateFile | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},InstalledDate,MinVersionRequired,MinSBEVersionRequied,ComponentVersions
               }
            } 
-           $SolutionUpdates = $SolutionUpdates | Sort ResourceId 
+           $SolutionUpdates = $SolutionUpdates | Sort ResourceId -Unique 
            $HealthCheckIssues=$SolutionUpdateFiles | ? {$_ -ne $null} | ? {$_.State -le "" -and $_.Status -ne "SUCCESS" -and $_.Severity -ne "INFORMATIONAL" }
+
            #HTML Report
            $html+='<H2 id="SolutionandSBEUpdates">Solution and SBE Updates</H2>'
            $html+=$SolutionUpdates | ConvertTo-html -Fragment
@@ -7319,7 +7336,8 @@ IF($selection -ne "4"){
     Write-Host "[Report] Preparing final HTML report: $HtmlReport"
     if (Test-Path "$HtmlReport") {Remove-Item $HtmlReport}
     $html=$htmloutReport
-$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"
+$devinPath=(Get-Command "devin.exe").Source
+If (!($devinPath)) {$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"}
 $devinFound = Test-Path $devinPath
 
 <#if ($devinFound) {
@@ -8932,20 +8950,22 @@ Write-Host "Transcript Log location:" -ForegroundColor Cyan
 Write-Host "  $TranscriptPath"
 Write-Host ""
 Write-Host "Review any warnings or errors above before closing." -ForegroundColor Yellow
-Write-Host "Press any key to continue..." -ForegroundColor Yellow
+IF ($runType -eq 0) {
+    Write-Host "Press any key to continue..." -ForegroundColor Yellow
 
-try {
-    if ([Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost') {
-        [void][Console]::ReadKey($true)
-    } else {
+    try {
+        if ([Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost') {
+            [void][Console]::ReadKey($true)
+        } else {
+            [void](Read-Host "Press ENTER to continue")
+        }
+    }
+    catch {
         [void](Read-Host "Press ENTER to continue")
     }
-}
-catch {
-    [void](Read-Host "Press ENTER to continue")
-}
 
-Write-Host "[CluChk] User acknowledged completion. Closing transcript."
+    Write-Host "[CluChk] User acknowledged completion. Closing transcript."
+}
 try {Stop-Transcript -ErrorAction SilentlyContinue} catch {}
 
 break
