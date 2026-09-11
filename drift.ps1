@@ -42,7 +42,7 @@ Set-StrictMode -Off
 
 #region Constants / Types
 
-$script:DriFTVersion = 'DriFT_v2.03'
+$script:DriFTVersion = 'DriFT_v2.04'
 $script:DriFTDellDownloadRoot = 'https://downloads.dell.com/'
 $script:DriFTDefaultWorkRoot = Join-Path $env:TEMP 'DriFT'
 
@@ -585,6 +585,7 @@ function Resolve-TelemetryGeo {
         $response = $global:GeoCache
 
         if ($response.success -eq $true) {
+
             $script:TelemetryGeoData = @{
                 country     = [string]$response.country
                 countryCode = [string]$response.country_code
@@ -598,10 +599,39 @@ function Resolve-TelemetryGeo {
             Write-Indent "Country: $($script:TelemetryGeoData.country)" 2
             Write-Indent "Region : $($script:TelemetryGeoData.region)" 2
         }
+        else {
+            # Fallback if ipwho responds but does not return valid geo data
+            $LocalRegionInfo = [System.Globalization.RegionInfo]::CurrentRegion
+
+            $script:TelemetryGeoData = @{
+                country     = [string]$LocalRegionInfo.EnglishName
+                countryCode = [string]$LocalRegionInfo.TwoLetterISORegionName
+                region      = $null
+                city        = $null
+                latitude    = $null
+                longitude   = $null
+                timezone    = [string](Get-TimeZone).Id
+            }
+
+            Write-Indent "Country: $($script:TelemetryGeoData.country) (Local fallback)" 2
+        }
     }
     catch {
-        Write-Indent "WARN: ipwho lookup failed" 2 Yellow
-        $script:TelemetryGeoData = @{}
+        Write-Indent "WARN: ipwho lookup failed - using local Windows settings" 2 Yellow
+
+        $LocalRegionInfo = [System.Globalization.RegionInfo]::CurrentRegion
+
+        $script:TelemetryGeoData = @{
+            country     = [string]$LocalRegionInfo.EnglishName
+            countryCode = [string]$LocalRegionInfo.TwoLetterISORegionName
+            region      = $null
+            city        = $null
+            latitude    = $null
+            longitude   = $null
+            timezone    = [string](Get-TimeZone).Id
+        }
+
+        Write-Indent "Country: $($script:TelemetryGeoData.country) (Local fallback)" 2
     }
     finally {
         $script:TelemetryGeoResolved = $true
