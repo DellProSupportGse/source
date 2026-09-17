@@ -26,10 +26,20 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/09/17:v2.04 -  1. Bug Fix: TP - Updated devin prompt to try to avoid making up commands.
+                        2. New Update: TP - Optimized AI summary prompt
+                        3. Bug Fix: TP - Fixed a couple of bad links
+                        4. New Update: TP - Added available storage should be offline for azure stack hci and azure local AI rules
+                        5. New Update: JG - Resolve-TelemetryGeo - Use local if GeoCache is null
+                        6. New Update: TP - Provide better information during the action plan gathering as well as close the ECE zip file properly
+                        7. New Update: TP - At request of MH,put the cluster name in title. I also included the OS description.
+                        8. Bug Fix: TP - If providing a zip file on a system using PS 5.1, uses 7z.exe if it can find it. PS 7+ handles long names properly.
+                        9. Bug Fix: TP - Fixed an issue where CluChk would hang if there is a corrupt AzStackHciEnvironmentChecker.EVTX file.
+
     2026/08/27:v2.03 -  1. Bug Fix: TP - Find devin using get-command
                         2. New Update: TP - Added marking WIMMOUNT as red/error
                         3. New Update/Fix: TP - Check all GetSolutionUpdate.xml files for valid data
-                        4. Bug Fix: TP - CAUEnabled column now only marks red of the scheduled date is in the future from the cluchk run
+                        4. Bug Fix: TP - CAUEnabled column now only marks red if the scheduled date is in the future from the cluchk run
     
     2026/08/21:v2.02 -  1. Bug Fix: JG - Resolved AI summary reponse not showing up
 
@@ -72,7 +82,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.03"
+$CluChkVer="2.04"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -230,6 +240,33 @@ Function EndScript{
     }
     break script 
 }
+function Get-ClusterType {
+    param(
+        [string]$ReportHtml,
+        $SysInfo
+    )
+
+    # Azure Local indicators (order matters — check most specific first)
+    $hasSolutionSbeTable   = $ReportHtml -match 'Solution and SBE Updates'
+    $hasAzureLocalVersion  = $ReportHtml -match 'Azure Local.*?\d+\.\d+'
+    $hasCloudMgmt          = $ReportHtml -match 'Cloud Management|SDDC Group'
+
+    if ($hasSolutionSbeTable -or ($hasAzureLocalVersion -and $hasCloudMgmt)) {
+        return 'AzureLocal'
+    }
+
+    # Azure Stack HCI (no Solution/SBE table, but OS is HCI)
+    #$hasHciOs = $ReportHtml -match 'AX-.*|S2D'
+    $hasHCiOs = $SysInfo.SysModel -match "^AX-|S2D"
+    if ($hasHciOs -and -not $hasSolutionSbeTable) {
+        return 'AzureStackHCI'
+    }
+
+    # Everything else
+    return 'GenericWSFC'
+}
+
+
 $WhatsNew=@"
 1. in dev
 "@
@@ -563,11 +600,19 @@ function Send-ToolTelemetry {
 function Unzip {
 param([string]$zipfile, [string]$outpath)
 Write-Host "    Expanding: "
-Write-Host "      $SDDCLoc "
+Write-Host "      $zipfile "
 Write-Host "    To:"
-Write-Host "      $ExtracLoc"
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::ExtractToDirectory($zipfile, $outpath)
+Write-Host "      $outpath"
+$SevenZip=$null
+$SevenZip = ((Get-Command 7z.exe -ErrorAction SilentlyContinue).Source,"$env:ProgramFiles\7-Zip\7z.exe","${env:ProgramFiles(x86)}\7-Zip\7z.exe") |
+ Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+$ps5=($PSVersionTable.PSVersion.Major -eq 5)
+if ($ps5 -and $SevenZip) {
+    & $sevenZip x $zipfile "-o$outpath" -y -bb0
+} else {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipfile, $outpath)
+}
 }
 
 
@@ -5062,7 +5107,7 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
            $html=$html `
            -replace '<td>RREEDD','<td style="color: #a4262c; background-color: #fde7e9">'`
            -replace '<td>YYEELLLLOOWW','<td style="background-color: #fff4ce">' 
-           $html+="<h5>&nbsp;&nbsp;<a href='https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2' target='_blank'>Ref: https://learn.microsoft.com/en-us/azure/azure-local/upgrade/about-upgrades-23h2</a></h5>"
+           $html+="<h5>&nbsp;&nbsp;<a href='https://learn.microsoft.com/en-us/azure/azure-local/update/about-updates-23h2' target='_blank'>Ref: https://learn.microsoft.com/en-us/azure/azure-local/update/about-updates-23h2</a></h5>"
            $ResultsSummary+=Set-ResultsSummary -name $name -html $html
            $htmlout+=$html
            $html=""
@@ -5578,7 +5623,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
             }
             } catch {}
         }
-
+        Write-Indent -Level 2 -Message "Checked GetActionplanInstanceToComplete.txt"
 
         $ECEzip=$null
         $APLMU=$null
@@ -5595,7 +5640,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
                 $entry = $zip.Entries | Where-Object {$_.FullName -like "AzureStackFailedActionPlanInformation-*.json"}
                 [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry,"$(Split-Path (Split-Path $ECE -Parent) -Parent)\AzureStackFailedActionPlanInformation.json")
                 } catch {}
-
+                $zip.Dispose()
             }
         
         }
@@ -5631,6 +5676,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
               }
             }
         }
+        Write-Indent -Level 2 -Message "Checked AzureStackFailedActionPlanInformation.json"
         $ECEErrors="Extra content found error
 Extra directory found error
 SBE Manifest Credentialist Schema for secret
@@ -5663,6 +5709,7 @@ Unable to add KV info to
             #[AZL-BORO-HOST03]:2025-09-11 17:17:25 Warning  2> [EnvironmentValidator:EnvironmentValidatorPreUpdate] [Test-SBEContentIntegrity] Extra content found error : 'C:\CloudContent\Microsoft_Reserved\Update\...
 
         }
+        Write-Indent -Level 2 -Message "Checked ECE etls"
         ForEach ($HealthCheckIssue in $HealthCheckIssues) {
                     $resultObject +=     [PSCustomObject] @{
                         Target                  = $HealthCheckIssue.TargetResourceID
@@ -5671,9 +5718,12 @@ Unable to add KV info to
                 
                     }
         }
+        Write-Indent -Level 2 -Message "Checked Health Check Issues"
         #$getSUE=$SDDCFiles.Keys -match 'getsolutionupdateenvironment' | %{$SDDCFiles."$_"} | Sort -Unique Title
         $errors=@()
-        $errors=(Get-ChildItem -Path $SDDCPath -Filter "AzStackHciEnvironmentChecker.EVTX" -Recurse -Depth 2) | %{(Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{ Path = "$($_.fullname)"; Level = 2})}
+        $errors=(Get-ChildItem -Path $SDDCPath -Filter "AzStackHciEnvironmentChecker.EVTX" -Recurse -Depth 2) | %{
+        try {Get-WinEvent -ErrorAction Stop -FilterHashtable @{ Path = "$($_.fullname)"; Level = 2}} catch {}
+        }
         $errors | %{$_.Message=$_.Properties.Value}
         $errors=$errors | Select-Object MachineName,TimeCreated,Id,Message | Sort Timecreated
         foreach ($err in $errors) {
@@ -5691,6 +5741,7 @@ Unable to add KV info to
                     }
         }
         #<#
+        Write-Indent -Level 2 -Message "Checked AzStackHciEnvironmentChecker.EVTX"
         $FWlogs=gci $SDDCPath -Filter "Dell-FwUpgrade*.log" -Recurse -ErrorAction SilentlyContinue
         $errors=@()
         $findErrorLater=$false
@@ -5718,7 +5769,7 @@ Unable to add KV info to
                 }
             }
         }
-
+        Write-Indent -Level 2 -Message "Checked Dell FW Update logs"
         $errors=$errors | sort {Get-Date $_.TimeStamp} -Descending | sort Target,Message -Unique | sort {Get-Date $_.TimeStamp} -Descending | select -First 10
         $resultObject += $errors
         #>
@@ -6624,7 +6675,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #a4262c; backgr
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;10GbE = 2</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;25GbE or higher = 1</h5>"
         $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Algorithm=2</h5>"
-        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-stack/hci/concepts/host-network-requirements.md#cluster-traffic-class' target='_blank'>Ref: Host network requirements for Azure Stack HCI</a></h5>"
+        $html+="<h5>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='https://learn.microsoft.com/en-us/azure/azure-local/concepts/host-network-requirements' target='_blank'>Ref: Host network requirements for Azure Local</a></h5>"
         $html+=$GetNetQosTrafficClassOut |Sort-Object ComputerName,Name | ConvertTo-html -Fragment
         $html=$html `
          -replace '<td>RREEDD','<td style="color: #a4262c; background-color: #fde7e9">'`
@@ -7289,7 +7340,7 @@ IF($selection -ne "4"){
     <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
     <head>'
     $htmloutReport+=$htmlStyle
-    $htmloutReport+='<title>CluChk Report</title>'
+    $htmloutReport+="<title>CluChk Report - $($ClusterName.Name) -$($SysInfo[0].OSName)</title>"
     $htmloutReport+='<meta charset="UTF-8">'
     $htmloutReport+="</head>"
     $htmloutReport+="<body>"
@@ -7459,8 +7510,7 @@ Please respond in plain text with headings and bullet points.
 <pre>Invoke-WebRequest -Uri "https://static.devin.ai/cli/setup.ps1" -OutFile "$env:TEMP\devin-setup.ps1" -UseBasicParsing
 &amp; "$env:TEMP\devin-setup.ps1"</pre>'
 }#>
-
-$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"
+#$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"
 $devinFound = Test-Path $devinPath
 $aiSummaryAvailable = $false
 $stdout = $null
@@ -7617,39 +7667,281 @@ if ($devinFound) {
         }
         if ($sddcSb.Length -gt 0) { $sddcContext = "Dell SDDC context from ${SDDCPath}:`r`n" + $sddcSb.ToString() }
     }
-
-$prompt = @"
-You are a Dell L3 support engineer writing for L1 engineers.
-You are given a CluChk HTML report for a Windows Failover Cluster. The cluster may be Azure Local, Azure Stack HCI, classic Hyper-V, file server, scale-out file server, SQL FCI, or another Windows cluster type.
- 
+    $clusterType = Get-ClusterType -ReportHtml $reportBody -SysInfo $SysInfo
+    Write-Host "Detected cluster type: $clusterType"
+    $sharedRules = @"
+ROLE
+You are a Dell L3 support engineer writing for L1 engineers. You are given a CluChk HTML report for a Windows Failover Cluster.
 Do not use any Devin skills, MCP servers, or non-web tools. You may use web search/fetch as needed to verify references. Base your analysis primarily on the report HTML and the data provided in this prompt.
- 
+
+CLUSTER TYPE
+This cluster has been identified as: %%CLUSTER_TYPE_LABEL%%.
+Do not re-detect the cluster type. Apply ONLY the rules for this cluster type.
+
 TIME CONSTRAINT
-You must provide the complete response within 5 minutes. If time is short, finish the RECOMMENDED ORDER OF WORK and FOR L1 ENGINEERS - QUICK CHECKLIST first, then stop and output what you have completed. Do not leave the response empty.
- 
+You must provide the complete response within 5 minutes. If time is short, finish the RECOMMENDED ORDER OF WORK and FOR L1 ENGINEERS - QUICK CHECKLIST first, then output what you have completed. Do not leave the response empty.
+
 GOAL
-Determine the cluster type from the report data, then produce a structured, prioritized summary of the most important issues and safe next steps.
- 
-CLUSTER TYPE DETECTION
-Choose the analysis path based on these indicators:
-- Azure Local: The "Solution and SBE Updates" table exists, OR the Cluster Nodes table explicitly shows "Azure Local" with a version, OR Cluster Groups include "Cloud Management" / "SDDC Group".
-- Azure Stack HCI: The OS is Azure Stack HCI but there is no "Solution and SBE Updates" table.
-- Generic Windows Failover Cluster (Hyper-V, File Server, SOFS, SQL FCI, etc.): None of the above indicators are present.
-If you cannot determine the type, treat it as a generic Windows Failover Cluster.
- 
+Produce a structured, prioritized summary of the most important issues and safe next steps.
+
+COMMAND VERIFICATION RULE
+1. You do NOT have reliable access to cmdlet documentation within the time constraint. Do not attempt to fetch Microsoft docs pages to verify commands.
+2. Only emit a command if you have used it successfully in prior training data AND it appears in the known-valid list below.
+3. If a command is not in the known-valid list, use this format:
+   "Verify syntax, then run: <your best guess at the command>"
+   This tells the L1 engineer to check before executing.
+
+KNOWN-VALID COMMANDS (safe to emit without qualification):
+- Get-PhysicalDisk | Where-Object OperationalStatus -eq 'In Maintenance Mode'
+- Get-ClusterNode
+- Get-ClusterGroup
+- Get-ClusterResource
+- Get-ClusterSharedVolume
+- Get-ClusterQuorum
+- Get-ClusterNetwork
+- Get-ClusterLog -Destination <path> -TimeSpan <minutes>
+- Test-Cluster -Node <nodes> -Include <tests>
+- Get-StoragePool
+- Get-VirtualDisk
+- Get-PhysicalDisk
+- Get-StorageJob
+- Get-StorageSubSystem | Debug-StorageSubSystem
+- Get-VM
+- Get-VMHost
+- Get-NetAdapter
+- Get-NetAdapterRdma
+- Get-NetIntent (Azure Local only)
+- Get-SolutionUpdate (Azure Local only)
+- Get-SolutionUpdateEnvironment (Azure Local only)
+- iscsicli ListTargets
+- iscsicli SessionList
+- Get-MSDSMGlobalDefaultLoadBalancePolicy
+- mpclaim -s -d
+- Get-WinEvent -LogName <logname> -MaxEvents <n>
+- Get-WinEvent -FilterHashtable @{LogName=<log>; StartTime=<time>}
+- Get-PhysicalDisk -DeviceNumber <number>
+- Get-PhysicalDisk -DeviceNumber <number> | Disable-StorageMaintenanceMode
+- Get-PhysicalDisk -DeviceNumber <number> | Enable-StorageMaintenanceMode
+
+Any command not on this list must be prefixed with:
+"Verify syntax, then run:"
+
+KNOWN INVALID COMMANDS AND PARAMETERS — never use these:
+- Set-VMSwitch -BandwidthPercentage (parameter does not exist)
+- Set-ClusterStorageSpacesDirect -CacheState (parameter does not exist)
+- Enable-ClusterS2D -PoolFriendlyName (parameter does not exist)
+- Test-Cluster -ReportName (parameter is -ReportName but output path is not controllable this way)
+- Get-ClusterNode -Health (parameter does not exist; use Get-ClusterNode and check State property)
+- Update-ClusterFunctionalLevel -Force (verify parameter exists before using)
+- Get-PhysicalDisk -UniqueId <disk ID> (do not use UniqueId when the report provides a device number; use -DeviceNumber instead)
+
+If you are not 100% certain a cmdlet or parameter exists, use this format instead:
+"Run the appropriate cmdlet to <describe intent>. Verify exact syntax in the official Microsoft documentation before executing."
+
+CMDLET PARAMETER PINNING
+Set-VMSwitch: valid parameters include -Name, -SwitchType, -NetAdapterName, -MinimumBandwidthMode, -AllowManagementOS.
+It does NOT accept -BandwidthPercentage or -BandwidthReservationMode.
+
+GENERAL ANALYSIS RULES
+1. Do not rely on the Results Summary table. Examine the actual section tables directly.
+1.1 All cluster nodes should be joined to a domain
+2. Identify every cell with a red background and explain why it is flagged based on the data in that section.
+3. Do not jump to hardware replacement for disk issues. First evaluate CannotPool status and firmware/driver non-compliance.
+4. Do not suggest node-level destructive commands (e.g., Repair-Cluster, Remove-ClusterNode) unless the report explicitly supports it and you have warned about production impact and data-loss risk.
+5. Ignore UseAnyNetworkForMigration = False issues.
+6. If a pending reboot/restart-required warning exists, check the last reboot time in the Cluster Nodes table before calling it out.
+7. Do not use words like "likely", "probably", "maybe", or "suspect". State only what the data shows.
+8. Allowed reference sources ONLY:
+   - https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md
+   - https://github.com/Azure/AzureLocal-Supportability/
+   - https://www.dell.com/support/
+   Do not include any URL not from one of those sources.
+
+DEDUPLICATION RULES
+- If the same error, warning, or root cause appears in multiple tables or cells, create exactly one ISSUE subsection. List every affected table/field in the EVIDENCE section. Do not repeat WHY IT MATTERS or NEXT ACTIONS.
+- Do not split a failed update, its blocked downstream update, and the resulting firmware/driver drift into multiple ISSUE subsections. Group them under one root-cause name.
+
+FILTER DRIVER RULE
+If the FLTMC Logs table shows a non-Microsoft file-system filter driver (e.g., VeeamFCT), do not create a DETAILED FINDING or L1 action item. Move it to ITEMS TO IGNORE with: "Third-party filter drivers are not an L1 actionable item; escalate to the MS DE group if backup or storage symptoms are present."
+
+DISK MAINTENANCE MODE RULE
+If the Physical Disks table shows any disk with OperationalStatus = "In Maintenance Mode":
+1. This is an L1 actionable item. Do not treat it as informational.
+2. In DETAILED FINDINGS, the NEXT ACTIONS must include the exact commands using the device number from the report. For example, if disk 3008 on NODE3 is in maintenance mode:
+   - "On NODE3, check the disk state: Get-PhysicalDisk -DeviceNumber 3008"
+   - "If maintenance is complete and the disk is healthy, disable maintenance mode: Get-PhysicalDisk -DeviceNumber 3008 | Disable-StorageMaintenanceMode"
+3. If multiple disks are in maintenance mode, list the command for each disk with its specific device number.
+4. In FOR L1 ENGINEERS - QUICK CHECKLIST, include:
+   - "Check if any physical disks are in maintenance mode: Get-PhysicalDisk | Where-Object OperationalStatus -eq 'In Maintenance Mode'"
+   - "For each disk in maintenance mode, disable it if no maintenance is in progress: Get-PhysicalDisk -DeviceNumber <number> | Disable-StorageMaintenanceMode"
+   - Add warning: "Confirm no active maintenance or firmware update is running on the disk before disabling maintenance mode."
+5. If virtual disks (CSVs) show Degraded/Warning health AND a physical disk is in maintenance mode, link the two in a single ISSUE. The maintenance mode disk is the root cause of the virtual disk degradation — do not create separate issues.
+6. Do not suggest hardware replacement for a disk in maintenance mode. Maintenance mode is an administrative state, not a hardware failure.
+
+L1 CHECKLIST ESCALATION RULE
+The final bullet in FOR L1 ENGINEERS - QUICK CHECKLIST must always be:
+"Escalate to the MS DE group if the problem cannot be resolved."
+"@
+
+$azureLocalRules = @"
+CLUSTER-TYPE-SPECIFIC RULES: AZURE LOCAL
+
+UPDATE PATH
+- Do NOT recommend manual BIOS, firmware, or driver updates. All component updates route through the Solution/SBE update workflow.
+- Focus update failure analysis on the "Solution and SBE Updates" table and the "Action Plan, Health Check and Firmware Failures" table.
+- Only include action-plan failures newer than the last successful update, unless an older failure is still actively blocking health.
+
+CAU AUTO UPDATE RULE
+If the Cluster Name table shows CAU Auto Update = Enabled AND the "Solution and SBE Updates" table contains any entry in InstallationFailed/Failed state, treat CAU Auto Update as informational only and move it to ITEMS TO IGNORE.
+
+UPDATE HISTORY RULE
+For any failed or pending Solution or SBE update, include in EVIDENCE: current installed Solution version, target Solution version, current installed SBE version, target SBE version (if the report shows them).
+
+SET-NETINTENTRETRYSTATE RULE
+If Set-NetIntentRetryState appears in the Action Plan, list it as the first action in RECOMMENDED ORDER OF WORK. Otherwise ignore this rule.
+
+KNOWN PROBLEM RESOLUTION RULE
+If action plan failure contains "SBE AX iDRAC USB NIC Health Check,A request for this resource from this client is already in progress"
+-Customer should run the following powershell commands on any node in the cluster and retry the update
+    $settingsMitigation = {
+        $ErrorActionPreference = "Stop"
+        $rootInstallPath = Get-Package -Destination C:\Agents\ -Name Microsoft.AzureStack.UpdateWinService | % Source | Split-Path
+        $settingsFilePath = Join-Path $rootInstallPath "content\UpdateWinService\Settings.xml"
+        Write-Host "[$($env:ComputerName)] Reading Settings.xml from $settingsFilePath"
+        if (-not (Test-Path $settingsFilePath)) {
+            throw "[$($env:ComputerName)] Unable to find Settings.xml at the expected path: $settingsFilePath"
+        }
+        Add-Type -AssemblyName "System.Xml.Linq"  
+        $xml = [xml](Get-Content $settingsFilePath)
+        $nsMgr = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+        $nsMgr.AddNamespace("fab", "http://schemas.microsoft.com/2011/01/fabric")
+        $targetSection = $xml.SelectSingleNode("//fab:Section[@Name='ServiceConfigSection']", $nsMgr)
+        if (-not $targetSection)
+        {
+            throw "[$($env:ComputerName)] Unable to find the ServiceConfigSection section in Settings.xml"
+        }
+        $existingParam = $targetSection.Parameter | where Name -eq "InFlightRequestGate_Enabled"
+        if (-not $existingParam)
+        {
+            throw "[$($env:ComputerName)] Unable to find the InFlightRequestGate_Enabled setting in Settings.xml"
+        }
+        $currentValue = $existingParam.GetAttribute("Value")
+        if ($currentValue -eq "false")
+        {
+            Write-Host "[$($env:ComputerName)] InFlightRequestGate_Enabled already set to '$currentValue'"
+            return
+        }
+        $existingParam.SetAttribute("Value", "false")
+        Write-Host "[$($env:ComputerName)] Saving modified Settings.xml to $settingsFilePath"
+        $xml.Save($settingsFilePath)
+    }
+    $nodes = Get-ClusterNode | % Name
+    Write-Host "Running command on nodes: $($nodes -join ', ')"
+    Invoke-Command -ComputerName $nodes -ScriptBlock $settingsMitigation
+
+NORMAL STATUS RULE
+Available Storage cluster group should be offline
+Cloud Management cluster group should be online 
+
+PRIORITY ORDER FOR RECOMMENDED ORDER OF WORK
+Item 1: The failed/unhealthy cluster group blocking the Azure Local Solution update (typically Cloud Management cluster group / RegisterCloudManagementClusterExtensions failure). The failed Solution update must not appear before its blocker.
+Then: (2) offline virtual machines, (4) any other health-blocking issue, (5) warnings.
+
+TSG MAPPING (MANDATORY — do not search for alternatives)
+- Cloud Management cluster group Failed OR RegisterCloudManagementClusterExtensions failure:
+  https://github.com/Azure/AzureLocal-Supportability/blob/main/TSG/Upgrade/Known-Issue-Cloud-Management-Cluster-Group-Missing-or-Failed-To-Start.md
+- Invoke-AzStackHciSDNNCValidation failure:
+  https://github.com/Azure/AzureLocal-Supportability/blob/main/TSG/Networking/Top-Of-Rack-Switch/Troubleshoot-TOR-LLDP-DCBX-PFC-RoCEv2.md
+
+TSG FORMAT IN NEXT ACTIONS
+If a TSG matches, use these EXACT two bullets:
+  "This matches the Azure Local known issue '<title>'. Look at this TSG to resolve the <issue> issue: <TSG_URL>"
+  "Also check the known-issues page for any additional related issues: https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md"
+If no TSG matches:
+  "No matching TSG was found. Review https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md for any related known issue."
+
+COMBINE RELATED FINDINGS
+Group failed update + blocked SBE + resulting BIOS/firmware/driver drift under one ISSUE with a clear root-cause name such as "Cloud Management cluster group failure blocking Azure Local Solution and SBE updates."
+"@
+
+$azureStackHciRules = @"
+CLUSTER-TYPE-SPECIFIC RULES: AZURE STACK HCI (pre-Azure Local)
+
+UPDATE PATH
+- Use the Dell EMC SBE guidance and Azure Stack HCI support matrix for update recommendations.
+- Do not manually flash individual components unless the report explicitly shows that SBE/CAU update path is unavailable for this OS version.
+- If an SBE update path exists, recommend it over manual firmware updates.
+- If CAU is configured, verify its health and last-run status before recommending manual patching.
+
+NORMAL STATUS RULE
+Available Storage cluster group should be offline
+
+PRIORITY ORDER FOR RECOMMENDED ORDER OF WORK
+1. Cluster health blockers (failed cluster groups, quorum issues)
+2. Offline VMs or roles
+3. Storage health (S2D pool status, disk health, CannotPool)
+4. Firmware/driver non-compliance against Dell support matrix
+5. Warnings
+
+STORAGE SPACES DIRECT RULES
+- Check Storage Pool health, virtual disk health, and physical disk status.
+- For disks in CannotPool state, check the CannotPoolReason before recommending action.
+- Do not recommend disk replacement until firmware compliance and pool repair have been evaluated.
+- Valid diagnostic commands: Get-StoragePool, Get-VirtualDisk, Get-PhysicalDisk, Get-StorageJob, Get-ClusterS2D, Debug-StorageSubSystem.
+
+NO AZURE LOCAL REFERENCES
+- Do not reference Solution/SBE update tables (they do not exist for this cluster type).
+- Do not reference Cloud Management cluster group, SDDC Group, or Set-NetIntentRetryState.
+- Do not link to Azure Local TSGs unless the symptom is explicitly documented as applying to Azure Stack HCI.
+"@
+
+$genericWsfcRules = @"
+CLUSTER-TYPE-SPECIFIC RULES: GENERIC WINDOWS FAILOVER CLUSTER
+
+This cluster may be Hyper-V, File Server, Scale-Out File Server (SOFS), SQL FCI, or another Windows Server failover cluster role using external shared storage (iSCSI, Fibre Channel, shared SAS) or local storage.
+
+UPDATE PATH
+- Evaluate firmware/BIOS/driver versions against the Dell support matrix for the server model.
+- Recommend updates through: Dell Server Update Utility (SUU), Dell Repository Manager, Dell OpenManage, Windows Update, or Cluster-Aware Updating (CAU) as appropriate.
+- If CAU is configured, verify its configuration and last-run status.
+- Manual firmware updates via Dell support downloads are acceptable for this cluster type.
+
+PRIORITY ORDER FOR RECOMMENDED ORDER OF WORK
+1. Cluster health blockers (failed cluster groups, quorum issues, witness failures)
+2. Offline roles or resources (VMs, file shares, SQL instances, etc.)
+3. Storage connectivity and health (iSCSI sessions, FC paths, disk reservations, MPIO)
+4. Firmware/driver non-compliance
+5. Warnings
+
+STORAGE RULES (EXTERNAL STORAGE)
+- For iSCSI clusters: check iSCSI session count, multipath status, and target connectivity.
+- For Fibre Channel: check HBA status, path count, and MPIO policy.
+- Do not reference Storage Spaces Direct (S2D) commands. This cluster type does not use S2D unless the report explicitly shows an S2D pool.
+- Valid storage diagnostic commands: Get-ClusterSharedVolume, Get-ClusterResource, Get-Disk, Get-MSDSMGlobalDefaultLoadBalancePolicy, iscsicli, mpclaim.
+
+NO AZURE / S2D REFERENCES
+- Do not reference Solution/SBE update tables, Cloud Management cluster group, SDDC Group, Set-NetIntentRetryState, or Azure Local TSGs.
+- Do not reference Storage Spaces Direct cmdlets (Get-StoragePool, Get-ClusterS2D, Debug-StorageSubSystem) unless the report explicitly shows an S2D configuration.
+- Do not link to Azure Local or Azure Stack HCI known-issues pages.
+
+QUORUM AND WITNESS
+- Check quorum model and witness health. For generic clusters, this is often a higher-priority issue than for S2D clusters.
+- Valid commands: Get-ClusterQuorum, Get-ClusterResource (for witness resource).
+"@
+
+$outputFormat = @"
 OUTPUT FORMAT
 Respond using ONLY these four sections, in this exact order, with the exact headings. Do not add an introduction, conclusion, or any other section.
- 
+
 1. RECOMMENDED ORDER OF WORK
-   Numbered list of current actionable issues in priority order. Put update/health blockers and failed cluster groups first; warnings last. Combine all evidence for the same root cause into one numbered item.
-   Item 1 must always be the failed/unhealthy cluster group that is blocking the Azure Local Solution update (typically the Cloud Management cluster group / RegisterCloudManagementClusterExtensions failure). The failed Solution update must not appear before the cluster-group blocker that is causing it.
-   After item 1, use this priority order: (2) offline virtual machines, (3) SDDC Group PartialOnline, (5) any third-party filter driver such as VeeamFCT. Any other important items dealing with the problem. Do not reorder these items unless the data proves one is actively blocking health.
- 
+   Numbered list of current actionable issues in priority order (see cluster-type-specific priority rules above). Combine all evidence for the same root cause into one numbered item.
+
 2. FOR L1 ENGINEERS - QUICK CHECKLIST
-   Bullet list of read-only checks and safe first actions. The last bullet must always be the escalation step. Add a one-line production or data-loss warning when an action can affect production or data.
- 
+   Bullet list of read-only checks and safe first actions. Add a one-line production or data-loss warning when an action can affect production or data.
+   The last bullet must always be: "Escalate to the MS DE group if the problem cannot be resolved."
+
 3. DETAILED FINDINGS
-   One subsection per significant issue. Use this exact format:
+   One subsection per unique actionable issue. Use this exact format:
    ISSUE: <short, specific name>
    WHY IT MATTERS: <one sentence explaining the impact if this is not resolved>
    EVIDENCE:
@@ -7659,69 +7951,39 @@ Respond using ONLY these four sections, in this exact order, with the exact head
    - <action>
    - ...
    Include one subsection for each unique, actionable failure. Do not create multiple subsections for the same root cause that appears in more than one table or cell. If the same issue appears across multiple tables, list every affected table/field in the EVIDENCE section of a single subsection and keep WHY IT MATTERS and NEXT ACTIONS unique. Label historical issues [HISTORICAL].
- 
+
 4. ITEMS TO IGNORE
    Bullet list of flagged items that should not be actioned right now, with the reason.
- 
-GENERAL ANALYSIS RULES
-1. Do not rely on the Results Summary table. Examine the actual section tables directly.
-2. Identify every cell with a red background and explain why it is flagged based on the data in that section.
-3. Determine the cluster type first, then apply the correct update path:
-   a. Azure Local: Do NOT recommend manual BIOS/firmware/driver updates. Route all component updates through the pending Solution/SBE update workflow. Focus update failure analysis on the "Solution and SBE Updates" table and the "Action Plan, Health Check and Firmware Failures" table.
-   b. Azure Stack HCI: Use the Azure Stack HCI support matrix and Dell EMC SBE guidance if available. Do not manually flash components unless the report explicitly supports it for this OS version.
-   c. Generic Windows Failover Cluster / Hyper-V / File Server / SOFS / SQL FCI: Evaluate firmware/BIOS/driver drift against the Dell support matrix and recommend the normal Dell update path. Reference Windows Update, Cluster-Aware Updating (CAU), or the appropriate update mechanism shown in the report.
-4. Do not jump to hardware replacement for disk issues. First evaluate CannotPool and firmware/BIOS/driver non-compliance.
-5. Do not suggest node-level repair commands (e.g., Repair-Server, Repair-Cluster, Remove-ClusterNode) unless the report explicitly supports it and you have warned about production impact and data-loss risk.
-6. If Set-NetIntentRetryState appears in the Action Plan, list it as the first action; otherwise ignore this rule.
-7. Ignore UseAnyNetworkForMigration = False issues.
-8. Only include action-plan failures that are newer than the last successful update, unless an older failure is still actively blocking health.
-9. If a pending reboot/restart-required warning exists, check the last reboot time in the Cluster Nodes table before calling it out.
-10. Do not use words like "likely", "probably", "maybe", or "suspect". State only what the data shows.
-11. Allowed reference sources only:
-    - https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md
-    - https://github.com/Azure/AzureLocal-Supportability/
-    - https://www.dell.com/support/
-    Do not include any URL that is not from one of those sources. Do not invent URLs.
- 
-CAU AUTO UPDATE RULE
-If the Cluster Name table shows CAU Auto Update = Enabled, AND the "Solution and SBE Updates" table contains any entry in InstallationFailed, Failed, or another failed/in-progress state, treat CAU Auto Update as informational only and move it to "Items to Ignore". Do not list it as a separate actionable issue.
- 
-UPDATE HISTORY RULE
-For any failed or pending Solution or SBE update, include the last successfully installed/registered version and the target version in the EVIDENCE. For example, include the current installed Solution version, the target Solution version, the current installed SBE version, and the target SBE version if the report shows them.
- 
-TSG AND KNOWN ISSUES FORMAT
-1. If a TSG from https://github.com/Azure/AzureLocal-Supportability/ closely matches the action plan table error message or symptom, use these EXACT two bullets in NEXT ACTIONS:
-   "This matches the Azure Local known issue '<title>'. Look at this TSG to resolve the <issue> issue: <TSG_URL>"
-   "Also check the known-issues page for any additional related issues: https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md"
-   Replace <title> with the exact known-issue title, <issue> with the short issue name, and <TSG_URL> with the full TSG URL. Do not place any punctuation immediately after the TSG URL.
-2. If no TSG closely matches, use this EXACT format:
-   "No matching TSG was found. Review https://github.com/MicrosoftDocs/azure-stack-docs/blob/main/azure-local/known-issues.md for any related known issue."
-3. Do not use any other wording for TSG or known-issue references. The top-level known-issues.md page must never be the only link in a NEXT ACTION unless no TSG matches.
- 
-L1 CHECKLIST ESCALATION RULE
-The final bullet in the FOR L1 ENGINEERS - QUICK CHECKLIST must always be:
-"Escalate to the MS DE group if the problem cannot be resolved."
-This bullet must appear even if all other checklist items are read-only.
- 
-TSG MAPPING RULE
-For these common Azure Local failures, use the exact TSG URL shown; do not search or say "no matching TSG":
-- Cloud Management cluster group Failed OR RegisterCloudManagementClusterExtensions failure -> https://github.com/Azure/AzureLocal-Supportability/blob/main/TSG/Upgrade/Known-Issue-Cloud-Management-Cluster-Group-Missing-or-Failed-To-Start.md
-- Invoke-AzStackHciSDNNCValidation failure -> https://github.com/Azure/AzureLocal-Supportability/blob/main/TSG/Networking/Top-Of-Rack-Switch/Troubleshoot-TOR-LLDP-DCBX-PFC-RoCEv2.md
- 
-FILTER DRIVER RULE
-If the FLTMC Logs table shows a non-Microsoft file-system filter driver (for example, VeeamFCT), do not create a DETAILED FINDING or a FOR L1 ENGINEERS action item. Move it to "Items to Ignore" with the reason: "Third-party filter drivers are not an L1 actionable item; escalate to the MS DE group if backup or storage symptoms are present."
- 
-COMBINE RELATED FINDINGS
-Do not split a failed update, its blocked SBE update, and the resulting BIOS/firmware/driver drift into multiple ISSUE subsections. Group all related evidence under one ISSUE with a clear root-cause name such as "Cloud Management cluster group failure blocking Azure Local Solution and SBE updates". Mention the standalone SBE requirement only once if relevant, or omit if not applicable.
- 
-DEDUPLICATION RULE
-If the same error, warning, or root cause is shown in multiple tables or cells, do not repeat the ISSUE, WHY IT MATTERS, or NEXT ACTIONS. Create exactly one subsection for that unique issue and list every affected table/field in the EVIDENCE section. Do not copy the same summary text into a separate section for each table.
- 
+"@
+
+# Map cluster type to rules and label
+switch ($clusterType) {
+    'AzureLocal' {
+        $clusterRules     = $azureLocalRules
+        $clusterTypeLabel = 'Azure Local (cloud-managed, Solution/SBE update path)'
+    }
+    'AzureStackHCI' {
+        $clusterRules     = $azureStackHciRules
+        $clusterTypeLabel = 'Azure Stack HCI (pre-Azure Local, no Solution/SBE table)'
+    }
+    'GenericWSFC' {
+        $clusterRules     = $genericWsfcRules
+        $clusterTypeLabel = 'Generic Windows Failover Cluster (non-Azure, external or local storage)'
+    }
+}
+$resolvedSharedRules = $sharedRules -replace '%%CLUSTER_TYPE_LABEL%%', $clusterTypeLabel
+
+# Assemble final prompt
+$prompt = @"
+$resolvedSharedRules
+
+$clusterRules
+
+$outputFormat
+
 Report Title: $reportTitle
- 
 Report HTML:
 $reportBody
- 
 $sddcContext
 Action Plan errors:
 $errorList
@@ -7743,7 +8005,7 @@ $errorList
         $errFile = [System.IO.Path]::GetTempFileName()
 
         Write-Host "[AI] Generating AI summary. Estimated time: 2-5 minutes... (attempt $attempt of $maxAttempts)"
-
+        $aiStart=(Get-Date)
         try {
             $p = Start-Process -FilePath $devinPath -ArgumentList @('--prompt-file', $promptFile, '--print', '--respect-workspace-trust', 'false', '--permission-mode', 'auto') -RedirectStandardOutput $outFile -RedirectStandardError $errFile -NoNewWindow -PassThru -ErrorAction Stop
 
@@ -8104,7 +8366,8 @@ $errorList
             break
         }
     } while ($attempt -lt $maxAttempts)
-
+    $aiStop=(Get-Date)
+    Write-Host "AI summary took $(($aiStop-$aiStart).totalseconds) seconds"
     Remove-Item $promptFile, $outFile, $errFile, $authOut, $authErr -ErrorAction SilentlyContinue
     } else {
         Write-Warning "[AI] Devin CLI was found, but authentication could not be verified."
