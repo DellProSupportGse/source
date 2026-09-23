@@ -18,12 +18,19 @@
 .CREATEDBY
     Jim Gandy
 .UPDATES
+    2026/09/23:v1.38.1 - JG - Fixed startup confirmation flow after telemetry integration.
+    2026/09/23:v1.38 - JG - Added DriFT-style startup telemetry through the shared PostTelemetryData Azure Function.
     2026/08/20:v1.37 - JG - Updated links to the validated switch configs.
     2026/08/20:v1.36 - JG - Modernized SLIC HTML report to match CluChk 2.0 visual framework.
     See GitHub pull requests for history
 
 #>
 Function Invoke-SLIC {
+    [CmdletBinding()]
+    param(
+        [bool]$uploadToAzure = $true,
+        [switch]$DebugTelemetry
+    )
 
 # Console output intentionally uses ASCII-only status markers so the script renders
 # consistently in Windows PowerShell 5.1 and PowerShell ISE. HTML-only symbols are
@@ -32,7 +39,217 @@ Function Invoke-SLIC {
 Function EndScript{  
     break
 }
-$Ver="v1.37"
+$Ver="v1.38"
+
+#region === Telemetry ===
+# Mirrors the startup telemetry pattern used by DriFT. Telemetry failures are
+# intentionally non-fatal and never prevent SLIC from running.
+$script:TelemetryReportID    = [guid]::NewGuid().Guid
+$script:TelemetryGeoResolved = $false
+$script:TelemetryGeoData     = @{}
+$script:TelemetryStartupSent = $false
+$script:uploadToAzure        = [bool]$uploadToAzure
+
+function Write-TelemetryIndent {
+    param(
+        [string]$Message,
+        [int]$Level = 1,
+        [string]$Color = "Gray"
+    )
+
+    try {
+        $prefix = "  " * $Level
+        Write-Host "$prefix$Message" -ForegroundColor $Color
+    }
+    catch {}
+}
+
+function Get-TelemetryMachineHash {
+    try {
+        $raw = "$env:USERDOMAIN\$env:USERNAME@$env:COMPUTERNAME"
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+        $hash = $sha.ComputeHash($bytes)
+        return ([BitConverter]::ToString($hash)).Replace("-","").Substring(0,24)
+    }
+    catch {
+        return ""
+    }
+}
+
+function Resolve-TelemetryGeo {
+    try {
+        if ($script:TelemetryGeoResolved) { return }
+        Write-TelemetryIndent "Resolving Geo Location..."
+
+        if (-not $global:GeoCache) {
+            $global:GeoCache = Invoke-RestMethod "https://ipwho.is/" -TimeoutSec 5
+        }
+
+        $response = $global:GeoCache
+
+        if ($response.success -eq $true) {
+            $script:TelemetryGeoData = @{
+                country     = [string]$response.country
+                countryCode = [string]$response.country_code
+                region      = [string]$response.region
+                city        = [string]$response.city
+                latitude    = [string]$response.latitude
+                longitude   = [string]$response.longitude
+                timezone    = [string]$response.timezone.id
+            }
+            Write-TelemetryIndent "Country: $($script:TelemetryGeoData.country)" 2
+            Write-TelemetryIndent "Region : $($script:TelemetryGeoData.region)" 2
+        }
+        else {
+            $LocalRegionInfo = [System.Globalization.RegionInfo]::CurrentRegion
+            $script:TelemetryGeoData = @{
+                country     = [string]$LocalRegionInfo.EnglishName
+                countryCode = [string]$LocalRegionInfo.TwoLetterISORegionName
+                region      = $null
+                city        = $null
+                latitude    = $null
+                longitude   = $null
+                timezone    = [string](Get-TimeZone).Id
+            }
+            Write-TelemetryIndent "Country: $($script:TelemetryGeoData.country) (Local fallback)" 2
+        }
+    }
+    catch {
+        try {
+            Write-TelemetryIndent "WARN: ipwho lookup failed - using local Windows settings" 2 Yellow
+            $LocalRegionInfo = [System.Globalization.RegionInfo]::CurrentRegion
+            $script:TelemetryGeoData = @{
+                country     = [string]$LocalRegionInfo.EnglishName
+                countryCode = [string]$LocalRegionInfo.TwoLetterISORegionName
+                region      = $null
+                city        = $null
+                latitude    = $null
+                longitude   = $null
+                timezone    = [string](Get-TimeZone).Id
+            }
+            Write-TelemetryIndent "Country: $($script:TelemetryGeoData.country) (Local fallback)" 2
+        }
+        catch {
+            $script:TelemetryGeoData = @{}
+        }
+    }
+    finally {
+        $script:TelemetryGeoResolved = $true
+    }
+}
+
+function Send-ToolTelemetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TelemetryName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$EventName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Version,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Endpoint,
+
+        [switch]$NoGeo,
+        [switch]$DebugTelemetry
+    )
+
+    if (-not $script:uploadToAzure) { return }
+
+    if ($EventName -match '^(Startup|Launch|AppStart|ToolStart|TelemetryStartup)$') {
+        if ($script:TelemetryStartupSent) { return }
+        $script:TelemetryStartupSent = $true
+    }
+
+    try {
+        if (-not $NoGeo) {
+            Resolve-TelemetryGeo
+        }
+
+        $rowKey = [guid]::NewGuid().Guid
+        $partitionKey = $TelemetryName -replace 'TelemetryData$',''
+
+        $data = [ordered]@{
+            PartitionKey = $partitionKey
+            RowKey       = $rowKey
+            PSVersion    = $PSVersionTable.PSVersion.ToString()
+            Region       = $script:TelemetryGeoData.region
+            countryCode  = $script:TelemetryGeoData.countryCode
+            lon          = $script:TelemetryGeoData.longitude
+            MachineHash  = Get-TelemetryMachineHash
+            geoRegion    = $script:TelemetryGeoData.region
+            lat          = $script:TelemetryGeoData.latitude
+            Version      = $Version
+            timezone     = $script:TelemetryGeoData.timezone
+            ReportID     = $script:TelemetryReportID
+            city         = $script:TelemetryGeoData.city
+            country      = $script:TelemetryGeoData.country
+        }
+
+        $payload = @{
+            TelemetryName = $TelemetryName
+            TableName     = $TelemetryName
+            Data          = $data
+        }
+
+        $body = $payload | ConvertTo-Json -Depth 10
+
+        if ($DebugTelemetry) {
+            Write-Host "Telemetry Request:" -ForegroundColor Cyan
+            Write-Host $body
+        }
+
+        $response = Invoke-RestMethod `
+            -Method Post `
+            -Uri $Endpoint `
+            -ContentType "application/json" `
+            -Body $body `
+            -TimeoutSec 15
+
+        if ($DebugTelemetry) {
+            Write-Host "Telemetry Response:" -ForegroundColor Green
+            $response | ConvertTo-Json -Depth 10
+        }
+        else {
+            Write-TelemetryIndent "Telemetry recorded successfully" 1 Green
+        }
+    }
+    catch {
+        if ($DebugTelemetry) {
+            Write-Warning "Telemetry failed: $($_.Exception.Message)"
+            if ($_.ErrorDetails.Message) {
+                Write-Warning $_.ErrorDetails.Message
+            }
+        }
+        return
+    }
+}
+
+function Write-SLICTelemetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Version,
+        [switch]$DebugTelemetry
+    )
+
+    if (-not $script:uploadToAzure) { return }
+
+    $telemetryParams = @{
+        TelemetryName  = "SLICTelemetryData"
+        EventName      = "Startup"
+        Version        = $Version
+        Endpoint       = "https://gsetools-bufhdqefb8e6ecc6.centralus-01.azurewebsites.net/api/PostTelemetryData"
+        DebugTelemetry = [bool]$DebugTelemetry
+    }
+
+    Send-ToolTelemetry @telemetryParams
+}
+#endregion === Telemetry ===
 $ToolName = @"
 $Ver
   ___ _    ___ ___ 
@@ -45,29 +262,28 @@ $Ver
 Clear-Host
 Write-Host $ToolName
 Write-Host ""
+Write-SLICTelemetry -Version ($Ver -replace '^v','') -DebugTelemetry:$DebugTelemetry
+Write-Host ""
 Write-Host "[!] SLIC Compatibility Notice:" -ForegroundColor Yellow
 Write-host "       This tool currently supports Azure Local and Windows Server S2D clusters only."
-do {
-    $run = Read-Host "Ready to run? [Y/N]"
+while ($true) {
+    $run = (Read-Host "Ready to run? [Y/N]").Trim()
     Write-Host ""
 
     if ($run -match '^[Yy]$') {
-        Write-Host "Running script..."
-        $confirmed = $true
+        Write-Host "Running script..." -ForegroundColor Green
+        break
     }
-    elseif ($run -match '^[Nn]$') {
+
+    if ($run -match '^[Nn]$') {
         Write-Host "Exiting script..."
-        EndScript
-        $confirmed = $true
-    }
-    else {
-        Write-Host "Please enter Y or N."
-        $confirmed = $false
+        return
     }
 
-} until ($confirmed)
+    Write-Host "Please enter Y or N." -ForegroundColor Yellow
+}
 
-If($confirmed -eq $true){
+if ($true) {
     Function Get-FileName([string]$initialDirectory, [string]$infoTxt, [string]$filter) {
     [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null
 
@@ -83,7 +299,7 @@ If($confirmed -eq $true){
     $STSLOC = Get-FileName "$env:USERPROFILE\Documents\SRs" "Please Select Show Tech-Support File(s)." "Logs (*.txt,*.log)| *.TXT;*.log"
     If(!($STSLOC)){
         Write-Host "No logs provided. Exiting script..."
-        EndScript
+        return
     }Else{
         Write-Host "[+] Switch Logs:" $STSLOC -ForegroundColor Green
     }
@@ -92,7 +308,7 @@ If($confirmed -eq $true){
     
     If(!(Test-Path $SDDCPath -ErrorAction SilentlyContinue)){
         Write-Host "SDDC path not found. Exiting script..." -ForegroundColor Red
-        EndScript
+        return
     }Else{
         Write-Host "[+] SDDC Path:" $SDDCPath -ForegroundColor Green
     }
