@@ -39,7 +39,7 @@ Function Invoke-SLIC {
 Function EndScript{  
     break
 }
-$Ver="v1.38"
+$Ver="v1.38.1"
 
 #region === Telemetry ===
 # Mirrors the startup telemetry pattern used by DriFT. Telemetry failures are
@@ -48,7 +48,7 @@ $script:TelemetryReportID    = [guid]::NewGuid().Guid
 $script:TelemetryGeoResolved = $false
 $script:TelemetryGeoData     = @{}
 $script:TelemetryStartupSent = $false
-$script:uploadToAzure        = [bool]$uploadToAzure
+$script:uploadToAzure        = $true
 
 function Write-TelemetryIndent {
     param(
