@@ -19,6 +19,9 @@
 
     Alternatively, uncomment the auto-execute block at the bottom.
 .Updates
+    2026/09/28:v1.0.2    1. New feature: TP - Added running Test-Cluster
+                         2. New feature: TP - At JGs request, added Get-PNPDevice -Cimsession _C_
+
     2026/08/14:v1.0.1 -  1. New Update: TP - Gather Processor Information and System counters
                          2. New Update: TP - Get a GetCounters.BLG run from each node directly for optimization
 
@@ -27,7 +30,7 @@
 #>
 # CONVERSION: replaced $Module with script-scope variables
 $script:ModuleName   = 'GetDellSDDC'
-$script:ScriptVersion = '1.0.1'
+$script:ScriptVersion = '1.0.2'
 
 ###############################################################################
 # region CommonFuncBlock — helpers shared with child jobs/sessions
@@ -553,7 +556,8 @@ function Invoke-SddcCommonCommand (
     [scriptblock] $InitBlock,
     [scriptblock] $ScriptBlock,
     [string] $SessionConfigurationName,
-    [Object[]] $ArgumentList
+    [Object[]] $ArgumentList,
+    [boolean] $testClusterRun=$false
 ) {
     $Job = @()
     $Sessions = @()
@@ -1735,6 +1739,7 @@ function Invoke-GetDellSDDC {
 
     $OS = Get-CimInstance -ClassName Win32_OperatingSystem
     $S2DEnabled = $false
+    $testClusterRun=$false
     if ([uint64]$OS.BuildNumber -lt 14393) {
         Show-Error("Wrong OS Version - Need at least Windows Server 2016. BuildNumber $($OS.BuildNumber)")
     }
@@ -2012,6 +2017,13 @@ function Invoke-GetDellSDDC {
             try { $o = Get-CauClusterRole; $o | Export-Clixml ($using:Path + "GetCauClusterRole.XML") }
             catch { Write-Warning "Unable to get CAU Cluster Role `nError=$($_.Exception.Message)" }
         }
+        
+        Show-Update "Start Test-Cluster..."
+        $testClusterRun=$true
+        $JobStatic += start-job -Name TestCluster {
+            try { $o = Test-Cluster; $o | Export-Clixml ($using:Path + "TestCluster.XML") }
+            catch { Write-Warning "Unable to run Test-Cluster. `nError=$($_.Exception.Message)" }
+        }
 
         Show-Update "Start gather of Network ATC information..."
         $NetworkATC = $False
@@ -2222,7 +2234,7 @@ function Invoke-GetDellSDDC {
 
     $JobStatic += $ClusterNodes.Name |% {
         $NodeName = $_
-        Invoke-SddcCommonCommand -JobName "System Info: $NodeName" -InitBlock $CommonFunc -SessionConfigurationName $SessionConfigurationName -ScriptBlock {
+        Invoke-SddcCommonCommand -testClusterRun $testClusterRun -JobName "System Info: $NodeName" -InitBlock $CommonFunc -SessionConfigurationName $SessionConfigurationName -ScriptBlock {
             $Node = "$using:NodeName"
             if ($using:ClusterDomain.Length) { $Node += ".$using:ClusterDomain" }
             $LocalNodeDir = Get-NodePath $using:Path $using:NodeName
@@ -2289,6 +2301,7 @@ function Invoke-GetDellSDDC {
                 'Invoke-Command -ComputerName _C_ {Get-WindowsFeature | Sort-Object -Property @{Expression="Installed";Descending=$true}, @{Expression="Name";Descending=$false} | Select-Object DisplayName, Name, Installed}',
                 'Get-VMNetworkAdapterIsolation -ManagementOS -CimSession _C_',
                 'Invoke-Command -ComputerName _C_ {Echo Get-gpresult;gpresult /Z}',
+                'Get-PnpDevice -CimSession _C_',
                 'Get-DnsClientServerAddress -CimSession _C_'
 
             if (Get-Module DcbQos -ErrorAction SilentlyContinue) {
@@ -2360,6 +2373,26 @@ function Invoke-GetDellSDDC {
                 } catch { $DmpFiles = ""; Show-Warning "Unable to get LiveKernelReports files for node $using:NodeName" }
                 $DmpFiles |% { try { Copy-Item $_.FullName $LocalNodeDir } catch { Show-Warning "Could not copy LiveKernelReports file $($_.FullName)" } }
             }
+            Do {
+                Start-Sleep -Seconds 1
+                foreach ($job in ($nodejobs | Where-Object { $_.State -eq 'Completed' -and -not $_.JobStatus })) {
+                    $LocalFile = $job.Name
+                    $output = Receive-Job $job
+                    $output | Format-Table -AutoSize | Out-File -Width 9999 -Encoding ascii -FilePath "$LocalFile.txt"
+                    $output | Export-Clixml -Path "$LocalFile.xml"
+                    $job | Add-Member -MemberType NoteProperty -Name "JobStatus" -Value "JOBDONE" -Force
+                    $job.Dispose()
+                }
+                $nodejobs | Format-List * | Out-File -FilePath (Join-Path $LocalNodeDir "GetNodeJobsStatus.txt")
+            } while ($nodejobs.State -contains 'Running')
+            if ($using:testClusterRun) {
+                Show-Update "Waiting on Test-Cluster to finish..."
+                $xx=0
+                Do {
+                    Start-Sleep -Seconds 1
+                    $xx++
+                } While (!((gci "C:\windows\cluster\Reports\validation re*" -ErrorAction SilentlyContinue | Sort LastWriteTime | Select -Last 1) | ? LastWriteTime -gt (Get-Date).AddHours(-1)) -and $xx -lt 600)
+            }
 
             Show-Update "Gathering Cluster Reports..."
             try {
@@ -2380,19 +2413,6 @@ function Invoke-GetDellSDDC {
             $LocalReportDir = Join-Path $LocalNodeDir "ClusterReports"
             md $LocalReportDir -ErrorAction SilentlyContinue | Out-Null
             md $LocalDiagsDir -ErrorAction SilentlyContinue | Out-Null
-
-            Do {
-                Start-Sleep -Seconds 1
-                foreach ($job in ($nodejobs | Where-Object { $_.State -eq 'Completed' -and -not $_.JobStatus })) {
-                    $LocalFile = $job.Name
-                    $output = Receive-Job $job
-                    $output | Format-Table -AutoSize | Out-File -Width 9999 -Encoding ascii -FilePath "$LocalFile.txt"
-                    $output | Export-Clixml -Path "$LocalFile.xml"
-                    $job | Add-Member -MemberType NoteProperty -Name "JobStatus" -Value "JOBDONE" -Force
-                    $job.Dispose()
-                }
-                $nodejobs | Format-List * | Out-File -FilePath (Join-Path $LocalNodeDir "GetNodeJobsStatus.txt")
-            } while ($nodejobs.State -contains 'Running')
 
             $FailedJobs = @()
             foreach ($job in ($nodejobs | Where-Object { $_.State -ne 'Completed' })) { $FailedJobs += $job }
