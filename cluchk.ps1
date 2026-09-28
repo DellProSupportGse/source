@@ -26,6 +26,13 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/09/28:v2.05 -  1. New Update: TP - If missing, alternately find the physical disk cluster node from the disk ID. May not work for clusters with more than 9 nodes.
+                        2. New Update: TP - If a VM Switch nic is not Up, mark it as an error in the VM Switch table
+                        3. Bug Fix: TP - Change devin command call to try to make it more stable.
+                        4. New Update: TP - Changed the way Physical Disks handle their Operational Status to provide clearer information.
+                        5. New Update: TP - Mark Action Plan errors based on Last Mas Update Failure date or Last Health Check date
+                        6. Bug fix: TP - For solution/sbe updates, ignore healthstate if state is Installed.
+
     2026/09/17:v2.04 -  1. Bug Fix: TP - Updated devin prompt to try to avoid making up commands.
                         2. New Update: TP - Optimized AI summary prompt
                         3. Bug Fix: TP - Fixed a couple of bad links
@@ -82,7 +89,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.04"
+$CluChkVer="2.05"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -3816,7 +3823,22 @@ $htmlout+=$html
         @{Label='OperationalStatus';Expression={`
         $2ndOperStatus=-1
         if ($_.OperationalStatus.gettype().basetype.name -eq "Array") {$2ndOperStatus=$_.OperationalStatus | Sort | Select -last 1}
-        IF ($2ndOperStatus -eq '53270') {'In Maintenance Mode'} elseif ($2ndOperStatus -eq '53285') {'RREEDDThreshold Exceeded'} elseif ($2ndOperStatus -eq '53286') {'RREEDDAbnormal Latency'} elseif ($2ndOperStatus -eq '53271') {'RREEDDUpdating Firmware'} elseif ([int]($2ndOperStatus) -gt 18) {"RREEDDUnknown-$2ndOperStatus"
+        if ($2ndOperStatus -gt 18) {
+            $opStatusText=@()
+            $opStatusText+=Foreach ($opstatus in $_.OperationalStatus) {
+                Switch ($opstatus) {
+                '53270' {'In Maintenance Mode'}
+                '53285' {'Threshold Exceeded'}
+                '53286' {'Abnormal Latency'}
+                '53271' {'Updating Firmware'}
+                '53277' {'Stopping Maintenance Mode'}
+                '53274' {'Transient Error'}
+                '53255' {'IO Error'}
+                Default {If ($opstatus -gt 18) {"Unknown-$opstatus"}}
+                }
+            }
+        }
+        IF ($opStatusText.count -gt 0) {"RREEDD$($opStatusText -join ',')"
         } else {
              if ($_.OperationalStatus.gettype().basetype.name -eq "Array") {$OperStat=$_.OperationalStatus[0]} else {$OperStat=$_.OperationalStatus}
              @('Unknown','Other','OK','RREEDDDegraded','RREEDDStressed','RREEDDPredictive Failure','RREEDDError','RREEDDNon-Recoverable Error','Stopping',`
@@ -3914,7 +3936,7 @@ $AllNVMe=$True
         $ConnectHost2PhysicalDisk=@()
             ForEach($Disk in $PhysicalDisks){
                 $ConnectHost2PhysicalDisk+=$Disk | Select-Object `
-                @{Label='Node';Expression={$NodeD=($GetStorageFaultDomain|Where-Object{$_.SerialNumber -eq $disk.SerialNumber}|Select-Object -expandproperty Node -first 1);IF($NodeD){$NodeD}Else{"Missing"}}`
+                @{Label='Node';Expression={$id=$_.id;$NodeD=($GetStorageFaultDomain|Where-Object{$_.SerialNumber -eq $disk.SerialNumber}|Select-Object -expandproperty Node -first 1);IF($NodeD){$NodeD}Else{if ($id) {$NodeD=($ClusterNodes | ? Id -eq $id.substring(0,$id.length-3)).Name;IF($NodeD -gt ""){$NodeD}}Else{"Missing"}}}`
                 } ,ID,FriendlyName,UniqueID,SerialNumber,Slot,MediaType,CanPool,CannotPool,OperationalStatus,HealthStatus,Usage,Size,AllocatedSize,Utilization,Outlier,`
                 @{L='MatrixVersion';E={$diskmdlsfirm[$_.model]}},
 @{L='InstalledVersion';E={
@@ -5097,7 +5119,8 @@ Remove-Item $Destination -Force -ErrorAction SilentlyContinue
               If ($SolutionUpdateFile.State -gt "") {
                  $SolutionUpdates=$SolutionUpdates+=$SolutionUpdateFile | Select-Object ResourceId,Version,@{L="HealthState";E={"RREEDD"*(@("Unknown","Success") -notcontains $_.HealthState)+$_.HealthState}},@{L="State";E={"RREEDD"*(@("NotApplicableBecauseAnotherUpdateIsInProgress","Installed","Ready","ReadyToInstall","Obsolete") -notcontains $_.State)+$_.State}},InstalledDate,MinVersionRequired,MinSBEVersionRequied,ComponentVersions
               }
-           } 
+           }
+           $SolutionUpdates | %{if ($_.State -eq "Installed") {$_.HealthState=$_.HealthState -replace "RREEDD",""}}
            $SolutionUpdates = $SolutionUpdates | Sort ResourceId -Unique 
            $HealthCheckIssues=$SolutionUpdateFiles | ? {$_ -ne $null} | ? {$_.State -le "" -and $_.Status -ne "SUCCESS" -and $_.Severity -ne "INFORMATIONAL" }
 
@@ -5645,7 +5668,12 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
         
         }
         Foreach ($APLMU in (Get-ChildItem -Path $SDDCPath -Filter "AzureStackFailedActionPlanInformation.json" -Recurse -Depth 1 -ErrorAction SilentlyContinue)) {
-            $apfails=(gc $APLMU.FullName | ConvertFrom-Json).ProgressAsXml
+            $jsonData = Get-Content $APLMU.FullName | ConvertFrom-Json
+            $masUpdatePlans = $jsonData | Where-Object { $_.ActionPlanName -like "*MAS Update*" }
+            if ($masUpdatePlans) {
+                $LatestMASTry = [datetime] ($masUpdatePlans | Sort-Object { [DateTime]::Parse($_.EndDateTime) } -Descending | Select-Object -First 1).EndDateTime
+            }
+            $apfails=$jsonData.ProgressAsXml
             Foreach ($apupdate in $apfails) {
                 $StopErrors=@()
                 $StopErrors += ([xml]$apupdate).SelectNodes("//Task") | where Status -eq "Error" | where Action -eq $null | where Exception -ne $null
@@ -5677,6 +5705,14 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
             }
         }
         Write-Indent -Level 2 -Message "Checked AzureStackFailedActionPlanInformation.json"
+        $LatestHealthCheck=$null
+        $HealthCheckState=$null
+        $SDDCFiles.keys | ?{$_ -like '*GetSolutionUpdateEnvironment' } | %{
+            if (($SDDCFiles."$($_)").LastChecked) { 
+                $LatestHealthCheck=Get-Date "$(($SDDCFiles."$($_)").LastChecked)"
+                $HealthCheckState=$SDDCFiles."$($_)".HealthState
+            }
+        }
         $ECEErrors="Extra content found error
 Extra directory found error
 SBE Manifest Credentialist Schema for secret
@@ -5774,12 +5810,31 @@ Unable to add KV info to
         $resultObject += $errors
         #>
         $ActionPlanErrors=$resultObject | Group-Object -Property Target,Message | %{$_.Group | sort {Get-Date $_.TimeStamp} -Descending | Select -First 1} | sort {Get-Date $_.TimeStamp} -Descending
+        $EndAPDate=Get-Date $SysInfo[0].LocalTime
+        If ($SolutionUpdates.State -match "RREEDDInstallationFailed") {
+            $EndAPDate=$LatestMASTry
+        } else {
+            $EndAPDate=$LatestHealthCheck
+        }
         Foreach ($apfailure in $ActionPlanErrors) {
-            if ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).Date.AddDays(-4)) {
+            if ((Get-Date $apfailure.TimeStamp) -ge $EndAPDate.AddDays(-2) -and (Get-Date $apfailure.TimeStamp) -le $EndAPDate) {
                     $apfailure.Target="RREEDD" + $apfailure.Target
-            } elseif ((Get-Date $apfailure.TimeStamp) -gt (Get-Date $SysInfo[0].LocalTime).Date.AddDays(-8)) {
-                    $apfailure.Target="YYEELLLLOOWW" + $apfailure.Target
+            } elseif ((Get-Date $apfailure.TimeStamp) -ge $LatestHealthCheck.AddDays(-2)) {
+                    if ($apfailure.Target -notmatch "RREEDD") {$apfailure.Target="YYEELLLLOOWW" + $apfailure.Target}
             }
+        } 
+        $ActionPlanErrors = $ActionPlanErrors | Sort-Object -Property @{
+            Expression = {
+                switch -Regex ($_.Target) {
+                    "^RREEDD"    { 0 }
+                    "^YYEELLLLOOWW" { 1 }
+                    default     { 2 }
+                }
+            }
+            Ascending = $true
+        }, @{
+            Expression = { [DateTime]$_.TimeStamp }
+            Descending = $true
         }
         If ($ActionPlanErrors) {
            Add-Type -AssemblyName System.Web
@@ -5885,7 +5940,7 @@ Unable to add KV info to
            Get-Job | Remove-Job
            #HTML Report
            $html+='<H2 id="ActionPlanHealthCheckandFirmwareFailures">Action Plan, Health Check and Firmware Failures</H2>'
-           $html+='<H5><b>NOTE: Failures less than 4 days are marked as ERROR. Some of these may have already been corrected.</b></H5>'
+           $html+='<H5><b>NOTE: Failures around the primary failure time are marked with ERROR. Some of these may have already been corrected.</b></H5>'
            #$html+=$ActionPlanErrors | ConvertTo-html -Fragment | ForEach-Object { $_ -replace '(https?://\S+)', '<a href="$1">$1</a>' }
            $html+=[System.Web.HttpUtility]::HtmlDecode(($ActionPlanErrors | ConvertTo-Html))
            $html=$html `
@@ -6121,11 +6176,16 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #a4262c; backgr
                 IF(($_.EmbeddedTeamingEnabled -match 'True') -and ($_.BandwidthPercentage -lt 100 -and $IOVEnabled -ne $true)){"RREEDD"+$_.BandwidthPercentage}Else{$_.BandwidthPercentage}
             }Else{$_.BandwidthPercentage}}},`
         @{Label='NetAdapterInterfaceDescriptions';Expression={
+            $ComputerName=$_.ComputerName
             $NetIfDes=$_.NetAdapterInterfaceDescriptions -replace [regex]::match($_.NetAdapterInterfaceDescriptions,"\\d+")
+            $isNotUp=$false
+            $NetIfNote=""
+            foreach ($NetIfs in $NetIfDes) {If ($GetNetAdapterAll | ? PSComputerName -match $ComputerName | ? InterfaceDescription -eq $NetIfs | ? Status -ne "Up") {$isNotUp=$true;$NetIfNote="$NetIfNote`r`n$NetIfs status is not Up"}}
             IF($NetIfDes -match "Multiplexor"){
                 "YYEELLLLOOWW$NetIfDes"
-                }
-                Else{"$NetIfDes"}
+                } Elseif ($isNotUp) {
+                    "RREEDD$NetIfDes$NetIfNote"
+                } Else {"$NetIfDes"}
             }}
         $VMSwitchandAdapterconfiguration=$VMSwitchandAdapterconfiguration | Sort-Object EmbeddedTeamingEnabled| Select-Object ComputerName,Name,EmbeddedTeamingEnabled,`
         @{Label='BandwidthReservationMode';Expression={Switch($_.BandwidthReservationMode){
@@ -6158,7 +6218,7 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #a4262c; backgr
         $VMSwitchandAdapterconfiguration=$VMSwitchandAdapterconfiguration|`
                 Select-Object ComputerName,Name,EmbeddedTeamingEnabled,BandwidthReservationMode,BandwidthPercentage,NetAdapterInterfaceDescriptions,`
                 @{Label='Note';Expression={IF($_.NetAdapterInterfaceDescriptions -match "YYEELLLLOOWW"){"Found 1 gig NICs in Virtual Switch. We should NOT use 1 gig NICs in Management Virtual Switch."}
-                IF($_.Name -match "RREEDD"){"This switch should have at least one VM or external virtual adapter attached. Health check will fail."}}}
+                IF($_.Name -match "RREEDD"){"This switch should have at least one VM or external virtual adapter attached or a Nic is disconnected. Health check will fail."}}}
 
         #$VMSwitchandAdapterconfiguration|FT -AutoSize
         # HTML Report
@@ -7548,7 +7608,7 @@ if ($devinFound) {
             )
 
             Write-Host "[AI] Devin auth status exit code: $($authProc.ExitCode)"
-            if ($authExplicitlyLoggedIn -and $authProc.ExitCode -ne 0) {
+            if ($authExplicitlyLoggedIn -and $authProc.ExitCode -ne 0 -and $authProc.ExitCode -ne $null) {
                 Write-Host "[AI] Devin explicitly reports a valid logged-in session; accepting authentication despite CLI exit code $($authProc.ExitCode)." -ForegroundColor Yellow
             }
             if (-not [string]::IsNullOrWhiteSpace($authError)) {
@@ -7601,7 +7661,7 @@ if ($devinFound) {
                     $authExplicitlyLoggedIn -or $authProc.ExitCode -eq 0
                 )
 
-                if ($authExplicitlyLoggedIn -and $authProc.ExitCode -ne 0) {
+                if ($authExplicitlyLoggedIn -and $authProc.ExitCode -ne 0 -and $authProc.ExitCode -ne $null) {
                     Write-Host "[AI] Devin explicitly reports a valid logged-in session; accepting authentication despite CLI exit code $($authProc.ExitCode)." -ForegroundColor Yellow
                 }
 
@@ -8007,13 +8067,13 @@ $errorList
         Write-Host "[AI] Generating AI summary. Estimated time: 2-5 minutes... (attempt $attempt of $maxAttempts)"
         $aiStart=(Get-Date)
         try {
-            $p = Start-Process -FilePath $devinPath -ArgumentList @('--prompt-file', $promptFile, '--print', '--respect-workspace-trust', 'false', '--permission-mode', 'auto') -RedirectStandardOutput $outFile -RedirectStandardError $errFile -NoNewWindow -PassThru -ErrorAction Stop
+            $p = Start-Process -FilePath $devinPath -ArgumentList @('--prompt-file', $promptFile, '--print', '--respect-workspace-trust', 'false', '--permission-mode', 'auto','--export',"$outFile") -RedirectStandardError $errFile -NoNewWindow -PassThru -ErrorAction Stop
 
             if (-not $p.WaitForExit(300000)) {
                 $p.Kill()
                 Write-Warning "[AI] AI summary timed out after 5 minutes on attempt $attempt."
                 $aiContent = '<p>Devin CLI is installed but timed out and could not generate a summary. Please ensure you are authenticated (run devin auth).</p>'
-                break
+                #break
             }
 
             $stderr = [System.IO.File]::ReadAllText($errFile)
@@ -8022,7 +8082,8 @@ $errorList
                 Write-Warning "[AI] Devin summary error output: $($stderr.Trim())"
             }
 
-            $stdout = [System.IO.File]::ReadAllText($outFile)
+            $response = [System.IO.File]::ReadAllText($outFile)
+            $stdout = (($response | ConvertFrom-Json).steps | Where-Object { $_.source -eq "agent" })[-1].message
         }
         catch {
             Write-Warning "[AI] Failed to start or run Devin AI summary: $($_.Exception.Message)"
