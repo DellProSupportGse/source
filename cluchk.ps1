@@ -26,6 +26,9 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/09/30:v2.06 -  1. Bug Fix: TP - Fixed a problem where the action plan failure end date is blank causing no errors to be highlighted.
+                        2. Emergency Fix: TP - Removed devin access.
+
     2026/09/28:v2.05 -  1. New Update: TP - If missing, alternately find the physical disk cluster node from the disk ID. May not work for clusters with more than 9 nodes.
                         2. New Update: TP - If a VM Switch nic is not Up, mark it as an error in the VM Switch table
                         3. Bug Fix: TP - Change devin command call to try to make it more stable.
@@ -89,7 +92,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.05"
+$CluChkVer="2.06"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
@@ -5810,7 +5813,7 @@ Unable to add KV info to
         $resultObject += $errors
         #>
         $ActionPlanErrors=$resultObject | Group-Object -Property Target,Message | %{$_.Group | sort {Get-Date $_.TimeStamp} -Descending | Select -First 1} | sort {Get-Date $_.TimeStamp} -Descending
-        $EndAPDate=Get-Date $SysInfo[0].LocalTime
+        If (!($LatestHealthCheck)) {$LatestHealthCheck = Get-Date $SysInfo[0].LocalTime}
         If ($SolutionUpdates.State -match "RREEDDInstallationFailed") {
             $EndAPDate=$LatestMASTry
         } else {
@@ -7447,9 +7450,12 @@ IF($selection -ne "4"){
     Write-Host "[Report] Preparing final HTML report: $HtmlReport"
     if (Test-Path "$HtmlReport") {Remove-Item $HtmlReport}
     $html=$htmloutReport
+    $devinFound=$false
+    <#
 $devinPath=(Get-Command "devin.exe").Source
 If (!($devinPath)) {$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"}
 $devinFound = Test-Path $devinPath
+#>
 
 <#if ($devinFound) {
     $authOut = [System.IO.Path]::GetTempFileName()
@@ -7571,7 +7577,6 @@ Please respond in plain text with headings and bullet points.
 &amp; "$env:TEMP\devin-setup.ps1"</pre>'
 }#>
 #$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"
-$devinFound = Test-Path $devinPath
 $aiSummaryAvailable = $false
 $stdout = $null
 $authOk = $false
