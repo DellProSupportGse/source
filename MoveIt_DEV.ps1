@@ -38,7 +38,7 @@
         and the selected destination nodes, including self entries. Enable preserves
         existing entries. Disable removes matching entries even if they predated Enable.
 #>
-
+Function Invoke-MoveIt {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -2924,3 +2924,4 @@ $form.Add_Shown({
 })
 
 [void]$form.ShowDialog()
+}
