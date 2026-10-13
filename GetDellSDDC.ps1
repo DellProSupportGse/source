@@ -19,6 +19,8 @@
 
     Alternatively, uncomment the auto-execute block at the bottom.
 .Updates
+    2026/10/13:v1.0.3    1. New Update: TP - No longer stop script from the Show-Error function
+
     2026/09/28:v1.0.2    1. New feature: TP - Added running Test-Cluster
                          2. New feature: TP - At JGs request, added Get-PNPDevice -Cimsession _C_
 
@@ -30,7 +32,7 @@
 #>
 # CONVERSION: replaced $Module with script-scope variables
 $script:ModuleName   = 'GetDellSDDC'
-$script:ScriptVersion = '1.0.2'
+$script:ScriptVersion = '1.0.3'
 
 ###############################################################################
 # region CommonFuncBlock — helpers shared with child jobs/sessions
@@ -85,10 +87,10 @@ $CommonFuncBlock = {
     ) {
         $Message = "$(get-date -format 's') : $Message - cmdlet was cancelled"
         if ($e) {
-            Write-Error $Message
-            throw $e
+            Write-Host "ERROR: $Message" -ForegroundColor Red
+            $e
         } else {
-            Write-Error $Message -ErrorAction Stop
+            Write-Host "ERROR: $Message" -ForegroundColor Red
         }
     }
 
@@ -1734,7 +1736,7 @@ function Invoke-GetDellSDDC {
 
     # do not allow running in a remote powershell session
     If (Get-Variable PSSenderInfo -ErrorAction SilentlyContinue) {
-        Show-Error "This function is not supported using a remote powershell session. Please run locally"
+        throw "This function is not supported using a remote powershell session. Please run locally"
     }
 
     $OS = Get-CimInstance -ClassName Win32_OperatingSystem

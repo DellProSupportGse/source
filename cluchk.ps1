@@ -26,6 +26,9 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/10/13:v2.07 -  1. New Update: TP - Re-enabled devin cli access
+                        2. Bug Fix: TP - Avoid error about internet explorer
+
     2026/09/30:v2.06 -  1. Bug Fix: TP - Fixed a problem where the action plan failure end date is blank causing no errors to be highlighted.
                         2. Emergency Fix: TP - Removed devin access.
 
@@ -92,10 +95,10 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.06"
+$CluChkVer="2.07"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
-try {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2} catch {}
+try {if (Test-Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main") {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2 -ErrorAction SilentlyContinue}} catch {}
 
 #region Variable Cleanup
 #The following line causes alot of errors and does not appear to accomplish what is required.
@@ -7451,11 +7454,11 @@ IF($selection -ne "4"){
     if (Test-Path "$HtmlReport") {Remove-Item $HtmlReport}
     $html=$htmloutReport
     $devinFound=$false
-    <#
+    
 $devinPath=(Get-Command "devin.exe").Source
 If (!($devinPath)) {$devinPath = "$env:LOCALAPPDATA\devin\cli\bin\devin.exe"}
 $devinFound = Test-Path $devinPath
-#>
+
 
 <#if ($devinFound) {
     $authOut = [System.IO.Path]::GetTempFileName()
