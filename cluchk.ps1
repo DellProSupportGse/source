@@ -26,6 +26,11 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/10/20:v2.08 -  1. Bug Fix: TP - For non-US systems, removed Format parameter of DateTimes in the Action plan table to mark colors correctly as reported by github user Constey.
+                        2. Bug FIx: TP - Fixed E810 driver from 8/2026 mismatch
+                        3. Bug Fix: TP - For Azure Stack/Local HCI OS, ignore gigabit nic driver version.
+                        4. Bug Fix: TP - In the Virtual Migration Performance Option table, ignore UseAnyNetworkForMigration and provide better text for the performance option.
+    
     2026/10/13:v2.07 -  1. New Update: TP - Re-enabled devin cli access
                         2. Bug Fix: TP - Avoid error about internet explorer
 
@@ -95,7 +100,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.07"
+$CluChkVer="2.08"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {if (Test-Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main") {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2 -ErrorAction SilentlyContinue}} catch {}
@@ -4920,13 +4925,13 @@ If ($OSVersion -match "2016") {
      @{Label='Broadcom';Expression={$bcomver=($_ | Where PSPath -like "*BroadcomNXE*Product_Version").'(default)';If ($bcomver.indexof("$([char]0)") -eq -1) {$bcomver} else {$bver.substring(0,$bcomver.indexof("$([char]0)"))}}},`
      @{Label='B1GB';Expression={($_ | Where PSPath -like "*Broadcom\*Product_Version").'(default)'}}
     }
-    $DriverSuites=$DriverSuites | Select PSCOmputerName,@{Label='Qlogic';Expression={foreach ($a in $DriverSuites) {if ($a.PSComputerName -eq $_.PSComputerName -and ($a.Qlogic)) {$a.Qlogic}}}},`
+    $DriverSuites=$DriverSuites | Select PSComputerName,@{Label='Qlogic';Expression={foreach ($a in $DriverSuites) {if ($a.PSComputerName -eq $_.PSComputerName -and ($a.Qlogic)) {$a.Qlogic}}}},`
     @{Label='Intel';Expression={foreach ($a in $DriverSuites) {if ($a.PSComputerName -eq $_.PSComputerName -and ($a.Intel)) {$a.Intel}}}},`
     @{Label='Mellanox';Expression={foreach ($a in $DriverSuites) {if ($a.PSComputerName -eq $_.PSComputerName -and ($a.Mellanox)) {$a.Mellanox}}}},`
     @{Label='B1GB';Expression={foreach ($a in $DriverSuites) {if ($a.PSComputerName -eq $_.PSComputerName -and ($a.B1GB)) {$a.B1GB}}}},`
     @{Label='Broadcom';Expression={foreach ($a in $DriverSuites) {if ($a.PSComputerName -eq $_.PSComputerName -and ($a.Broadcom)) {$a.Broadcom}}}} |`
     Sort PSComputerName,Qlogic,Intel -Unique
-    $DriverSuites=$DriverSuites | Select PSComputerName,Qlogic,Intel,Mellanox,Broadcom,B1GB,` #Fix 06072023
+    $DriverSuites=$DriverSuites | Select PSComputerName,Qlogic,Intel,Mellanox,Broadcom,B1GB, #Fix 06072023
      @{Label='Chipset';Expression={($SDDCFiles."$($_.PSComputerName)GetChipsetVersion").Version | Select -First 1}}
  #debug tests
 #get-DriverVersion -DriverName "Broadcom 57414*" -OSVersion $OSVersionNodes -Platform $Platform
@@ -4954,7 +4959,7 @@ If ($OSVersion -match "2016") {
     @{Label='DriverVersion';Expression={If (-not $DriverSuites) {$_.DriverVersion} else {foreach ($a in $DriverSuites) {If ($a.PSComputerName -eq $_.PSComputerName) {
         if ($_.DeviceName -like "Qlogic FastLinQ*41*" -and $a.Qlogic){
             $a.Qlogic} else {
-            if (($_.DeviceName -like "Intel*1Gb*Ethernet*NDC*" -or $_.DeviceName -like "*X710*") -and $a.Intel){
+            if (($_.DeviceName -like "Intel*1Gb*Ethernet*NDC*" -or $_.DeviceName -match "Intel.*X|E.10") -and $a.Intel){
             $a.Intel} else {
             if (($_.DeviceName -like "Mellanox ConnectX*") -and $a.Mellanox){
             $a.Mellanox} else {
@@ -4986,7 +4991,8 @@ If ($OSVersion -match "2016") {
     'Intel*Ethernet*X710*'    {get-DriverVersion -DriverName "*X710*" -OSVersion $OSVersionNodes -Platform $Platform}`
     'Intel*Ethernet*E810*'    {$dver=get-DriverVersion -DriverName "*E810-*" -OSVersion $OSVersionNodes -Platform $Platform
                                Switch ($dver) {
-                               "24.0.0"  {"1.17.73.0"}
+                               #"24.0.0"  {"1.17.73.0"}
+                               "25.0.4"  {"25.0.0"}
                                Default {$dver}
                                }}`
 
@@ -5037,7 +5043,7 @@ $DriverVersionCheck+=$Device | Select-Object PSComputerName, DeviceName, `
 @{Label='DriverVersion';Expression={
 $DriverVersion=$_.DriverVersion        
 # skip check on inbox driver, this is always correct
-IF(($_.AvailableVersion -ne $null) -and ($_.AvailableVersion -notmatch 'inbox' -and $SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "2016")){
+IF(($_.AvailableVersion -ne $null) -and ($_.AvailableVersion -notmatch 'inbox' -and $SysInfo[0].SysModel -notmatch "^APEX" -and $OSVersionNodes -ne "2016" -and !($_.DeviceName -like "*giga*" -and $SysInfo[0].OSName -like "Azure*HCI"))){
 Switch($_.AvailableVersion){
 # DriverVersion < AvailableVersion
 {([System.Version](($DriverVersion+".0"*3).split(".")[0..3] -join ".") -lt [System.Version](($_+".0"*3).split(".")[0..3] -join ".") -and -not ($_.DeviceName -match "Gigabit" -and $SysInfo[0].AzureLocalVersion -gt ""))}{"RREEDD$DriverVersion"}
@@ -5620,7 +5626,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
                          
             try {$resultObject +=  [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PreContext | select-string 'Value') -split ': On ')[-1].trim(':')
-                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
+                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1])
                 Message                         = $ErrorMessage.Line.Trim()
                 
             }
@@ -5632,7 +5638,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
             $ThisError=((($ErrorMessage.Context.PostContext | select-string 'TargetResourceName' -Context 0,5).Context.PostContext ) -replace "Description        : ","").Trim() -join ","
             try {$resultObject +=   [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PostContext | select-string 'TargetResourceName') -split ':')[-1].trim()
-                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
+                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PostContext | select-string 'TimeStamp') -split '  ').trim(':')[-1])
                 Message                         = $ThisError
             }
             } catch {}
@@ -5647,7 +5653,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
             $ThisError='BBOOLLDDOONNPlease run the following in Azure CLI to resolve this error:RRREEETTT'+$FixCmd+'RRREEETTTRRREEETTTRun the following on any node in the cluster:RRREEETTTGet-ClusterGroup "azure stack hci * cluster group" | Stop-ClusterGroup | Start-ClusterGroupRRREEETTTInvoke-SolutionUpdatePrecheck # Wait '+(5+$ClusterNodeCount*5)+' MinutesBBOOLLDDOOFFFF RRREEETTT RRREEETTT'+$ThisError
             try {$resultObject +=   [PSCustomObject] @{
                 Target                  = (($ErrorMessage.Context.PreContext | select-string 'TargetResourceName') -split ':')[-1].trim()
-                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1] -Format "MM/dd/yyyy HH:mm")
+                TimeStamp                       = (Get-Date (($ErrorMessage.Context.PreContext | select-string 'TimeStamp') -split '  ').trim(':')[-1])
                 Message                         = $ThisError
             }
             } catch {}
@@ -5686,7 +5692,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
                 Foreach ($StopError in $StopErrors) {
                 $APTime=$StopError.EndTimeUtc
                 If (!($APTime)) {$APTime=$StopError.StartTimeUtc}
-                $APTime=try {(Get-Date $APTime -Format "MM/dd/yyyy HH:mm tt")} catch {(Get-Date -Format "MM/dd/yyyy HH:mm")}
+                $APTime=(Get-Date $APTime)
                 if ($StopError) {
                     $ThisError=($StopError.Exception.Message.split("`n") | select -first 10).Trim() -join ","
                     if ($ThisError -match 'Invoke-Command for Get-CauReport failed. Error=Processing data.*remote.*failed with the following error message\: The WSMan provider host process did not return a proper response') {
@@ -5700,7 +5706,7 @@ If ((Get-ChildItem $SDDCPath -Filter "ECE??.zip" -Recurse -Depth 2 -ErrorAction 
                     If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $thiserror.Message -match 'integrity check')) {
                         $resultObject +=     [PSCustomObject] @{
                             Target                  = $APLMU.Directory.Name -replace "Node_",""
-                            TimeStamp                       = (Get-Date $APTime -Format "MM/dd/yyyy HH:mm")
+                            TimeStamp                       = (Get-Date $APTime)
                             Message                         = $ThisError
                 
                         }
@@ -5743,7 +5749,7 @@ Unable to add KV info to
                     $ThisErrorGroups=($ThisError | select-string "\[(.*)\]\:(\d{4}-\d{2}-\d{2} \d{2}.\d{2}.\d{2}).*\[Test-SBEContentIntegrity\] (.*)").Matches.Groups
                     $resultObject +=     [PSCustomObject] @{
                         Target                  = $ThisErrorGroups[1].Value
-                        TimeStamp               = (Get-Date $ThisErrorGroups[2].Value -Format "MM/dd/yyyy HH:mm")
+                        TimeStamp               = (Get-Date $ThisErrorGroups[2].Value)
                         Message                 = $ThisErrorGroups[3].Value
                 
                     }
@@ -5755,7 +5761,7 @@ Unable to add KV info to
         ForEach ($HealthCheckIssue in $HealthCheckIssues) {
                     $resultObject +=     [PSCustomObject] @{
                         Target                  = $HealthCheckIssue.TargetResourceID
-                        TimeStamp               = (Get-Date $HealthCheckIssue.Timestamp -Format "MM/dd/yyyy HH:mm")
+                        TimeStamp               = (Get-Date $HealthCheckIssue.Timestamp)
                         Message                 = ($HealthCheckIssue.Name,$HealthCheckIssue.DisplayName,$HealthCheckIssue.Description,$HealthCheckIssue.Remediation,$HealthCheckIssue.Status,$HealthCheckIssue.Severity,$HealthCheckIssue.TargetResourceName,$HealthCheckIssue.TargetResourceType,$HealthCheckIssue.AdditionalData.Values) -join ","
                 
                     }
@@ -5776,7 +5782,7 @@ Unable to add KV info to
                     If (!($SolutionUpdates.state -eq 'RREEDDInstallationFailed' -and $ThisError.Message -match '(Invoke-AzStackHciSBEHealthValidation)|(integrity check)') -and !($SolutionUpdates.InstalledDate.Date -match $thiserror.TimeCreated.Date)) {
                         $resultObject +=     [PSCustomObject] @{
                             Target                  = $thiserror.MachineName
-                            TimeStamp               = (Get-Date $thiserror.TimeCreated -Format "MM/dd/yyyy HH:mm")
+                            TimeStamp               = (Get-Date $thiserror.TimeCreated)
                             Message                 = $thiserror.Message
                 
                         }
@@ -5804,7 +5810,7 @@ Unable to add KV info to
                         $oldTimestamp=$timestamp
                         [PSCustomObject]@{
                             Target    = $node
-                            Timestamp = (Get-Date $timestamp -Format "MM/dd/yyyy HH:mm")
+                            Timestamp = (Get-Date $timestamp)
                             Message   = "DELLFMWR-$message"
                         }
                     }
@@ -6628,8 +6634,8 @@ If($FirewallProfile.count -eq 0){$html+='<h5><span style="color: #a4262c; backgr
         }
         $GetVMHost=$GetVMHost|Select-Object ComputerName,`
         @{Label='VirtualMachineMigrationEnabled';Expression={If($_.VirtualMachineMigrationEnabled -inotmatch 'True'){"RREEDD"+$_.VirtualMachineMigrationEnabled}Else{$_.VirtualMachineMigrationEnabled}}},`
-        @{Label='VirtualMachineMigrationPerformanceOption';Expression={If($_.VirtualMachineMigrationPerformanceOption -inotmatch 'SMB'){"RREEDD"+$_.VirtualMachineMigrationPerformanceOption}Else{$_.VirtualMachineMigrationPerformanceOption}}},`
-        @{Label='UseAnyNetworkForMigration';Expression={"YYEELLLLOOWW"*($_.UseAnyNetworkForMigration -eq $false)+$_.UseAnyNetworkForMigration}}
+        @{Label='VirtualMachineMigrationPerformanceOption';Expression={$vmmpo=$null;$vmmpo=$_.VirtualMachineMigrationPerformanceOption.value;if (!($vmmpo)) {$vmmpo=$_.VirtualMachineMigrationPerformanceOption};if ($vmmpo -match '\d') {$vmmpo=(@("TCPIP", "Compression", "SMB")[[int]$vmmpo])};If($vmmpo -inotmatch 'SMB'){"RREEDD"+$vmmpo}Else{$vmmpo}}},`
+        @{Label='UseAnyNetworkForMigration';Expression={$_.UseAnyNetworkForMigration}}
         #$GetVMHost | FT -AutoSize
         # HTML Report
         $html+='<H2 id="VirtualMachineMigrationPerformanceOption">Virtual Machine Migration Performance Option</H2>'
@@ -9308,4 +9314,3 @@ $GetVMProcCount=Foreach ($key in ($SDDCFiles.keys -like "*GetVM" )) {
 
 }
 }
-
