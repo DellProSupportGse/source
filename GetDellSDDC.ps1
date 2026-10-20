@@ -19,7 +19,10 @@
 
     Alternatively, uncomment the auto-execute block at the bottom.
 .Updates
-    2026/10/13:v1.0.3    1. New Update: TP - No longer stop script from the Show-Error function
+    2026/10/20:v1.0.4    1. Bug Fix: TP - Get ALL CSVs regardless if they are from a virtual disk
+                         2. New Feature: TP - Gather iSCSI and FC information
+
+    2026/10/05:v1.0.3    1. New Update: TP - No longer stop script from the Show-Error function
 
     2026/09/28:v1.0.2    1. New feature: TP - Added running Test-Cluster
                          2. New feature: TP - At JGs request, added Get-PNPDevice -Cimsession _C_
@@ -32,7 +35,7 @@
 #>
 # CONVERSION: replaced $Module with script-scope variables
 $script:ModuleName   = 'GetDellSDDC'
-$script:ScriptVersion = '1.0.3'
+$script:ScriptVersion = '1.0.4'
 
 ###############################################################################
 # region CommonFuncBlock — helpers shared with child jobs/sessions
@@ -2000,7 +2003,9 @@ function Invoke-GetDellSDDC {
             catch { Write-Warning "Unable to get Cluster Resource Parameters. `nError=$($_.Exception.Message)" }
         }
         $JobStatic += start-job -Name ClusterSharedVolume {
-            try { $o = Get-VirtualDisk | %{$vd=$_; $vd | Get-ClusterSharedVolume -Cluster $using:AccessNode | Select *,@{L="VDID";E={$vd.UniqueId}}}; $o | Export-Clixml ($using:Path + "GetClusterSharedVolume.XML") }
+            try { $o = Get-VirtualDisk | %{$vd=$_; $vd | Get-ClusterSharedVolume -Cluster $using:AccessNode | Select *,@{L="VDID";E={$vd.UniqueId}}};
+                  $o += Get-ClusterSharedVolume -Cluster $using:AccessNode | Where-Object { $_.Name -notin $o.Name } | Select *,@{L="VDID";E={$null}};
+                  $o | Export-Clixml ($using:Path + "GetClusterSharedVolume.XML") }
             catch { Write-Warning "Unable to get Cluster Shared Volumes. `nError=$($_.Exception.Message)" }
         }
         $JobStatic += start-job -Name GetClusterFaultDomain {
@@ -2284,7 +2289,23 @@ function Invoke-GetDellSDDC {
                 'Get-SmbClientConfiguration -CimSession _C_',
                 'Get-SmbServerConfiguration -CimSession _C_',
                 'Get-NetIPConfiguration -CimSession _C_',
+                'Get-InitiatorPort -ErrorAction SilentlyContinue',
+                'Get-InitiatorId -ErrorAction SilentlyContinue',
+                'Get-IscsiTargetPortal -ErrorAction SilentlyContinue',
+                'Get-IscsiTarget -ErrorAction SilentlyContinue',
+                'Get-IscsiSession -ErrorAction SilentlyContinue',
+                'Get-IscsiConnection -ErrorAction SilentlyContinue',
                 'Invoke-Command -ComputerName _C_ {Get-ComputerInfo}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-iSCSIInitiatorSessionInfo;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSiSCSI_InitiatorSessionInfo}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-iSCSISessionStatistics;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSiSCSI_SessionStatistics}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-iSCSIHBAInformation;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSiSCSI_HBAInformation}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-iSCSINICConfig;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSiSCSI_NICConfig}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-iSCSIPortalInfoProperties;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSiSCSI_PortalInfo}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-FCAdapterHBAAttributes;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSFC_FCAdapterHBAAttributes}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-FibrePortHBAAttributes;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSFC_FibrePortHBAAttributes}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-HBAFCPInfo;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSFC_HBAFCPInfo}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-FibrePortHBAStatistics;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSFC_FibrePortHBAStatistics}',
+                'Invoke-Command -ComputerName _C_ {Echo Get-FCPAdapterInfo;Get-CimInstance -ErrorAction SilentlyContinue -Namespace root\wmi -ClassName MSFC_FCPAdapterInfo}',
                 'Invoke-Command -ComputerName _C_ {Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Services\spacePort\Parameters}',
                 'Invoke-Command -ComputerName _C_ {Echo Get-RegSpacePortParameters;Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Services\spacePort\Parameters}',
                 'Invoke-Command -ComputerName _C_ {Echo Get-RegOEMInformation;IF((Get-WmiObject -Class Win32_OperatingSystem).Caption -imatch "HCI"){Get-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation}}',
