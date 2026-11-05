@@ -1,405 +1,927 @@
-# Telemetry Tool Manager
-
-**Version:** 4.2 (GUI title)  
-**Platform:** Windows PowerShell 5.1+ / Windows Forms  
-**Purpose:** Register Microsoft GSE PowerShell tools for centralized Azure telemetry reporting and manage their dashboard visibility without modifying individual tools or deleting telemetry.
-
-> **Version note:** The script's opening comment identifies `v4.1`, while the application window identifies `v4.2`. This README follows the visible GUI version. Align both strings in the script for consistent version reporting.
-
-## Overview
-
-Telemetry Tool Manager provides one place to onboard tools into the Microsoft GSE telemetry system. It:
-
-1. Connects to the designated Microsoft GSE Azure tenant and subscription.
-2. Creates or verifies a telemetry-specific Azure Table Storage table for each tool.
-3. Creates or updates that tool's entry in the central `TelemetryToolsConfig` registry.
-4. Generates PowerShell telemetry code to embed in the tool.
-5. Lists registered tools and allows dashboard visibility to be enabled or disabled without deleting collected data or stopping ingestion.
-
-The manager is a **configuration and onboarding utility**, not a telemetry collector itself. Once a tool incorporates the generated code, **that tool** sends telemetry to the `PostTelemetryData` Azure Function when it starts.
-
-## How the components fit together
-
-```text
-                  TELEMETRY TOOL MANAGER
-                  (Windows Forms / PowerShell)
-                              |
-                   Sign in to Microsoft GSE
-                              |
-                   Azure Table Storage
-                              |
-                +-------------+--------------+
-                |                            |
-        TelemetryToolsConfig         <Tool>TelemetryData
-         (central tool registry)     (per-tool event records)
-                ^                            ^
-                |                            |
-         Create/update entry          PostTelemetryData
-                |                       Azure Function
-                |                            ^
-                |                            |
-         Manager GUI                  PowerShell tool
-                                     (generated snippet)
-
-       Registry-driven Azure Functions / dashboard
-                    |
-       Read enabled tools and available summaries
-                    |
-             Telemetry dashboard
-```
-
-The wider telemetry solution also uses registry-driven functions such as `GetTelemetryToolsConfig`, `GetTelemetrySummary`, `GetTelemetrySummaryFast`, and `UpdateTelemetrySummaryData`. **Those functions and the dashboard are separate components**; their implementations are not included in this script. Their precise behavior should be verified against their deployed versions.
-
-## Azure configuration
-
-The current script is configured with:
-
-| Setting | Value |
-| --- | --- |
-| Storage account | `gsetools` |
-| Resource group | `GSETools` |
-| Azure region indicated by Function URL | Central US |
-| Registry table | `TelemetryToolsConfig` |
-| Registry partition key | `Tool` |
-| Telemetry table naming convention | `<ToolName>TelemetryData` |
-| Azure Function | `PostTelemetryData` |
-| Tenant and subscription | Fixed in the script to the Microsoft GSE environment |
-| Telemetry Function URL | `https://gsetools-bufhdqefb8e6ecc6.centralus-01.azurewebsites.net/api/PostTelemetryData` |
-
-The script hardcodes its environment identifiers; it does not offer a multi-tenant or multi-subscription selector.
-
-## Requirements and access
-
-- Windows with **Windows PowerShell 5.1 or later** and Windows Forms support. The program is designed for Windows desktop use, not PowerShell Core on Linux/macOS.
-- Network access to Azure authentication, Azure Resource Manager, Azure Table Storage, and the telemetry Function endpoint.
-- `Az.Accounts` and `Az.Storage` PowerShell modules.
-- A Microsoft GSE identity authorized for the configured tenant/subscription, with permission to **list storage account keys** for the `gsetools` storage account.
-
-The manager checks for the required modules and attempts to install missing modules from the PowerShell Gallery into the **CurrentUser** scope; elevation is not intended to be required. At shutdown, it attempts to unload modules it imported and uninstall only the two modules it installed during that run. Existing module installations are not deliberately removed.
-
-> **Security:** The manager retrieves a storage account key to authenticate direct Azure Table Storage requests using SharedKeyLite. It does not intentionally print or export the key. However, the key grants broad storage account access and must be protected. This is **not** a least-privilege table-data RBAC design. Restrict who can list storage keys.
-
-## Quick start
-
-1. Run the PowerShell GUI script in a Windows PowerShell session.
-2. Select **Connect to Microsoft GSE** and complete Microsoft authentication if prompted.
-3. Enter the new tool's name, estimated minutes saved, and the PowerShell expression holding its version.
-4. Choose whether to show the tool in the dashboard and include it in aggregate totals.
-5. Select **Preview Code** to inspect the generated integration snippet.
-6. Select **Create / Update Tool**, review the proposed changes, and confirm.
-7. After the GUI reports **SAVED TO AZURE**, select **Copy Code**.
-8. Paste the generated snippet into the tool's PowerShell source **after the tool's version variable is initialized**.
-9. Run the instrumented tool. Verify its output reports successful telemetry submission.
-10. Run the telemetry summary updater in the deployed Azure environment. The tool should appear in the dashboard once telemetry has been received and the required summaries have been refreshed.
-
-> Saving a registration does **not** automatically edit the tool's script, execute that tool, submit an initial event, or run the summary updater.
-
-## User interface
-
-### Connect to Microsoft GSE
-
-The **Connect to Microsoft GSE** button:
-
-- Initializes the required Azure PowerShell modules.
-- Checks whether an existing Azure context matches the configured tenant and subscription.
-- Signs in, if necessary, and selects the configured subscription.
-- Finds the `gsetools` storage account in `GSETools`.
-- Requests an account key and makes it available to the GUI for subsequent storage operations.
-
-Azure sign-in and key retrieval run in a background PowerShell runspace so the Windows Forms interface remains responsive. The GUI reports a warning after **60 seconds** if a connection has not completed, but does not forcibly terminate the worker at that point. The Connect button remains disabled until that operation finishes.
-
-A displayed **CONNECTED** state confirms that the manager obtained a storage key and initialized a storage context. It does **not** mean every Azure Table operation has already been tested; the script checks tables when saving or managing tools.
-
-### New tool registration fields
-
-| Field | Meaning |
-| --- | --- |
-| **Tool name** | Identifier for the tool. Must start with a letter and contain 3–41 ASCII letters/digits. Whitespace is automatically removed. |
-| **Azure telemetry table** | Read-only name generated as `<ToolName>TelemetryData`. |
-| **Minutes saved per run** | Nonnegative integer from `0` through `100000` used as the registered estimate of time savings. |
-| **Version expression** | PowerShell variable, property, or hashtable reference evaluated when the embedded telemetry code runs. |
-| **Show in telemetry dashboard** | Saves the registry's `Enabled` flag. |
-| **Include in All Tools totals** | Saves the registry's `IncludeInTotals` flag for consumers of the registry. |
-
-Valid version expressions include:
-
-```powershell
-$Ver
-$script:Version
-$Config.Version
-$Config['Version']
-$Config["Version"]
-$Config['Build'].Version
-```
-
-The manager validates the **syntax** of the expression, not whether it resolves to a valid, nonempty value at runtime. Make sure the referenced version variable or field exists **before** the telemetry call.
-
-### Buttons
-
-- **Preview Code** — Validate current inputs, update the predicted table name, and generate the snippet locally. Does not require saving to Azure.
-- **Create / Update Tool** — Confirm and apply Azure changes, then verify the registry record. Requires a completed connection.
-- **Copy Code** — Copy the displayed PowerShell snippet to the clipboard. Does not install it in another script.
-- **Manage Existing Tools** — List registry entries and toggle their dashboard visibility.
-
-The activity pane provides timestamps and status messages for module setup, Azure access, registration, and errors.
-
-## What happens when a tool is registered
-
-Assume a tool is named `ECHO`.
-
-### 1. Verify or create the tables
-
-The manager checks for:
-
-```text
-TelemetryToolsConfig
-ECHOTelemetryData
-```
-
-If a table does not exist, the manager creates it. An already existing table is reused; registering an existing tool does not remove historical telemetry.
-
-### 2. Create or update its registry entity
-
-The central registry entry uses:
-
-```text
-Table:        TelemetryToolsConfig
-PartitionKey: Tool
-RowKey:       ECHO
-```
-
-Example entity:
-
-```json
-{
-  "PartitionKey": "Tool",
-  "RowKey": "ECHO",
-  "TableName": "ECHOTelemetryData",
-  "MinutesSaved": 60,
-  "Enabled": true,
-  "IncludeInTotals": true
+# Telemetry Tool Manager v4.5 | Windows PowerShell 5.1+ | Windows Forms
+# Requires Az.Accounts and Az.Storage for Azure operations.
+# Uses account-key authentication for table entities; no Table Data RBAC role needed.
+# Requires permission to list storage account keys. Never logs or exports keys.
+# Designed for the registry-driven Azure Functions and dashboard.
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+$script:Endpoint = 'https://gsetools-bufhdqefb8e6ecc6.centralus-01.azurewebsites.net/api/PostTelemetryData'
+$script:StorageName='gsetools'
+$script:ConfigTable='TelemetryToolsConfig'
+$script:TenantId='f8d8cbe0-40fa-48f6-a286-ae49d95f0fb7'
+$script:SubscriptionId='12c8e553-7d64-476e-8808-8da263df3e2c'
+$script:ResourceGroup='GSETools'
+$script:Account=$null
+$script:StorageContext=$null
+# Storage account key is obtained only after Azure login, never embedded in this file.
+# Existing Azure Functions still depend on Shared Key; migration is deferred.
+$script:StorageKey=$null
+$script:Saved=$false
+# Security: use only preinstalled, organization-approved Azure modules.
+# No automatic installation, removal, or PSGallery access.
+function Initialize-AzureModules {
+    foreach ($name in @('Az.Accounts','Az.Storage')) {
+        $existing = Get-Module -ListAvailable -Name $name | Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $existing) {
+            throw "Required module $name is missing. Ask your administrator to install an approved version before connecting."
+        }
+        Import-Module -Name $name -ErrorAction Stop
+        Log "Loaded approved module $name ($($existing.Version))."
+    }
 }
-```
+function Cleanup-AzureModules {
+    # Do not uninstall or unload modules: they may be shared with other tools.
+}
 
-If the entity already exists, the manager updates it with the submitted fields. If no entity exists, it creates one. The save worker then reads the record back and verifies that its `TableName` matches the expected table.
-
-**Important:** The version expression is used to generate the PowerShell snippet; it is **not stored** in the registry entity by this script.
-
-### 3. Generate integration code
-
-The preview substitutes the tool-specific table name and version expression into a common telemetry implementation. Registering a tool and embedding that implementation are two separate steps.
-
-## What the generated telemetry code does
-
-### Startup initialization
-
-The snippet creates a per-invocation report ID, initializes geolocation state, enables telemetry, and includes a flag intended to prevent multiple startup events from being sent in the same process:
-
-```powershell
+$script:Bg=[Drawing.Color]::FromArgb(13,20,30)
+$script:Panel=[Drawing.Color]::FromArgb(23,34,49)
+$script:InputBg=[Drawing.Color]::FromArgb(33,47,64)
+$script:Ink=[Drawing.Color]::FromArgb(233,241,248)
+$script:Muted=[Drawing.Color]::FromArgb(161,182,201)
+$script:Blue=[Drawing.Color]::FromArgb(0,118,206)
+$script:Green=[Drawing.Color]::FromArgb(48,196,142)
+function Label([string]$text,[int]$x,[int]$y,[int]$w,[int]$h=25,[int]$size=10,[bool]$bold=$false){
+ $c=New-Object Windows.Forms.Label; $c.Text=$text; $c.SetBounds($x,$y,$w,$h); $c.ForeColor=$script:Ink
+ $style=if($bold){[Drawing.FontStyle]::Bold}else{[Drawing.FontStyle]::Regular}; $c.Font=New-Object Drawing.Font('Segoe UI',$size,$style); return $c
+}
+function Input([int]$x,[int]$y,[int]$w,[string]$value=''){
+ $c=New-Object Windows.Forms.TextBox; $c.SetBounds($x,$y,$w,32); $c.Text=$value; $c.Font=New-Object Drawing.Font('Segoe UI',11)
+ $c.BackColor=$script:InputBg; $c.ForeColor=$script:Ink; $c.BorderStyle='FixedSingle'; return $c
+}
+function Button([string]$text,[int]$x,[int]$y,[int]$w,[bool]$secondary=$false){
+ $c=New-Object Windows.Forms.Button; $c.Text=$text; $c.SetBounds($x,$y,$w,38); $c.FlatStyle='Flat'; $c.FlatAppearance.BorderSize=0
+ $c.BackColor=if($secondary){$script:InputBg}else{$script:Blue}; $c.ForeColor=$script:Ink; $c.Cursor='Hand';
+ $c.Font=New-Object Drawing.Font('Segoe UI',10,[Drawing.FontStyle]::Bold); return $c
+}
+function Log([string]$s){ $txtLog.AppendText(('{0:HH:mm:ss}  {1}' -f (Get-Date),$s)+[Environment]::NewLine); $txtLog.SelectionStart=$txtLog.TextLength; $txtLog.ScrollToCaret() }
+function Inputs {
+ $name=$txtName.Text.Trim(); if($name -cnotmatch '^[A-Za-z][A-Za-z0-9]{2,40}$'){throw 'Tool name must be 3-41 letters/digits and start with a letter.'}
+ $minutes=0; if(-not [int]::TryParse($txtMinutes.Text.Trim(),[ref]$minutes) -or $minutes -lt 0 -or $minutes -gt 100000){throw 'Minutes saved must be a whole number between 0 and 100000.'}
+ $version=$txtVersion.Text.Trim()
+ # Accept simple variables, scoped variables, property paths and hashtable indexing.
+ # Examples: $Ver, $script:Version, $Config.Version, $Config['Version'], $Config["Version"], $Config['Build'].Version
+ $identifier='[A-Za-z_][A-Za-z0-9_]*'
+ $root='\$(?:(?:script|global|local|private):)?'+$identifier
+ $segment='(?:\.'+$identifier+'|\[(?:''[^''\r\n]+''|"[^"\r\n]+")\])'
+ $pattern='^'+$root+'(?:'+$segment+')*$'
+ if($version -cnotmatch $pattern){throw 'Version must be a variable or property/hashtable reference, e.g. $Ver, $script:Version, $Config.Version, or $Config[''Version''].'}
+ return @{Name=$name;Table="${name}TelemetryData";Minutes=$minutes;Version=$version;Enabled=[bool]$chkEnabled.Checked;IncludeInTotals=[bool]$chkTotals.Checked}
+}
+function Invoke-TableApi([string]$method,[string]$path,$body=$null,[hashtable]$extra=@{}) {
+ if(-not $script:StorageKey){throw 'Storage authentication is not initialized. Connect to Microsoft GSE first.'}
+ $account=$script:StorageName
+ $url="https://$account.table.core.windows.net/$path"
+ $date=[DateTime]::UtcNow.ToString('R',[Globalization.CultureInfo]::InvariantCulture)
+ # Azure Table Storage SharedKeyLite: sign the date and canonicalized resource.
+ $canonical="/$account/$path"
+ $stringToSign="$date`n$canonical"
+ $hmac=New-Object System.Security.Cryptography.HMACSHA256
+ try {
+  $hmac.Key=[Convert]::FromBase64String($script:StorageKey)
+  $signature=[Convert]::ToBase64String($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($stringToSign)))
+ } finally { $hmac.Dispose() }
+ $headers=@{
+  'Authorization'="SharedKeyLite ${account}:$signature"
+  'x-ms-date'=$date
+  'x-ms-version'='2019-02-02'
+  'Accept'='application/json;odata=nometadata'
+  'DataServiceVersion'='3.0;NetFx'
+  'MaxDataServiceVersion'='3.0;NetFx'
+ }
+ foreach($key in $extra.Keys){$headers[$key]=$extra[$key]}
+ $params=@{Uri=$url;Method=$method;Headers=$headers;ErrorAction='Stop';TimeoutSec=25}
+ if($null -ne $body){$params.ContentType='application/json';$params.Body=($body | ConvertTo-Json -Depth 12 -Compress)}
+ try { return Invoke-RestMethod @params }
+ catch {
+  $status='unknown';$details=''
+  try{$status=[int]$_.Exception.Response.StatusCode}catch{}
+  try { if($_.ErrorDetails.Message){$details=[string]$_.ErrorDetails.Message} }catch{}
+  if($details.Length -gt 350){$details=$details.Substring(0,350)}
+  throw "Table REST $method $path failed (HTTP $status). $details $($_.Exception.Message)"
+ }
+}
+function Get-StatusCode($errorRecord) {
+ $message=[string]$errorRecord.Exception.Message
+ if($message -match 'HTTP (\d{3})'){return [int]$Matches[1]}
+ try{return [int]$errorRecord.Exception.Response.StatusCode}catch{return 0}
+}
+function Ensure-Table([string]$name) {
+ Log "Checking Azure table: $name"
+ try {
+  $existing=Get-AzStorageTable -Name $name -Context $script:StorageContext -ErrorAction Stop
+  if($existing){Log "Table exists: $name";return}
+ } catch {
+  if((Get-StatusCode $_) -ne 404 -and $_.Exception.Message -notmatch 'not found|does not exist') {throw "Checking table $name failed: $($_.Exception.Message)"}
+ }
+ try {
+  $null=New-AzStorageTable -Name $name -Context $script:StorageContext -ErrorAction Stop
+  Log "Created Azure table: $name"
+ } catch {
+  if((Get-StatusCode $_) -eq 409){Log "Table already exists: $name"}
+  else {throw "Creating table $name failed: $($_.Exception.Message)"}
+ }
+}
+function Read-Registration([string]$name) {
+ $key=[uri]::EscapeDataString($name.Replace("'","''"))
+ Log "Reading registry entry: $name"
+ try {return Invoke-TableApi 'GET' "TelemetryToolsConfig(PartitionKey='Tool',RowKey='$key')"}
+ catch {if((Get-StatusCode $_) -eq 404){return $null};throw}
+}
+function Save-Registration($c,$existing) {
+ $entity=@{PartitionKey='Tool';RowKey=$c.Name;TableName=$c.Table;MinutesSaved=[int]$c.Minutes;Enabled=[bool]$c.Enabled;IncludeInTotals=[bool]$c.IncludeInTotals}
+ $key=[uri]::EscapeDataString($c.Name)
+ if($existing){
+  Log "Updating registry entry: $($c.Name)"
+  $null=Invoke-TableApi 'PUT' "TelemetryToolsConfig(PartitionKey='Tool',RowKey='$key')" $entity @{'If-Match'='*'}
+ }else{
+  Log "Creating registry entry: $($c.Name)"
+  $null=Invoke-TableApi 'POST' 'TelemetryToolsConfig' $entity
+ }
+ Log "Saved registry entity: $($c.Name)"
+}
+function Refresh-Preview {
+ try {
+  $c=Inputs
+  $txtTable.Text=$c.Table
+  $txtCodePS.Text=Get-TelemetrySnippet $c
+  $txtCodePy.Text=Get-PythonTelemetrySnippet $c
+  $script:Saved=$false; $lblSave.Text='NOT SAVED'; $lblSave.ForeColor=$script:Muted
+ } catch {
+  $txtCodePS.Text="Input validation: $($_.Exception.Message)"
+  $txtCodePy.Text="Input validation: $($_.Exception.Message)"
+ }
+}
+function Get-TelemetrySnippet($config) {
+ $template=@'
+# =====================================================
+#region Telemetry Information
+# =====================================================
 $script:TelemetryReportID    = [guid]::NewGuid().Guid
 $script:TelemetryGeoResolved = $false
 $script:TelemetryGeoData     = @{}
 $script:TelemetryStartupSent = $false
 $script:uploadToAzure        = $true
-```
 
-### Machine identifier
-
-`Get-TelemetryMachineHash` combines the Windows domain, username, and computer name, computes a SHA-256 digest, and sends the **first 24 hexadecimal characters** of that digest.
-
-The original identifiers are not sent directly in the generated telemetry payload. However, the result is a **stable pseudonymous identifier, not anonymization**: it can link events from the same environment, and its source components may be guessable.
-
-### Geolocation
-
-`Resolve-TelemetryGeo` attempts the following sequence:
-
-1. Read the country and country code from **Windows Regional Settings**, and the time zone from the operating system.
-2. If local region resolution fails, query `https://ipwho.is/` for country, country code, and time zone.
-3. If both methods fail, preserve the available local time zone and leave unknown country fields empty.
-
-Geolocation is cached for the lifetime of the initialized snippet. The script prints the resolved country and source for visibility.
-
-**Privacy/network note:** Local Windows regional settings represent configured locale, not necessarily the computer's actual physical location. The `ipwho.is` fallback makes an external request that may expose the public source IP address to that service, even though the generated Azure telemetry data does not explicitly include an IP address.
-
-### Build the telemetry event
-
-The `Send-ToolTelemetry` function builds a data record with these fields:
-
-| Field | Value |
-| --- | --- |
-| `PartitionKey` | Tool telemetry name with a trailing `TelemetryData` suffix removed |
-| `RowKey` | New GUID for the telemetry event |
-| `PSVersion` | Running PowerShell version |
-| `countryCode` | Resolved two-letter country code, if available |
-| `MachineHash` | Truncated SHA-256 machine/user-derived hash |
-| `Version` | Value of the supplied version expression |
-| `timezone` | Resolved time zone |
-| `ReportID` | GUID created when the snippet is initialized |
-| `country` | Resolved country name |
-
-It submits a JSON envelope with:
-
-```json
-{
-  "TelemetryName": "ECHOTelemetryData",
-  "TableName": "ECHOTelemetryData",
-  "Data": {
-    "PartitionKey": "ECHO",
-    "RowKey": "<new-guid>",
-    "PSVersion": "<powershell-version>",
-    "countryCode": "US",
-    "MachineHash": "<24-character-hash>",
-    "Version": "<tool-version>",
-    "timezone": "<local-timezone-id>",
-    "ReportID": "<report-guid>",
-    "country": "United States"
-  }
+function Write-Indent {
+    param([string]$Message, [int]$Level = 1, [string]$Color = 'Gray')
+    try { Write-Host (('  ' * $Level) + $Message) -ForegroundColor $Color } catch {}
 }
-```
 
-The bracketed values above are illustrative placeholders, **not actual emitted values**.
+function Get-TelemetryMachineHash {
+    try {
+        $raw = "$env:USERDOMAIN\$env:USERNAME@$env:COMPUTERNAME"
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+            $hash = $sha.ComputeHash($bytes)
+            return ([BitConverter]::ToString($hash)).Replace('-', '').Substring(0,24)
+        }
+        finally { if ($sha) { $sha.Dispose() } }
+    }
+    catch { return '' }
+}
 
-Although `Send-ToolTelemetry` also accepts `EventName`, `ServerCount`, and `GroupCount`, the generated `Data` object **does not currently include those values**. `EventName` is used for startup-event deduplication rather than being transmitted.
+function Resolve-TelemetryGeo {
+    if ($script:TelemetryGeoResolved) { return }
+    Write-Indent 'Resolving Geo Location...' 1 'Cyan'
+    $geoSource = 'Unavailable'
+    try {
+        try {
+            # Prefer local Windows region; no external call needed.
+            $r = [System.Globalization.RegionInfo]::CurrentRegion
+            if (-not $r.TwoLetterISORegionName -or $r.TwoLetterISORegionName -eq 'IV') {
+                throw 'Local region unavailable.'
+            }
+            $geoSource = 'Windows Regional Settings'
+            $script:TelemetryGeoData = @{
+                country     = [string]$r.EnglishName
+                countryCode = [string]$r.TwoLetterISORegionName
+                timezone    = [string](Get-TimeZone).Id
+            }
+        }
+        catch {
+            # Fallback to ipwho.is only if local region resolution fails.
+            if (-not $script:GeoCache) {
+                $script:GeoCache = Invoke-RestMethod -Uri 'https://ipwho.is/' -TimeoutSec 5 -ErrorAction Stop
+            }
+            $r = $script:GeoCache
+            $geoSource = 'ipwho.is'
+            if ($r.success -ne $true) { throw 'Geolocation service returned no result.' }
+            $script:TelemetryGeoData = @{
+                country     = [string]$r.country
+                countryCode = [string]$r.country_code
+                timezone    = [string]$r.timezone.id
+            }
+        }
+    }
+    catch {
+        $tz = $null
+        try { $tz = [string](Get-TimeZone).Id } catch {}
+        $script:TelemetryGeoData = @{ country=$null; countryCode=$null; timezone=$tz }
+    }
+    finally {
+        $script:TelemetryGeoResolved = $true
+        $country = if ($script:TelemetryGeoData.country) { $script:TelemetryGeoData.country } else { 'Unavailable' }
+        Write-Indent "Country: $country" 2
+        Write-Indent "Source : $geoSource" 2
+    }
+}
 
-### Submit to Azure
+function Send-ToolTelemetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)][string]$TelemetryName,
+        [Parameter(Mandatory=$true)][string]$EventName,
+        [Parameter(Mandatory=$true)][string]$Version,
+        [Parameter(Mandatory=$true)][string]$Endpoint,
+        [int]$ServerCount = 0,
+        [int]$GroupCount = 0,
+        [switch]$NoGeo,
+        [switch]$DebugTelemetry
+    )
+    if (-not $script:uploadToAzure) { return }
+    if ($EventName -match '^(Startup|Launch|AppStart|ToolStart|TelemetryStartup)$') {
+        if ($script:TelemetryStartupSent) { return }
+        $script:TelemetryStartupSent = $true
+    }
+    try {
+        if (-not $NoGeo) { Resolve-TelemetryGeo }
+        else { Write-Indent 'Geo Location skipped (NoGeo).' 1 }
+        Write-Indent 'Recording telemetry...' 1
+        $data = [ordered]@{
+            PartitionKey = ($TelemetryName -replace 'TelemetryData$','')
+            RowKey       = [guid]::NewGuid().Guid
+            PSVersion    = $PSVersionTable.PSVersion.ToString()
+            countryCode  = $script:TelemetryGeoData.countryCode
+            MachineHash  = Get-TelemetryMachineHash
+            Version      = $Version
+            timezone     = $script:TelemetryGeoData.timezone
+            ReportID     = $script:TelemetryReportID
+            country      = $script:TelemetryGeoData.country
+        }
+        # The Azure Function writes only Data into the telemetry table.
+        $payload = @{ TelemetryName=$TelemetryName; TableName=$TelemetryName; Data=$data }
+        $body = $payload | ConvertTo-Json -Depth 10
+        if ($DebugTelemetry) { Write-Indent "Telemetry debug: preparing HTTPS request (payload redacted)." 1 }
+        $response = Invoke-RestMethod -Method Post -Uri $Endpoint `
+            -ContentType 'application/json' -Body $body -TimeoutSec 15 -ErrorAction Stop
+        Write-Indent 'Telemetry recorded successfully' 1 'Green'
+        if ($DebugTelemetry) {
+            Write-Indent 'Telemetry debug: request completed (response redacted).' 1
+        }
+    }
+    catch {
+        # Never interrupt the primary tool because telemetry failed.
+        Write-Indent ('Telemetry failed: ' + $_.Exception.GetType().Name) 1 'Yellow'
+        if ($DebugTelemetry -and $_.ErrorDetails.Message) {
+            Write-Warning "Telemetry request failed; detailed server response suppressed."
+        }
+    }
+}
 
-The generated code sends the envelope using HTTP POST to:
+# Place this invocation after your application's version has been initialized.
+$telemetryParams = @{
+    TelemetryName  = '__TABLE__'
+    EventName      = 'Startup'
+    Version        = __VERSION__
+    Endpoint       = '__ENDPOINT__'
+    DebugTelemetry = $false
+}
+Send-ToolTelemetry @telemetryParams
+#endregion Telemetry Information
+'@
+ return $template.Replace('__TABLE__',$config.Table).Replace('__VERSION__',$config.Version).Replace('__ENDPOINT__',$script:Endpoint)
+}
 
-```text
-https://gsetools-bufhdqefb8e6ecc6.centralus-01.azurewebsites.net/api/PostTelemetryData
-```
 
-The request uses JSON and a 15-second HTTP timeout. The intended downstream flow is:
+# Python uses the same telemetry endpoint and JSON schema as the PowerShell snippet.
+# Convert the version expression for a Python variable; verify the name/casing in the Python app.
+function Convert-ToPythonVersionExpression([string]$expression) {
+ $result = $expression -creplace '^\$(?:script:|global:|local:|private:)?', ''
+ return $result
+}
+function Get-PythonTelemetrySnippet($config) {
+ $pyVersion=Convert-ToPythonVersionExpression $config.Version
+ $template=@'
+# =====================================================
+# Telemetry Information (Python 3.8+, standard library only)
+# Place after your application version is initialized.
+# =====================================================
+import ctypes
+import hashlib
+import json
+import locale
+import os
+import platform
+import sys
+import time
+import uuid
+from urllib import request
 
-```text
-Tool starts
-   |
-Resolve location and build telemetry event
-   |
-POST to PostTelemetryData
-   |
-Azure Function receives/validates request
-   |
-Tool-specific Azure Table Storage table
-   |
-Summary updater processes stored events
-   |
-Registry-driven dashboard shows updated metrics
-```
+_TELEMETRY_ENDPOINT = '__ENDPOINT__'
+_TELEMETRY_TABLE = '__TABLE__'
+_TELEMETRY_REPORT_ID = str(uuid.uuid4())
+_TELEMETRY_STARTUP_SENT = False
+_TELEMETRY_GEO = None
+UPLOAD_TO_AZURE = True
 
-The **Azure Function's server-side validation, authentication, and write behavior are not contained in this manager script**, so consult its deployed source when documenting those details.
 
-The generated code considers an HTTP request that completes without a terminating exception a success. It does not independently query Azure Table Storage to verify the stored row.
+def _telemetry_print(message, level=1):
+    print(('  ' * level) + message)
 
-### Telemetry does not stop the tool
 
-If telemetry submission fails, the exception is caught and displayed as a warning. The parent application should continue running.
+def _telemetry_machine_hash():
+    # Stable pseudonymous value, NOT anonymous; same format as the PowerShell snippet.
+    domain = os.environ.get('USERDOMAIN', '')
+    username = os.environ.get('USERNAME', os.environ.get('USER', ''))
+    computer = os.environ.get('COMPUTERNAME', platform.node())
+    raw = f'{domain}\\{username}@{computer}'
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest().upper()[:24]
 
-Example console output:
 
-```text
-  Resolving Geo Location...
-    Country: United States
-    Source : Windows Regional Settings
-  Recording telemetry...
-  Telemetry recorded successfully
-```
+def _telemetry_region():
+    # Windows regional settings first, without outbound geolocation requests.
+    if os.name == 'nt':
+        try:
+            kernel32 = ctypes.windll.kernel32
+            name_buf = ctypes.create_unicode_buffer(85)
+            if kernel32.GetUserDefaultLocaleName(name_buf, len(name_buf)):
+                # LOCALE_SISO3166CTRYNAME, LOCALE_SENGLISHCOUNTRYNAME
+                def get_region_item(code):
+                    buf = ctypes.create_unicode_buffer(128)
+                    if kernel32.GetLocaleInfoEx(name_buf.value, code, buf, len(buf)):
+                        return buf.value
+                    return ''
+                code = get_region_item(0x5A)
+                country = get_region_item(0x1002)
+                if code and code.upper() != 'IV':
+                    return country or code, code.upper(), 'Windows Regional Settings'
+        except Exception:
+            pass
+    try:
+        lang = locale.getlocale()[0] or ''
+        code = lang.split('_', 1)[1].upper() if '_' in lang else ''
+        if len(code) == 2 and code.isalpha():
+            return code, code, 'OS Locale'
+    except Exception:
+        pass
+    return None, None, 'Unavailable'
 
-For troubleshooting, set `DebugTelemetry = $true` in the generated call to display the request body and returned response. Be careful when sharing debug output because it contains event identifiers and the pseudonymous machine hash.
 
-## Managing existing tools
+def _telemetry_geo():
+    global _TELEMETRY_GEO
+    if _TELEMETRY_GEO is not None:
+        return _TELEMETRY_GEO
+    _telemetry_print('Resolving Geo Location...')
+    country, code, source = _telemetry_region()
+    timezone = time.tzname[0] if time.tzname else None
+    if not country:
+        # Optional fallback only if local locale resolution fails.
+        try:
+            with request.urlopen('https://ipwho.is/', timeout=5) as reply:
+                geo = json.load(reply)
+            if geo.get('success') is True:
+                country = geo.get('country')
+                code = geo.get('country_code')
+                timezone = (geo.get('timezone') or {}).get('id') or timezone
+                source = 'ipwho.is'
+        except Exception:
+            pass
+    _TELEMETRY_GEO = {'country': country, 'countryCode': code, 'timezone': timezone}
+    _telemetry_print('Country: ' + (country or 'Unavailable'), 2)
+    _telemetry_print('Source : ' + source, 2)
+    return _TELEMETRY_GEO
 
-Select **Manage Existing Tools** after connecting.
 
-The dialog loads entities from `TelemetryToolsConfig` with `PartitionKey = 'Tool'` and displays:
+def send_tool_telemetry(version, event_name='Startup', no_geo=False, debug=False):
+    global _TELEMETRY_STARTUP_SENT
+    if not UPLOAD_TO_AZURE:
+        return False
+    startup_events = {'Startup', 'Launch', 'AppStart', 'ToolStart', 'TelemetryStartup'}
+    if event_name in startup_events:
+        if _TELEMETRY_STARTUP_SENT:
+            return False
+        _TELEMETRY_STARTUP_SENT = True
+    try:
+        if version is None or not str(version).strip():
+            raise ValueError('Version is empty; initialize the application version first')
+        geo = {'country': None, 'countryCode': None, 'timezone': None} if no_geo else _telemetry_geo()
+        _telemetry_print('Recording telemetry...')
+        data = {
+            'PartitionKey': _TELEMETRY_TABLE[:-len('TelemetryData')],
+            'RowKey': str(uuid.uuid4()),
+            'countryCode': geo['countryCode'],
+            'MachineHash': _telemetry_machine_hash(),
+            'Version': str(version),
+            'timezone': geo['timezone'],
+            'ReportID': _TELEMETRY_REPORT_ID,
+            'country': geo['country'],
+            'PythonVersion': platform.python_version(),
+        }
+        # Same envelope and Data fields expected by PostTelemetryData.
+        payload = {'TelemetryName': _TELEMETRY_TABLE, 'TableName': _TELEMETRY_TABLE, 'Data': data}
+        body = json.dumps(payload).encode('utf-8')
+        if debug:
+            _telemetry_print('Telemetry debug: preparing HTTPS request (payload redacted).')
+        req = request.Request(_TELEMETRY_ENDPOINT, data=body,
+                              headers={'Content-Type': 'application/json'}, method='POST')
+        with request.urlopen(req, timeout=15) as response:
+            response_body = response.read().decode('utf-8', errors='replace')
+        _telemetry_print('Telemetry recorded successfully')
+        if debug:
+            _telemetry_print('Telemetry debug: request completed (response redacted).')
+        return True
+    except Exception as exc:
+        # Telemetry must never stop the main application.
+        _telemetry_print('Telemetry failed: ' + type(exc).__name__)
+        return False
 
-- Tool name
-- Dashboard visibility (`Enabled` / `Disabled`)
-- Telemetry table
-- Minutes saved
 
-Select a tool, then select **Enable / Disable Selected**. The manager confirms the choice and makes an Azure Table Storage **MERGE** request that changes **only** the `Enabled` property.
+# Match this expression to your Python application's version variable.
+# For PowerShell $Ver, use a Python variable named Ver (case-sensitive).
+send_tool_telemetry(version=__PY_VERSION__)
+# =====================================================
+'@
+ return $template.Replace('__TABLE__',$config.Table).Replace('__ENDPOINT__',$script:Endpoint).Replace('__PY_VERSION__',$pyVersion)
+}
 
-| Action | Dashboard visibility | Telemetry ingestion | Historical telemetry |
-| --- | --- | --- | --- |
-| Enable tool | Intended to show tool | Continues | Preserved |
-| Disable tool | Intended to hide tool | Continues | Preserved |
-| Change `IncludeInTotals` through registration | Separate registry setting | Continues | Preserved |
-| Register/update tool | Controlled by chosen flags | Unchanged until code is embedded and run | Preserved |
+$form=New-Object Windows.Forms.Form
+$form.Text='Telemetry Tool Manager | v4.5'; $form.Size=New-Object Drawing.Size(1180,1030);$form.MinimumSize=New-Object Drawing.Size(980,940)
+$form.StartPosition='CenterScreen';$form.BackColor=$script:Bg;$form.ForeColor=$script:Ink;$form.Font=New-Object Drawing.Font('Segoe UI',10)
+$header=Label 'TELEMETRY TOOL MANAGER' 26 18 650 42 22 $true;$form.Controls.Add($header)
+$sub=Label 'Microsoft GSE  /  Azure Table Storage  /  One-place tool registration' 29 62 780 26 10;$sub.ForeColor=$script:Muted;$form.Controls.Add($sub)
+# Help dropdown opens the hosted README in the system's default web browser.
+# GitHub uses /blob/ for individual files and /tree/ for directories.
+$script:HelpReadmeUrl='https://github.com/DellProSupportGse/source/blob/main/Telemetry/README.md'
+$script:HelpFolderUrl='https://github.com/DellProSupportGse/source/tree/main/Telemetry'
+$btnHelp=Button 'Help  v' 730 24 105 $true
+$btnHelp.Anchor='Top,Right'
+$form.Controls.Add($btnHelp)
+$helpMenu=New-Object System.Windows.Forms.ContextMenuStrip
+$helpMenu.BackColor=$script:InputBg
+$helpMenu.ForeColor=$script:Ink
+$helpReadme=$helpMenu.Items.Add('Open README (GitHub)')
+$helpFolder=$helpMenu.Items.Add('Telemetry repository')
+$helpReadme.Add_Click({
+ try { Start-Process -FilePath $script:HelpReadmeUrl -ErrorAction Stop }
+ catch { [Windows.Forms.MessageBox]::Show("Unable to open README:`n$($_.Exception.Message)",'Help') | Out-Null }
+})
+$helpFolder.Add_Click({
+ try { Start-Process -FilePath $script:HelpFolderUrl -ErrorAction Stop }
+ catch { [Windows.Forms.MessageBox]::Show("Unable to open repository:`n$($_.Exception.Message)",'Help') | Out-Null }
+})
+$btnHelp.Add_Click({ $helpMenu.Show($btnHelp, (New-Object Drawing.Point(0,$btnHelp.Height))) })
+$btnConnect=Button 'Connect to Microsoft GSE' 850 24 285;$form.Controls.Add($btnConnect);$btnConnect.Anchor='Top,Right'
+$form.Controls.Add((Label 'GSE Tenant (fixed)' 29 98 145 27 10))
+$txtTenant=Input 175 94 390 $script:TenantId
+$txtTenant.Font=New-Object Drawing.Font('Consolas',10)
+$txtTenant.ReadOnly=$true
+$form.Controls.Add($txtTenant)
+$lblConnect=Label 'Not connected' 29 128 1070 26 10;$lblConnect.ForeColor=$script:Muted;$form.Controls.Add($lblConnect)
+$left=New-Object Windows.Forms.Panel;$left.SetBounds(25,162,365,604);$left.BackColor=$script:Panel;$left.Anchor='Top,Bottom,Left';$form.Controls.Add($left)
+$left.Controls.Add((Label 'NEW TOOL REGISTRATION' 18 18 325 32 13 $true))
+$left.Controls.Add((Label 'Tool name' 18 69 320));$txtName=Input 18 95 324 '';$left.Controls.Add($txtName)
+$lblNoSpaces=Label 'No spaces - spaces are removed automatically' 18 127 330 18 8
+$lblNoSpaces.ForeColor=$script:Muted;$left.Controls.Add($lblNoSpaces)
+$left.Controls.Add((Label 'Azure telemetry table (automatic)' 18 144 330));$txtTable=Input 18 170 324 '';$txtTable.ReadOnly=$true;$left.Controls.Add($txtTable)
+$left.Controls.Add((Label 'Minutes saved per run' 18 218 325));$txtMinutes=Input 18 245 324 '60';$left.Controls.Add($txtMinutes)
+$left.Controls.Add((Label 'Version expression (variable / hashtable)' 18 293 325));$txtVersion=Input 18 320 324 '$Ver';$left.Controls.Add($txtVersion)
+$chkEnabled=New-Object Windows.Forms.CheckBox;$chkEnabled.Text='Show in telemetry dashboard';$chkEnabled.SetBounds(18,373,324,30);$chkEnabled.Checked=$true;$chkEnabled.ForeColor=$script:Ink;$left.Controls.Add($chkEnabled)
+$chkTotals=New-Object Windows.Forms.CheckBox;$chkTotals.Text='Include in All Tools totals';$chkTotals.SetBounds(18,407,324,30);$chkTotals.Checked=$true;$chkTotals.ForeColor=$script:Ink;$left.Controls.Add($chkTotals)
+$btnPreview=Button 'Preview Code' 18 461 150 $true;$left.Controls.Add($btnPreview)
+$btnSave=Button 'Create / Update Tool' 18 510 324;$left.Controls.Add($btnSave)
+$btnManage=Button 'Manage Existing Tools' 18 559 324 $true;$left.Controls.Add($btnManage)
+$lblSave=Label 'NOT SAVED' 180 467 160 24 9 $true;$lblSave.ForeColor=$script:Muted;$left.Controls.Add($lblSave)
+$right=New-Object Windows.Forms.Panel;$right.SetBounds(408,162,727,604);$right.BackColor=$script:Panel;$right.Anchor='Top,Bottom,Left,Right';$form.Controls.Add($right)
+$right.Controls.Add((Label 'TELEMETRY CODE' 18 18 510 30 13 $true))
+$btnCopy=Button 'Copy Code' 562 14 145;$btnCopy.Anchor='Top,Right';$right.Controls.Add($btnCopy)
+$tabsCode=New-Object Windows.Forms.TabControl
+$tabsCode.SetBounds(18,53,689,510);$tabsCode.Anchor='Top,Bottom,Left,Right'
+$tabsCode.Font=New-Object Drawing.Font('Segoe UI',10)
+$right.Controls.Add($tabsCode)
+$tabPS=New-Object Windows.Forms.TabPage
+$tabPS.Text='PowerShell (PS)';$tabPS.BackColor=$script:Panel;$tabPS.ForeColor=$script:Ink
+$tabsCode.TabPages.Add($tabPS)
+$tabPy=New-Object Windows.Forms.TabPage
+$tabPy.Text='Python (Py)';$tabPy.BackColor=$script:Panel;$tabPy.ForeColor=$script:Ink
+$tabsCode.TabPages.Add($tabPy)
+$infoPS=Label 'Paste after version initialization. Supports $Ver, $script:Version, $Config.Version, and hashtables.' 8 10 665 40 9
+$infoPS.ForeColor=$script:Muted;$infoPS.Anchor='Top,Left,Right';$tabPS.Controls.Add($infoPS)
+$infoPy=Label 'Python 3.8+ | Standard library only. Version variable must exist; Python names are case-sensitive.' 8 10 665 40 9
+$infoPy.ForeColor=$script:Muted;$infoPy.Anchor='Top,Left,Right';$tabPy.Controls.Add($infoPy)
+$txtCodePS=New-Object Windows.Forms.TextBox
+$txtCodePS.SetBounds(8,50,665,420);$txtCodePS.Multiline=$true;$txtCodePS.ReadOnly=$true;$txtCodePS.ScrollBars='Both';$txtCodePS.WordWrap=$false
+$txtCodePS.BackColor=$script:InputBg;$txtCodePS.ForeColor=$script:Ink;$txtCodePS.Font=New-Object Drawing.Font('Consolas',9)
+$txtCodePS.Anchor='Top,Bottom,Left,Right';$tabPS.Controls.Add($txtCodePS)
+$txtCodePy=New-Object Windows.Forms.TextBox
+$txtCodePy.SetBounds(8,50,665,420);$txtCodePy.Multiline=$true;$txtCodePy.ReadOnly=$true;$txtCodePy.ScrollBars='Both';$txtCodePy.WordWrap=$false
+$txtCodePy.BackColor=$script:InputBg;$txtCodePy.ForeColor=$script:Ink;$txtCodePy.Font=New-Object Drawing.Font('Consolas',9)
+$txtCodePy.Anchor='Top,Bottom,Left,Right';$tabPy.Controls.Add($txtCodePy)
+$logLabel=Label 'ACTIVITY / VALIDATION' 27 800 360 25 11 $true;$logLabel.Anchor='Bottom,Left';$form.Controls.Add($logLabel)
+$txtLog=New-Object Windows.Forms.TextBox;$txtLog.SetBounds(25,830,1110,140);$txtLog.Multiline=$true;$txtLog.ReadOnly=$true;$txtLog.ScrollBars='Vertical';$txtLog.BackColor=$script:InputBg;$txtLog.ForeColor=$script:Ink;$txtLog.Font=New-Object Drawing.Font('Consolas',11);$txtLog.WordWrap=$true;$txtLog.Anchor='Bottom,Left,Right';$form.Controls.Add($txtLog)
+# Azure connection executes on a worker runspace. UI timer is the ONLY writer to WinForms controls.
+$script:ConnectWorker=$null
+$script:ConnectAsync=$null
+$script:ConnectState=$null
+$script:ConnectStarted=$null
+$script:ConnectTimedOut=$false
+$script:ConnectTimer=New-Object Windows.Forms.Timer
+$script:ConnectTimer.Interval=200
+$script:ConnectTimer.Add_Tick({
+ if(-not $script:ConnectState){return}
+ $messages=@()
+ [System.Threading.Monitor]::Enter($script:ConnectState.SyncRoot)
+ try {
+  while($script:ConnectState.Messages.Count -gt 0){$messages+= [string]$script:ConnectState.Messages.Dequeue()}
+ } finally {[System.Threading.Monitor]::Exit($script:ConnectState.SyncRoot)}
+ foreach($msg in $messages){Log $msg}
+ if(-not $script:ConnectTimedOut -and ((Get-Date)-$script:ConnectStarted).TotalSeconds -ge 60){
+  $script:ConnectTimedOut=$true
+  $lblConnect.Text='Connection timed out; worker may still be finishing'
+  $lblConnect.ForeColor=[Drawing.Color]::OrangeRed
+  Log 'ERROR: Connection exceeded 60 seconds. GUI remains usable. Do not retry until worker completes.'
+ }
+ if(-not $script:ConnectAsync -or -not $script:ConnectAsync.IsCompleted){return}
+ $script:ConnectTimer.Stop()
+ try {
+  $null=$script:ConnectWorker.EndInvoke($script:ConnectAsync)
+  if($script:ConnectState.Error){throw [Exception]::new([string]$script:ConnectState.Error)}
+  if(-not $script:ConnectState.Key){throw 'Connection finished without an account key.'}
+  $script:StorageKey=[string]$script:ConnectState.Key
+  $script:StorageContext=New-AzStorageContext -StorageAccountName $script:StorageName -StorageAccountKey $script:StorageKey -ErrorAction Stop
+  $script:Account=$true
+  $lblConnect.Text="CONNECTED | $($script:SubscriptionId) | GSETools / gsetools"
+  $lblConnect.ForeColor=$script:Green
+  Log 'Connected successfully. Account-key context ready; table access will be checked when saving.'
+ } catch {
+  $script:Account=$null;$script:StorageContext=$null;$script:StorageKey=$null
+  $lblConnect.Text='Connection failed';$lblConnect.ForeColor=[Drawing.Color]::OrangeRed
+  Log "ERROR: $($_.Exception.Message)"
+ } finally {
+  $script:ConnectState.Key=$null
+  $script:ConnectWorker.Dispose();$script:ConnectWorker=$null;$script:ConnectAsync=$null
+  $script:ConnectState=$null
+  $btnConnect.Enabled=$true;$btnConnect.Text='Connect to Microsoft GSE'
+ }
+})
+$btnConnect.Add_Click({
+ if(-not $btnConnect.Enabled){return}
+ $btnConnect.Enabled=$false;$btnConnect.Text='Connecting...'
+ $lblConnect.Text='Connecting in background...';$lblConnect.ForeColor=$script:Muted
+ try {
+  # Import the modules on the UI runspace only once. Existing installs are reused.
+  Log 'Preparing Azure modules...'
+  Initialize-AzureModules
+  $script:ConnectState=[hashtable]::Synchronized(@{
+   Messages=[System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue));
+   Key=$null;Error=$null
+  })
+  $script:ConnectWorker=[powershell]::Create()
+  $workerCode={
+   param($state,$tenant,$subscription,$rg,$storage)
+   function Report([string]$message){$state.Messages.Enqueue($message)}
+   try {
+    Import-Module Az.Accounts,Az.Storage -ErrorAction Stop
+    Report 'Checking current GSE session...'
+    $ctx=Get-AzContext -ErrorAction SilentlyContinue
+    if(-not $ctx -or [string]$ctx.Tenant.Id -ne $tenant -or [string]$ctx.Subscription.Id -ne $subscription){
+     Report 'Signing in to the fixed GSE tenant (Microsoft sign-in may appear)...'
+     $null=Connect-AzAccount -Tenant $tenant -Subscription $subscription -ErrorAction Stop
+    } else {Report 'Reusing the GSE tenant/subscription session.'}
+    Report 'Selecting GSE subscription...'
+    $null=Set-AzContext -SubscriptionId $subscription -TenantId $tenant -ErrorAction Stop
+    Report 'Locating gsetools storage account...'
+    $account=Get-AzStorageAccount -ResourceGroupName $rg -Name $storage -ErrorAction Stop
+    if(-not $account){throw 'Storage account not found.'}
+    Report 'Retrieving gsetools account key...'
+    $keys=@(Get-AzStorageAccountKey -ResourceGroupName $rg -Name $storage -ErrorAction Stop)
+    if(-not $keys.Count -or -not $keys[0].Value){throw 'No storage account key returned.'}
+    $state.Key=[string]$keys[0].Value
+    Report 'Storage key retrieved. Skipping blocking table-list verification.'
+   } catch {$state.Error=$_.Exception.Message}
+  }
+  $null=$script:ConnectWorker.AddScript($workerCode.ToString()).AddArgument($script:ConnectState).AddArgument($script:TenantId).AddArgument($script:SubscriptionId).AddArgument($script:ResourceGroup).AddArgument($script:StorageName)
+  $script:ConnectStarted=Get-Date;$script:ConnectTimedOut=$false
+  $script:ConnectAsync=$script:ConnectWorker.BeginInvoke()
+  $script:ConnectTimer.Start()
+  Log 'Azure connection started in background; the window will remain responsive.'
+ } catch {
+  Log "ERROR starting connection: $($_.Exception.Message)"
+  $btnConnect.Enabled=$true;$btnConnect.Text='Connect to Microsoft GSE'
+  $lblConnect.Text='Connection failed'
+ }
+})
+$btnPreview.Add_Click({Refresh-Preview})
+$script:NormalizingToolName=$false
+$txtName.Add_TextChanged({
+ if($script:NormalizingToolName){return}
+ $original=$txtName.Text
+ $clean=[regex]::Replace($original,'\s+','')
+ if($clean -cne $original){
+  $script:NormalizingToolName=$true
+  try {
+   $caret=$txtName.SelectionStart
+   $removed=[regex]::Replace($original.Substring(0,[Math]::Min($caret,$original.Length)),'\s+','').Length
+   $txtName.Text=$clean
+   $txtName.SelectionStart=[Math]::Min($removed,$clean.Length)
+  } finally {$script:NormalizingToolName=$false}
+ }
+ Refresh-Preview
+})
+$txtMinutes.Add_TextChanged({Refresh-Preview});$txtVersion.Add_TextChanged({Refresh-Preview})
+$chkEnabled.Add_CheckedChanged({Refresh-Preview});$chkTotals.Add_CheckedChanged({Refresh-Preview})
+$btnCopy.Add_Click({
+ $language=if($tabsCode.SelectedTab -eq $tabPy){'Python'}else{'PowerShell'}
+ $current=if($tabsCode.SelectedTab -eq $tabPy){$txtCodePy.Text}else{$txtCodePS.Text}
+ if($current -like 'Input validation:*' -or [string]::IsNullOrWhiteSpace($current)){
+  [Windows.Forms.MessageBox]::Show('Fix input validation first.','Invalid inputs')|Out-Null;return
+ }
+ [Windows.Forms.Clipboard]::SetText($current)
+ Log "Copied $language telemetry code to clipboard."
+})
+# Registry and table operations run off the UI thread, including reads and writes.
+$script:SaveWorker=$null
+$script:SaveAsync=$null
+$script:SaveState=$null
+$script:SaveStarted=$null
+$script:SaveTimedOut=$false
+$script:SaveTimer=New-Object Windows.Forms.Timer
+$script:SaveTimer.Interval=200
+$script:SaveTimer.Add_Tick({
+ if(-not $script:SaveState){return}
+ $messages=@()
+ while($script:SaveState.Messages.Count -gt 0){$messages += [string]$script:SaveState.Messages.Dequeue()}
+ foreach($msg in $messages){Log $msg}
+ if(-not $script:SaveTimedOut -and ((Get-Date)-$script:SaveStarted).TotalSeconds -gt 90){
+  $script:SaveTimedOut=$true
+  Log 'WARN: Azure registration has taken over 90 seconds. The background operation may still be running.'
+ }
+ if(-not $script:SaveAsync -or -not $script:SaveAsync.IsCompleted){return}
+ $script:SaveTimer.Stop()
+ try {
+  $null=$script:SaveWorker.EndInvoke($script:SaveAsync)
+  if($script:SaveState.Error){throw [Exception]::new([string]$script:SaveState.Error)}
+  if(-not $script:SaveState.Success){throw 'Background registration ended without confirmation.'}
+  $script:Saved=$true;$lblSave.Text='SAVED TO AZURE';$lblSave.ForeColor=$script:Green
+  Log "Verified: $($script:SaveState.Tool) -> $($script:SaveState.Table)"
+  [Windows.Forms.MessageBox]::Show("$($script:SaveState.Tool) is registered in TelemetryToolsConfig and its telemetry table exists.`n`nCopy the PowerShell code into the tool. The dashboard will show it after telemetry arrives and the summary updater runs.",'Registration saved') | Out-Null
+ } catch {
+  Log "ERROR: $($_.Exception.Message)"
+  [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Unable to save') | Out-Null
+ } finally {
+  $script:SaveWorker.Dispose();$script:SaveWorker=$null;$script:SaveAsync=$null;$script:SaveState=$null
+  $btnSave.Enabled=$true;$btnSave.Text='Create / Update Tool';$form.Cursor='Default'
+ }
+})
+$btnSave.Add_Click({
+ try {
+  $c=Inputs
+  if(-not $script:Account -or -not $script:StorageKey){throw 'Connect to Microsoft GSE first.'}
+  if($script:SaveWorker){throw 'A registration operation is already running.'}
+  $message="Create or update tool '$($c.Name)'?`n`nTelemetry table: $($c.Table)`nMinutes saved: $($c.Minutes)`nEnabled: $($c.Enabled)`nInclude in totals: $($c.IncludeInTotals)`n`nThis will change live Azure Storage."
+  if([Windows.Forms.MessageBox]::Show($message,'Confirm Azure changes','YesNo','Question') -ne 'Yes'){return}
+  $btnSave.Enabled=$false;$btnSave.Text='Saving in background...'
+  $script:Saved=$false;$lblSave.Text='SAVING...';$lblSave.ForeColor=$script:Muted
+  $script:SaveState=[hashtable]::Synchronized(@{
+   Messages=[System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue));
+   Error=$null;Success=$false;Tool=$c.Name;Table=$c.Table
+  })
+  $script:SaveWorker=[powershell]::Create()
+  $saveCode={
+   param($state,$account,$key,$config)
+   function Report([string]$message){$state.Messages.Enqueue($message)}
+   function Request([string]$method,[string]$path,$payload=$null,[hashtable]$extra=@{}) {
+    $date=[DateTime]::UtcNow.ToString('R',[Globalization.CultureInfo]::InvariantCulture)
+    # Azure Table SharedKeyLite canonical resource excludes query string.
+    $resourcePath=$path.Split('?')[0]
+    $canonical="/$account/$resourcePath"
+    $toSign="$date`n$canonical"
+    $hmac=[System.Security.Cryptography.HMACSHA256]::new()
+    try {
+     $hmac.Key=[Convert]::FromBase64String($key)
+     $signature=[Convert]::ToBase64String($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($toSign)))
+    } finally {$hmac.Dispose()}
+    $headers=@{
+     Authorization="SharedKeyLite ${account}:$signature"
+     'x-ms-date'=$date
+     'x-ms-version'='2019-02-02'
+     Accept='application/json;odata=nometadata'
+     DataServiceVersion='3.0;NetFx'
+     MaxDataServiceVersion='3.0;NetFx'
+    }
+    foreach($h in $extra.Keys){$headers[$h]=$extra[$h]}
+    $args=@{Uri="https://$account.table.core.windows.net/$path";Method=$method;Headers=$headers;TimeoutSec=15;ErrorAction='Stop'}
+    if($null -ne $payload){$args.ContentType='application/json';$args.Body=($payload | ConvertTo-Json -Depth 8 -Compress)}
+    try {return Invoke-RestMethod @args}
+    catch {
+     $status=0
+     try {$status=[int]$_.Exception.Response.StatusCode} catch {}
+     $details=[string]$_.ErrorDetails.Message
+     if($details.Length -gt 450){$details=$details.Substring(0,450)}
+     throw "HTTP $status during $method $path. $details $($_.Exception.Message)"
+    }
+   }
+   function Status($record){if($record.Exception.Message -match '^HTTP (\d{3})'){return [int]$Matches[1]};return 0}
+   function EnsureTable([string]$table){
+    Report "Checking table $table..."
+    try {$null=Request 'GET' "Tables('$table')";Report "Table exists: $table"}
+    catch {
+     if((Status $_) -ne 404){throw}
+     Report "Creating table $table..."
+     try {$null=Request 'POST' 'Tables' @{TableName=$table};Report "Created table: $table"}
+     catch {if((Status $_) -ne 409){throw};Report "Table already exists: $table"}
+    }
+   }
+   try {
+    $name=[string]$config.Name
+    $table=[string]$config.Table
+    EnsureTable 'TelemetryToolsConfig'
+    EnsureTable $table
+    $row=[uri]::EscapeDataString($name.Replace("'","''"))
+    $path="TelemetryToolsConfig(PartitionKey='Tool',RowKey='$row')"
+    Report "Checking existing registry entry: $name..."
+    $exists=$false
+    try {$null=Request 'GET' $path;$exists=$true}
+    catch {if((Status $_) -ne 404){throw}}
+    $entity=@{PartitionKey='Tool';RowKey=$name;TableName=$table;MinutesSaved=[int]$config.Minutes;Enabled=[bool]$config.Enabled;IncludeInTotals=[bool]$config.IncludeInTotals}
+    if($exists){
+     Report "Updating registry entry: $name..."
+     $null=Request 'PUT' $path $entity @{'If-Match'='*'}
+    }else{
+     Report "Creating registry entry: $name..."
+     $null=Request 'POST' 'TelemetryToolsConfig' $entity
+    }
+    Report "Verifying saved registry entry: $name..."
+    $saved=Request 'GET' $path
+    if(-not $saved -or $saved.TableName -cne $table){throw 'Registry verification failed: TableName mismatch.'}
+    $state.Success=$true
+    Report "Registration verified for $name."
+   } catch {$state.Error=$_.Exception.Message;Report "Registration failed: $($state.Error)"}
+  }
+  $null=$script:SaveWorker.AddScript($saveCode.ToString()).AddArgument($script:SaveState).AddArgument($script:StorageName).AddArgument($script:StorageKey).AddArgument($c)
+  $script:SaveStarted=Get-Date;$script:SaveTimedOut=$false
+  $script:SaveAsync=$script:SaveWorker.BeginInvoke()
+  $script:SaveTimer.Start()
+  Log "Started background registration for $($c.Name); GUI remains responsive."
+ }catch{
+  Log "ERROR: $($_.Exception.Message)"
+  $btnSave.Enabled=$true;$btnSave.Text='Create / Update Tool'
+  [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Unable to save')|Out-Null
+ }
+})
 
-The manager does not delete tool tables or telemetry entities when disabling a tool. Changes may not immediately appear in dashboard summaries until the deployed registry/dashboard consumers refresh their data.
+# Manage registry visibility only. This never deletes tables/entities or alters telemetry ingestion.
+$btnManage.Add_Click({
+ if(-not $script:Account -or -not $script:StorageKey){[Windows.Forms.MessageBox]::Show('Connect to Microsoft GSE first.','Not connected')|Out-Null;return}
+ $script:ManageDialog=New-Object Windows.Forms.Form
+ $script:ManageDialog.Text='Manage Existing Tools | Dashboard Visibility'
+ $script:ManageDialog.Size=New-Object Drawing.Size(760,640)
+ $script:ManageDialog.MinimumSize=New-Object Drawing.Size(640,480)
+ $script:ManageDialog.StartPosition='CenterParent';$script:ManageDialog.BackColor=$script:Bg;$script:ManageDialog.ForeColor=$script:Ink
+ $script:ManageDialog.Font=New-Object Drawing.Font('Segoe UI',10)
+ $heading=Label 'EXISTING TELEMETRY TOOLS' 20 16 680 32 15 $true;$script:ManageDialog.Controls.Add($heading)
+ $explain=Label 'Enabled controls dashboard visibility and summary inclusion only. Telemetry continues recording.' 20 52 700 42 9
+ $explain.ForeColor=$script:Muted;$script:ManageDialog.Controls.Add($explain)
+ $script:ManageList=New-Object Windows.Forms.ListView
+ $script:ManageList.SetBounds(20,102,700,390);$script:ManageList.View='Details';$script:ManageList.FullRowSelect=$true;$script:ManageList.MultiSelect=$false
+ $script:ManageList.GridLines=$true;$script:ManageList.HideSelection=$false;$script:ManageList.BackColor=$script:InputBg;$script:ManageList.ForeColor=$script:Ink
+ [void]$script:ManageList.Columns.Add('Tool',215);[void]$script:ManageList.Columns.Add('Dashboard',115)
+ [void]$script:ManageList.Columns.Add('Telemetry table',240);[void]$script:ManageList.Columns.Add('Minutes',90)
+ $script:ManageList.Anchor='Top,Bottom,Left,Right';$script:ManageDialog.Controls.Add($script:ManageList)
+ $script:ManageRefresh=Button 'Refresh Tools' 20 510 160 $true;$script:ManageRefresh.Anchor='Bottom,Left';$script:ManageDialog.Controls.Add($script:ManageRefresh)
+ $script:ManageToggle=Button 'Enable / Disable Selected' 195 510 240;$script:ManageToggle.Anchor='Bottom,Left';$script:ManageDialog.Controls.Add($script:ManageToggle)
+ $script:ManageToggle.Enabled=$false
+ $script:ManageStatus=Label 'Ready to load registry' 20 558 700 35 9;$script:ManageStatus.ForeColor=$script:Muted
+ $script:ManageStatus.Anchor='Bottom,Left,Right';$script:ManageDialog.Controls.Add($script:ManageStatus)
+ $script:ManageJob=$null;$script:ManageAsync=$null;$script:ManageState=$null
+ $script:ManageTimer=New-Object Windows.Forms.Timer;$script:ManageTimer.Interval=200
+ $script:ManageStartJob={
+  param([string]$mode,[string]$name,[bool]$enabled)
+  if($script:ManageJob){return}
+  $script:ManageRefresh.Enabled=$false;$script:ManageToggle.Enabled=$false
+  $script:ManageStatus.Text=if($mode -eq 'list'){'Loading TelemetryToolsConfig...'}else{"Updating $name..."}
+  $script:ManageState=[hashtable]::Synchronized(@{Result=$null;Error=$null})
+  $script:ManageJob=[powershell]::Create()
+  $script:ManageWorkerCode={
+   param($state,$account,$key,$mode,$name,$enabled)
+   function CallTable([string]$method,[string]$path,$payload=$null,[hashtable]$extra=@{}){
+    $date=[DateTime]::UtcNow.ToString('R',[Globalization.CultureInfo]::InvariantCulture)
+    $resource="/$account/$($path.Split('?')[0])"
+    $hmac=[System.Security.Cryptography.HMACSHA256]::new()
+    try {$hmac.Key=[Convert]::FromBase64String($key);$sig=[Convert]::ToBase64String($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes("$date`n$resource")))}
+    finally {$hmac.Dispose()}
+    $headers=@{Authorization="SharedKeyLite ${account}:$sig";'x-ms-date'=$date;'x-ms-version'='2019-02-02';Accept='application/json;odata=nometadata';DataServiceVersion='3.0;NetFx';MaxDataServiceVersion='3.0;NetFx'}
+    foreach($k in $extra.Keys){$headers[$k]=$extra[$k]}
+    $args=@{Uri="https://$account.table.core.windows.net/$path";Method=$method;Headers=$headers;TimeoutSec=20;ErrorAction='Stop'}
+    if($null -ne $payload){$args.ContentType='application/json';$args.Body=($payload|ConvertTo-Json -Depth 6 -Compress)}
+    try {return Invoke-WebRequest @args -UseBasicParsing}
+    catch {
+     $code=0;try {$code=[int]$_.Exception.Response.StatusCode}catch{}
+     throw "HTTP $code $method $path : $($_.Exception.Message) $($_.ErrorDetails.Message)"
+    }
+   }
+   try {
+    if($mode -eq 'toggle'){
+     $escaped=[uri]::EscapeDataString($name.Replace("'","''"))
+     $path="TelemetryToolsConfig(PartitionKey='Tool',RowKey='$escaped')"
+     # MERGE changes only Enabled; never overwrites other properties or telemetry records.
+     $null=CallTable 'MERGE' $path @{Enabled=$enabled} @{'If-Match'='*'}
+    }
+    $results=New-Object System.Collections.ArrayList
+    $nextP=$null;$nextR=$null
+    do {
+     $path='TelemetryToolsConfig()?$filter='+[uri]::EscapeDataString("PartitionKey eq 'Tool'")
+     if($nextP){$path+='&NextPartitionKey='+[uri]::EscapeDataString($nextP)}
+     if($nextR){$path+='&NextRowKey='+[uri]::EscapeDataString($nextR)}
+     $response=CallTable 'GET' $path
+     $data=$response.Content|ConvertFrom-Json
+     foreach($item in @($data.value)){
+      if($null -ne $item -and [string]$item.PartitionKey -ceq 'Tool'){
+       [void]$results.Add([pscustomobject]@{Name=[string]$item.RowKey;Table=[string]$item.TableName;Enabled=([string]$item.Enabled -eq 'True');Minutes=[string]$item.MinutesSaved})
+      }
+     }
+     $nextP=[string]$response.Headers['x-ms-continuation-NextPartitionKey']
+     $nextR=[string]$response.Headers['x-ms-continuation-NextRowKey']
+    }while($nextP -or $nextR)
+    $state.Result=@($results|Sort-Object Name)
+   }catch{$state.Error=$_.Exception.Message}
+  }
+  $null=$script:ManageJob.AddScript($script:ManageWorkerCode.ToString()).AddArgument($script:ManageState).AddArgument($script:StorageName).AddArgument($script:StorageKey).AddArgument($mode).AddArgument($name).AddArgument($enabled)
+  $script:ManageAsync=$script:ManageJob.BeginInvoke()
+  $script:ManageTimer.Start()
+ }
+ $script:ManageTimer.Add_Tick({
+  if(-not $script:ManageJob -or -not $script:ManageAsync){return}
+  if(-not $script:ManageAsync.IsCompleted){return}
+  $script:ManageTimer.Stop()
+  try {
+   $null=$script:ManageJob.EndInvoke($script:ManageAsync)
+   if($script:ManageState.Error){throw $script:ManageState.Error}
+   $script:ManageList.BeginUpdate();try {
+    $script:ManageList.Items.Clear()
+    foreach($tool in $script:ManageState.Result){
+     $item=New-Object Windows.Forms.ListViewItem($tool.Name)
+     [void]$item.SubItems.Add($(if($tool.Enabled){'Enabled'}else{'Disabled'}))
+     [void]$item.SubItems.Add($tool.Table)
+     [void]$item.SubItems.Add($tool.Minutes)
+     $item.Tag=[bool]$tool.Enabled
+     if(-not $tool.Enabled){$item.ForeColor=[Drawing.Color]::Silver}
+     [void]$script:ManageList.Items.Add($item)
+    }
+   }finally{$script:ManageList.EndUpdate()}
+   $script:ManageStatus.Text="Loaded $($script:ManageList.Items.Count) tools. Disabling hides from dashboard and summary; ingestion is unchanged."
+  }catch{$script:ManageStatus.Text="ERROR: $($_.Exception.Message)";Log "Manage tools: $($_.Exception.Message)"}
+  finally {
+   $script:ManageJob.Dispose();$script:ManageJob=$null;$script:ManageAsync=$null
+   $script:ManageRefresh.Enabled=$true;$script:ManageToggle.Enabled=($script:ManageList.SelectedItems.Count -eq 1)
+  }
+ })
+ $script:ManageList.Add_SelectedIndexChanged({$script:ManageToggle.Enabled=(-not $script:ManageJob -and $script:ManageList.SelectedItems.Count -eq 1)})
+ $script:ManageRefresh.Add_Click({& $script:ManageStartJob 'list' '' $false})
+ $script:ManageToggle.Add_Click({
+  if($script:ManageList.SelectedItems.Count -ne 1){return}
+  $item=$script:ManageList.SelectedItems[0];$newEnabled=-not [bool]$item.Tag
+  $action=if($newEnabled){'SHOW'}else{'HIDE'}
+  $message="$action '$($item.Text)' on the telemetry dashboard?`n`nThis changes only the Enabled flag in TelemetryToolsConfig.`nNo telemetry data will be deleted and the tool will continue recording telemetry."
+  if([Windows.Forms.MessageBox]::Show($message,'Confirm dashboard visibility','YesNo','Question') -ne 'Yes'){return}
+  & $script:ManageStartJob 'toggle' $item.Text $newEnabled
+ })
+ $script:ManageDialog.Add_FormClosing({if($script:ManageJob){$_.Cancel=$true;$script:ManageStatus.Text='Please wait for the current registry request to finish.'}})
+ $script:ManageDialog.Add_FormClosed({$script:ManageTimer.Stop();$script:ManageTimer.Dispose();$script:ManageTimer=$null})
+ $script:ManageDialog.Show($form)
+ & $script:ManageStartJob 'list' '' $false
+})
 
-**Current limitation:** The Manage Existing Tools dialog toggles `Enabled` only. To change `IncludeInTotals` or `MinutesSaved`, use the main registration fields and **Create / Update Tool** with the intended complete values. Be careful not to overwrite existing settings unintentionally.
-
-## Background operation and responsiveness
-
-The current implementation uses separate PowerShell runspaces for:
-
-- Azure connection and key retrieval
-- Table creation and tool registration
-- Listing and toggling existing tool entries
-
-The UI uses Windows Forms timers to observe their completion and update the status displays. This design is intended to prevent the main form from freezing during network requests.
-
-- Connection requests display a timeout warning at 60 seconds.
-- Registration displays a warning after 90 seconds.
-- Neither warning guarantees the background worker has been canceled.
-- A management operation must finish before that management dialog can close.
-
-## Common issues and troubleshooting
-
-| Symptom | Likely cause / next step |
-| --- | --- |
-| Cannot connect | Verify Microsoft GSE access, authentication, configured subscription, connectivity, and permission to list the storage account keys. |
-| Manager appears connected but save fails | A connection does not validate all table operations. Check the activity log for the HTTP status and failed table request. |
-| `403` from storage | Verify that the key is valid, account networking permits access, and the account permits shared-key authorization. |
-| Tool name rejected | Use 3–41 letters/digits, starting with a letter. Spaces are removed automatically; punctuation is not supported. |
-| Version parameter is empty | Initialize the referenced version variable before telemetry execution and ensure its value is nonempty. |
-| Registration saved but tool absent from dashboard | Embed the code, execute the tool, confirm event ingestion, run the summary updater, and ensure `Enabled` is true. |
-| Telemetry says failed | Check network connectivity, the Function endpoint, its access requirements, and Azure Function logs. Telemetry exceptions are intentionally nonfatal for the tool. |
-| Tool is hidden but telemetry still arrives | Expected behavior. `Enabled` controls dashboard/summary visibility, not data collection. |
-| Telemetry location appears wrong | Windows regional settings may differ from physical location. |
-
-## Operational and security considerations
-
-1. **Protect storage account keys.** Users able to list account keys may have much broader permissions than are required for editing this one registry.
-2. **Do not assume the telemetry Function is authenticated.** The generated snippet does not pass an API key or bearer token; review the Function's deployed authentication policy and endpoint exposure.
-3. **Respect privacy expectations.** The machine hash is pseudonymous and the fallback geolocation service receives a network request.
-4. **Review generated code before embedding it.** The snippet contains function declarations and script-scoped variables; check for naming conflicts in existing tools.
-5. **Place the call after version initialization.** The manager's input validation does not execute the version expression.
-6. **Understand the event deduplication behavior.** The startup guard becomes true before the HTTP request completes. A failed startup POST will not automatically be retried by another startup invocation in that same initialized session.
-7. **Check summary refresh behavior.** Registration alone does not populate telemetry history or refresh reporting data.
-8. **Treat success reporting narrowly.** The tool's success message confirms a non-error response from the HTTP endpoint, not independent storage verification.
-9. **Plan for upgrades.** Updating a registry record does not automatically update snippets already copied into other PowerShell tools.
-
-## Scope and limitations
-
-This utility currently supports registering tools, generating a standardized telemetry snippet, and managing the `Enabled` flag in the central registry.
-
-It does **not**:
-
-- Edit existing PowerShell tool files automatically.
-- Delete or purge telemetry records.
-- Stop telemetry transmission from a tool when dashboard visibility is disabled.
-- Change deployed Azure Function code or dashboard code.
-- Automatically run the summary updater.
-- Provide the complete server-side data model or dashboard calculation logic.
-- Verify the deployed `PostTelemetryData` Function's implementation beyond the response to the generated HTTP request.
-
-## Suggested validation checklist
-
-After onboarding a new tool:
-
-- [ ] Connection shows the correct Microsoft GSE environment.
-- [ ] The correct `<ToolName>TelemetryData` table exists.
-- [ ] The entry exists in `TelemetryToolsConfig` with the intended flags.
-- [ ] Generated code is placed after initialization of the version variable.
-- [ ] Running the tool prints `Telemetry recorded successfully`.
-- [ ] A new telemetry row can be located in the tool-specific table.
-- [ ] The deployed summary updater completes successfully.
-- [ ] The dashboard reflects the new tool and expected aggregate inclusion.
-- [ ] Disabling the tool hides it from the dashboard while subsequent telemetry events are still stored.
-
----
-
-**Maintainer note:** This README describes behavior found in the supplied Telemetry Tool Manager script. End-to-end behaviors involving Azure Functions, scheduled summary updates, and dashboard rendering should be confirmed against those separately deployed components.
+$form.Add_Resize({
+ $left.Height=[Math]::Max(550,$form.ClientSize.Height-350)
+ $right.Height=$left.Height
+ $tabsCode.Height=[Math]::Max(425,$right.ClientSize.Height-95)
+ $logLabel.Top=$form.ClientSize.Height-190
+ $txtLog.Top=$form.ClientSize.Height-160
+ $txtLog.Height=145
+ $txtLog.Width=[Math]::Max(400,$form.ClientSize.Width-50)
+})
+Refresh-Preview
+Log 'Security: Azure modules must already be installed; no modules will be installed or removed.'
+Log 'Security: Storage account key access is still required by the current Azure architecture.'
+Log 'Ready. Connect to Microsoft GSE, preview, then create/update the registry entity.'
+Log 'Registry-driven dashboard detected as already deployed. Run the summary updater after first telemetry is received.'
+try { [void]$form.ShowDialog() }
+finally {
+    $script:ConnectTimer.Stop()
+    $script:SaveTimer.Stop()
+    $helpMenu.Dispose()
+    if($script:SaveWorker -and $script:SaveAsync -and $script:SaveAsync.IsCompleted){
+        try {$null=$script:SaveWorker.EndInvoke($script:SaveAsync)} catch {}
+        $script:SaveWorker.Dispose()
+    }
+    if($script:ConnectWorker -and $script:ConnectAsync -and $script:ConnectAsync.IsCompleted){
+        try {$null=$script:ConnectWorker.EndInvoke($script:ConnectAsync)} catch {}
+        $script:ConnectWorker.Dispose()
+    }
+    $script:StorageKey=$null
+    $script:StorageContext=$null
+    if(-not $script:ConnectWorker -or $script:ConnectAsync.IsCompleted){Cleanup-AzureModules}
+    $form.Dispose()
+}
