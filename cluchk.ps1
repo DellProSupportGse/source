@@ -26,6 +26,9 @@ Specifies if the collected data should be uploaded in Azure for analysis
 Specifies to show debug information
 
 .UPDATES
+    2026/11/11:v2.10 -  1. Bug Fix: TP - Added Starting Maintenance Mode to possible physical disk status
+                        2. Bug Fix: TP - Fixed devin AI summary process that was caused by 2.09
+
     2026/11/10:v2.09 -  1. New Update: TP - For Azure Local Devin AI, it now finds the specific skill, ms-azure-local-healthtest-analyzer, and uses it.
                         2. New Update: TP - Changed the script that handles AI sections so it works with the original or new skill outputs.
                         3. New Update: TP - An extracted SDDC path is the default. Providing a blank path asks for a HealthTest zip file.
@@ -107,7 +110,7 @@ param (
     [boolean]$debug = $false
 )
 
-$CluChkVer="2.09"
+$CluChkVer="2.10"
 
 #Fix "The response content cannot be parsed because the Internet Explorer engine is not available"
 try {if (Test-Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main") {Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Internet Explorer\Main" -Name "DisableFirstRunCustomize" -Value 2 -ErrorAction SilentlyContinue}} catch {}
@@ -3863,6 +3866,7 @@ $htmlout+=$html
                 '53277' {'Stopping Maintenance Mode'}
                 '53274' {'Transient Error'}
                 '53255' {'IO Error'}
+                '53276' {'Starting Maintenance Mode'}
                 Default {If ($opstatus -gt 18) {"Unknown-$opstatus"}}
                 }
             }
@@ -8117,7 +8121,7 @@ $errorList
         Write-Host "[AI] Generating AI summary. Estimated time: 5-15 minutes... (attempt $attempt of $maxAttempts)"
         $aiStart=(Get-Date)
         try {
-
+            $finalOutput=$true
             Do {
                 $outFile = [System.IO.Path]::GetTempFileName()
                 $errFile = [System.IO.Path]::GetTempFileName()
